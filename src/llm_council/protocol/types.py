@@ -32,6 +32,14 @@ class CouncilConfig(BaseModel):
         default=["openrouter"],
         description="List of provider names to use for drafts",
     )
+    models: list[str] | None = Field(
+        default=None,
+        description=(
+            "List of OpenRouter model IDs for multi-model council. "
+            "When set with providers=['openrouter'], creates virtual providers for each model. "
+            "Example: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o', 'google/gemini-pro']"
+        ),
+    )
     timeout: int = Field(
         default=120,
         ge=10,

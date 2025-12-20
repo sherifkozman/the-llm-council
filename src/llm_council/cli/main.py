@@ -36,6 +36,15 @@ def run(
         "-p",
         help="Comma-separated provider list (default: openrouter)",
     ),
+    models: str | None = typer.Option(
+        None,
+        "--models",
+        "-m",
+        help=(
+            "Comma-separated OpenRouter model IDs for multi-model council. "
+            "Example: 'anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro'"
+        ),
+    ),
     timeout: int = typer.Option(120, "--timeout", "-t", help="Timeout per call in seconds"),
     max_retries: int = typer.Option(3, "--max-retries", help="Max validation retries"),
     no_artifacts: bool = typer.Option(False, "--no-artifacts", help="Disable artifact storage"),
@@ -46,9 +55,19 @@ def run(
 ) -> None:
     """Run a council task with the specified subagent."""
     provider_list = providers.split(",") if providers else ["openrouter"]
+    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
 
     if not output_json:
-        console.print(f"[bold blue]Council[/bold blue] Running {subagent} with {len(provider_list)} provider(s)...")
+        if model_list and len(model_list) > 1:
+            console.print(
+                f"[bold blue]Council[/bold blue] Running {subagent} with "
+                f"{len(model_list)} models (multi-model council)..."
+            )
+        else:
+            console.print(
+                f"[bold blue]Council[/bold blue] Running {subagent} with "
+                f"{len(provider_list)} provider(s)..."
+            )
 
     try:
         from llm_council import Council
@@ -56,6 +75,7 @@ def run(
 
         config = CouncilConfig(
             providers=provider_list,
+            models=model_list,
             timeout=timeout,
             max_retries=max_retries,
             enable_artifact_store=not no_artifacts,
