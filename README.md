@@ -97,23 +97,23 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 ## Installation
 
 ```bash
-pip install llm-council
+pip install the-llm-council
 ```
 
 With specific providers:
 
 ```bash
 # OpenRouter (recommended - single API key for all models)
-pip install llm-council
+pip install the-llm-council
 
 # Direct APIs
-pip install llm-council[anthropic,openai,google]
+pip install the-llm-council[anthropic,openai,google]
 
 # All providers
-pip install llm-council[all]
+pip install the-llm-council[all]
 
 # Development
-pip install llm-council[dev]
+pip install the-llm-council[dev]
 ```
 
 ## Quick Start
