@@ -286,14 +286,41 @@ mypy src/llm_council
 
 Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Run tests (`pytest`)
-5. Run linting (`ruff check src/ && mypy src/llm_council`)
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+### Quick Start
+
+```bash
+# Fork and clone
+git clone https://github.com/YOUR_USERNAME/the-llm-council.git
+cd the-llm-council
+
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run linting
+ruff check src/ && mypy src/llm_council
+```
+
+### Contribution Workflow
+
+1. **Fork** the repository
+2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
+3. **Make** your changes
+4. **Test** your changes (`pytest`)
+5. **Lint** your code (`ruff check src/ && mypy src/llm_council`)
+6. **Commit** with a clear message (`git commit -m 'Add amazing feature'`)
+7. **Push** to your branch (`git push origin feature/amazing-feature`)
+8. **Open** a Pull Request
+
+### What We're Looking For
+
+- **New Providers**: Add support for more LLM backends
+- **New Subagents**: Create specialized agents for specific tasks
+- **Bug Fixes**: Found a bug? We'd love a fix!
+- **Documentation**: Improvements to docs are always welcome
+- **Tests**: More test coverage is great
 
 ## Security
 
@@ -321,4 +348,8 @@ Built with:
 
 <p align="center">
   <i>When one model isn't enough, convene a council.</i>
+</p>
+
+<p align="center">
+  <sub>~ vibe coded by <a href="https://twitter.com/sherifkozman">Sherif Kozman</a> & The LLM Council ~</sub>
 </p>
