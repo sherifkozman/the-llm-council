@@ -1,0 +1,226 @@
+# Implementer Subagent Configuration
+# Generates code, implements features, and produces diffs
+
+name: implementer
+description: >
+  Generates production-quality code for features, bug fixes, and refactors.
+  Uses code specialist models optimized for code generation.
+  Complexity determines model selection (normal vs max).
+
+model_pack: code_specialist_normal  # Upgrades to code_specialist_complex for complex tasks
+calls: 4-5  # Claude + Codex + Gemini drafts, critique, synthesis
+
+schema: implementer
+
+complexity_override:
+  # When these patterns are detected, use code_specialist_complex
+  complex_signals:
+    - refactor
+    - migration
+    - rewrite
+    - architecture change
+    - multi-file
+    - breaking change
+
+prompts:
+  system: |
+    You are a senior software engineer. Your job is to implement features
+    and write production-quality code.
+
+    Your implementations should:
+    1. Follow existing codebase patterns and conventions
+    2. Include proper error handling
+    3. Be secure (no SQL injection, XSS, etc.)
+    4. Include testing notes
+    5. Document breaking changes and migration paths
+    6. Avoid over-engineering
+
+    Write code that is:
+    - Readable and maintainable
+    - Minimal - only what's needed for the task
+    - Consistent with the existing codebase
+    - Well-tested
+
+  examples:
+    - task: "Add a logout button to the user profile page"
+      expected:
+        implementation_title: "Add Logout Button to Profile"
+        implementation_type: "feature"
+        summary: "Added a logout button to the user profile page that calls the auth API, clears local session, and redirects to login."
+        requirements_addressed:
+          - "User can log out from profile page"
+          - "Session is properly cleared"
+          - "User is redirected to login after logout"
+        files:
+          - path: "src/components/Profile/ProfileHeader.tsx"
+            action: "modify"
+            description: "Add logout button with confirmation dialog"
+            language: "typescript"
+            exports:
+              - "ProfileHeader"
+          - path: "src/hooks/useAuth.ts"
+            action: "modify"
+            description: "Add logout function to auth hook"
+            language: "typescript"
+            exports:
+              - "useAuth"
+        testing_notes:
+          manual_tests:
+            - "Click logout button on profile page"
+            - "Confirm dialog appears"
+            - "After confirmation, verify redirect to /login"
+            - "Verify auth token removed from localStorage"
+            - "Try accessing protected route - should redirect to login"
+          automated_tests:
+            - "src/hooks/__tests__/useAuth.test.ts - add logout tests"
+        security_considerations:
+          - "Token is cleared from localStorage on logout"
+          - "Server-side session invalidation via API call"
+        reasoning: "Simple implementation following existing patterns. Used the existing useAuth hook to maintain consistency. Included confirmation dialog to prevent accidental logouts."
+
+    - task: "Add rate limiting to the API endpoints"
+      expected:
+        implementation_title: "API Rate Limiting Middleware"
+        implementation_type: "feature"
+        summary: "Implemented sliding window rate limiting using Redis. Configurable per-endpoint limits with sensible defaults. Returns 429 with Retry-After header when limit exceeded."
+        requirements_addressed:
+          - "Prevent API abuse"
+          - "Configurable rate limits per endpoint"
+          - "Return appropriate error response"
+        files:
+          - path: "src/middleware/rateLimit.ts"
+            action: "create"
+            description: "Rate limiting middleware using Redis sliding window algorithm"
+            language: "typescript"
+            exports:
+              - "rateLimit"
+          - path: "src/routes/api.ts"
+            action: "modify"
+            description: "Apply rate limiting to API routes"
+            language: "typescript"
+        dependencies:
+          add:
+            - name: "ioredis"
+              version: "^5.3.0"
+              dev: false
+        environment_variables:
+          - name: "REDIS_URL"
+            description: "Redis connection URL for rate limiting"
+            required: true
+            example: "redis://localhost:6379"
+        testing_notes:
+          manual_tests:
+            - "Make 101 requests within 1 minute - verify 429 on 101st"
+            - "Check Retry-After header in 429 response"
+            - "Wait for window to expire, verify requests work again"
+            - "Make 6 login requests - verify stricter limit applies"
+          automated_tests:
+            - "src/middleware/__tests__/rateLimit.test.ts"
+          test_data_needed:
+            - "Mock Redis instance for tests"
+        deployment_notes:
+          - "Requires Redis instance in production"
+          - "Add REDIS_URL to environment configuration"
+        performance_considerations:
+          - "Redis operations add ~1-2ms latency per request"
+          - "Sliding window uses sorted sets - O(log N) complexity"
+        security_considerations:
+          - "IP-based limiting - consider X-Forwarded-For behind proxy"
+          - "Fail-open design means Redis outage allows unlimited requests"
+        reasoning: "Sliding window algorithm provides fair rate limiting without the burst issues of fixed windows. Redis sorted sets enable efficient distributed rate limiting."
+
+    - task: "Fix the bug where user settings aren't saved"
+      expected:
+        implementation_title: "Fix User Settings Save Bug"
+        implementation_type: "bug_fix"
+        summary: "Fixed bug where user settings weren't persisted due to missing await on async save operation. Also added error handling and user feedback."
+        requirements_addressed:
+          - "User settings should persist across sessions"
+          - "User should see confirmation when settings are saved"
+        files:
+          - path: "src/components/Settings/SettingsForm.tsx"
+            action: "modify"
+            description: "Add await to save operation and error handling"
+            language: "typescript"
+        testing_notes:
+          manual_tests:
+            - "Change a setting and click save"
+            - "Refresh the page - verify setting persisted"
+            - "Disconnect network, try to save - verify error toast"
+          automated_tests:
+            - "src/components/Settings/__tests__/SettingsForm.test.tsx - add async save tests"
+        reasoning: "Root cause was missing await on async saveSettings call. The toast showed success before the operation completed. Added proper async/await pattern with error handling and loading state."
+
+    - task: "Refactor the payment module to use the new pricing engine"
+      expected:
+        implementation_title: "Payment Module Pricing Engine Integration"
+        implementation_type: "refactor"
+        summary: "Refactored payment module to use the new PricingEngine service instead of inline price calculations. Maintains backward compatibility via adapter pattern."
+        requirements_addressed:
+          - "Use centralized pricing logic"
+          - "Support new discount types"
+          - "Maintain API compatibility"
+        files:
+          - path: "src/services/payment/PaymentService.ts"
+            action: "modify"
+            description: "Replace inline calculations with PricingEngine calls"
+            language: "typescript"
+          - path: "src/services/payment/PricingAdapter.ts"
+            action: "create"
+            description: "Adapter to bridge old payment interface to new PricingEngine"
+            language: "typescript"
+            exports:
+              - "PricingAdapter"
+          - path: "src/services/payment/__tests__/PaymentService.test.ts"
+            action: "modify"
+            description: "Update tests for new pricing integration"
+            language: "typescript"
+        breaking_changes: []
+        api_changes:
+          - endpoint: "POST /api/payments/calculate"
+            method: "POST"
+            change_type: "modify"
+            breaking: false
+            description: "Now supports new discount types in request"
+        testing_notes:
+          manual_tests:
+            - "Create payment with percentage discount - verify calculation"
+            - "Create payment with fixed discount - verify calculation"
+            - "Create payment with multiple discounts - verify stacking"
+            - "Verify existing payment flows still work"
+          automated_tests:
+            - "src/services/payment/__tests__/PaymentService.test.ts"
+            - "src/services/payment/__tests__/PricingAdapter.test.ts"
+        follow_up_tasks:
+          - task: "Remove deprecated inline pricing code after migration period"
+            priority: "low"
+            subagent: "implementer"
+          - task: "Add monitoring for pricing calculation performance"
+            priority: "medium"
+            subagent: "implementer"
+        reasoning: "Adapter pattern allows gradual migration without breaking existing consumers. All pricing logic now centralized in PricingEngine for consistency."
+
+classification_rules:
+  task_signals:
+    - implement
+    - build
+    - create
+    - add feature
+    - code
+    - fix
+    - refactor
+    - update
+    - change
+
+  complexity_signals:
+    complex:
+      - refactor
+      - rewrite
+      - migrate
+      - restructure
+      - multi-file change
+      - architecture
+    simple:
+      - fix typo
+      - add comment
+      - rename variable

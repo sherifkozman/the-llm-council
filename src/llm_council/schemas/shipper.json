@@ -1,0 +1,265 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ShipperOutput",
+  "description": "Output schema for the Shipper subagent that creates release notes, changelogs, and shipping checklists",
+  "type": "object",
+  "required": ["release_version", "release_type", "summary", "changes", "checklist", "reasoning"],
+  "properties": {
+    "release_version": {
+      "type": "string",
+      "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?$",
+      "description": "Semantic version for this release (e.g., v1.2.3, v2.0.0-beta.1)"
+    },
+    "release_type": {
+      "type": "string",
+      "enum": ["major", "minor", "patch", "prerelease"],
+      "description": "Type of release per semver"
+    },
+    "release_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Planned or actual release date"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 30,
+      "description": "One-paragraph summary of the release"
+    },
+    "highlights": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Top 3-5 highlights for marketing/announcement"
+    },
+    "changes": {
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {"type": "string"},
+              "pr_number": {"type": "integer"},
+              "contributor": {"type": "string"}
+            }
+          },
+          "description": "New features"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {"type": "string"},
+              "pr_number": {"type": "integer"},
+              "contributor": {"type": "string"}
+            }
+          },
+          "description": "Changes to existing functionality"
+        },
+        "deprecated": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {"type": "string"},
+              "removal_version": {"type": "string"},
+              "migration_path": {"type": "string"}
+            }
+          },
+          "description": "Features marked for future removal"
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {"type": "string"},
+              "replacement": {"type": "string"}
+            }
+          },
+          "description": "Features removed in this release"
+        },
+        "fixed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {"type": "string"},
+              "issue_number": {"type": "integer"},
+              "pr_number": {"type": "integer"}
+            }
+          },
+          "description": "Bug fixes"
+        },
+        "security": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {"type": "string"},
+              "severity": {
+                "type": "string",
+                "enum": ["critical", "high", "medium", "low"]
+              },
+              "cve_id": {"type": "string"}
+            }
+          },
+          "description": "Security fixes"
+        }
+      }
+    },
+    "breaking_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["description", "migration_steps"],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What changed"
+          },
+          "affected_apis": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "migration_steps": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Steps to migrate"
+          },
+          "code_example": {
+            "type": "object",
+            "properties": {
+              "before": {"type": "string"},
+              "after": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "upgrade_guide": {
+      "type": "object",
+      "properties": {
+        "prerequisites": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "steps": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "post_upgrade_verification": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "rollback_procedure": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "dependencies_updated": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "from_version": {"type": "string"},
+          "to_version": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "known_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {"type": "string"},
+          "workaround": {"type": "string"},
+          "tracking_issue": {"type": "integer"}
+        }
+      }
+    },
+    "checklist": {
+      "type": "object",
+      "required": ["pre_release", "release", "post_release"],
+      "properties": {
+        "pre_release": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "task": {"type": "string"},
+              "status": {
+                "type": "string",
+                "enum": ["pending", "done", "blocked", "skipped"]
+              },
+              "owner": {"type": "string"},
+              "notes": {"type": "string"}
+            }
+          }
+        },
+        "release": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "task": {"type": "string"},
+              "status": {
+                "type": "string",
+                "enum": ["pending", "done", "blocked", "skipped"]
+              },
+              "owner": {"type": "string"}
+            }
+          }
+        },
+        "post_release": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "task": {"type": "string"},
+              "status": {
+                "type": "string",
+                "enum": ["pending", "done", "blocked", "skipped"]
+              },
+              "owner": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "announcement": {
+      "type": "object",
+      "properties": {
+        "blog_post_draft": {"type": "string"},
+        "twitter_thread": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "email_subject": {"type": "string"},
+        "email_body": {"type": "string"}
+      }
+    },
+    "metrics_to_watch": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "metric": {"type": "string"},
+          "baseline": {"type": "string"},
+          "alert_threshold": {"type": "string"}
+        }
+      },
+      "description": "Metrics to monitor post-release"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 30,
+      "description": "Explanation of release decisions"
+    }
+  },
+  "additionalProperties": false
+}

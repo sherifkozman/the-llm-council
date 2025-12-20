@@ -1,0 +1,229 @@
+# Planner Subagent Configuration
+# Creates roadmaps, execution plans, and project breakdowns
+
+name: planner
+description: >
+  Creates structured execution plans and roadmaps for complex tasks.
+  Breaks down objectives into phases, tasks, and deliverables.
+  Uses deep reasoning models for thorough analysis.
+
+model_pack: deep_reasoner
+calls: 4  # Claude + Codex + Gemini drafts, critique, synthesis
+
+schema: planner
+
+prompts:
+  system: |
+    You are a strategic planning expert. Your job is to create comprehensive,
+    actionable plans that break complex objectives into manageable phases and tasks.
+
+    Your plans should:
+    1. Define clear objectives and success criteria
+    2. Break work into logical phases with dependencies
+    3. Identify which subagent should handle each task
+    4. Anticipate risks and provide mitigations
+    5. Include fallback strategies
+
+    Be thorough but practical. Plans should be executable, not theoretical.
+
+  examples:
+    - task: "Plan the migration from monolith to microservices"
+      expected:
+        plan_title: "Monolith to Microservices Migration Plan"
+        objective: "Decompose the existing monolithic application into independent microservices while maintaining service continuity and enabling horizontal scaling"
+        phases:
+          - phase_number: 1
+            name: "Discovery and Analysis"
+            tasks:
+              - task_id: "PLAN-001"
+                description: "Analyze current monolith architecture and identify service boundaries"
+                subagent: "architect"
+                priority: "critical"
+                complexity: "complex"
+              - task_id: "PLAN-002"
+                description: "Document all API contracts and data flows"
+                subagent: "researcher"
+                priority: "high"
+                complexity: "normal"
+            deliverables:
+              - "Architecture analysis document"
+              - "Service boundary map"
+              - "API inventory"
+            exit_criteria:
+              - "All service boundaries identified and approved"
+              - "Data dependencies mapped"
+          - phase_number: 2
+            name: "Infrastructure Setup"
+            tasks:
+              - task_id: "PLAN-003"
+                description: "Design microservices infrastructure (K8s, service mesh)"
+                subagent: "architect"
+                dependencies: ["PLAN-001"]
+                priority: "critical"
+                complexity: "complex"
+            deliverables:
+              - "Infrastructure architecture document"
+              - "K8s cluster configuration"
+            exit_criteria:
+              - "Infrastructure deployed and validated"
+        success_criteria:
+          - "All services independently deployable"
+          - "Zero downtime during migration"
+          - "Response times within 10% of baseline"
+        risks:
+          - risk: "Data consistency during migration"
+            severity: "critical"
+            likelihood: "likely"
+            mitigation: "Implement dual-write pattern with reconciliation"
+          - risk: "Service discovery failures"
+            severity: "high"
+            likelihood: "possible"
+            mitigation: "Use service mesh with health checks and circuit breakers"
+        reasoning: "Migration requires careful phasing to avoid service disruption. Starting with analysis ensures correct service boundaries before implementation."
+
+    - task: "Plan implementation of user authentication system"
+      expected:
+        plan_title: "User Authentication System Implementation"
+        objective: "Implement secure, scalable user authentication with OAuth 2.0, MFA support, and session management"
+        phases:
+          - phase_number: 1
+            name: "Security Research and Design"
+            tasks:
+              - task_id: "AUTH-001"
+                description: "Research OAuth 2.0 best practices and security requirements"
+                subagent: "researcher"
+                priority: "critical"
+                complexity: "normal"
+              - task_id: "AUTH-002"
+                description: "Design authentication architecture and data models"
+                subagent: "architect"
+                dependencies: ["AUTH-001"]
+                priority: "critical"
+                complexity: "complex"
+            deliverables:
+              - "Security requirements document"
+              - "Auth architecture diagram"
+              - "Database schema for users/sessions"
+            exit_criteria:
+              - "Security review passed"
+              - "Architecture approved"
+          - phase_number: 2
+            name: "Core Implementation"
+            tasks:
+              - task_id: "AUTH-003"
+                description: "Implement user registration and login endpoints"
+                subagent: "implementer"
+                dependencies: ["AUTH-002"]
+                priority: "high"
+                complexity: "normal"
+              - task_id: "AUTH-004"
+                description: "Implement OAuth 2.0 provider integration"
+                subagent: "implementer"
+                dependencies: ["AUTH-002"]
+                priority: "high"
+                complexity: "complex"
+            deliverables:
+              - "Auth API endpoints"
+              - "OAuth integration"
+              - "Session management"
+            exit_criteria:
+              - "All endpoints tested"
+              - "Security scan passed"
+          - phase_number: 3
+            name: "Security Validation"
+            tasks:
+              - task_id: "AUTH-005"
+                description: "Perform security red-team analysis"
+                subagent: "red-team"
+                dependencies: ["AUTH-003", "AUTH-004"]
+                priority: "critical"
+                complexity: "complex"
+              - task_id: "AUTH-006"
+                description: "Write comprehensive test suite"
+                subagent: "test-designer"
+                dependencies: ["AUTH-003", "AUTH-004"]
+                priority: "high"
+                complexity: "normal"
+            deliverables:
+              - "Security audit report"
+              - "Test suite with 90%+ coverage"
+            exit_criteria:
+              - "No critical vulnerabilities"
+              - "All tests passing"
+        success_criteria:
+          - "OAuth 2.0 compliant implementation"
+          - "MFA available for all users"
+          - "No OWASP Top 10 vulnerabilities"
+          - "Response time < 200ms for auth operations"
+        risks:
+          - risk: "Token theft via XSS"
+            severity: "critical"
+            likelihood: "possible"
+            mitigation: "Use httpOnly cookies, implement CSP, sanitize all inputs"
+          - risk: "Brute force attacks"
+            severity: "high"
+            likelihood: "likely"
+            mitigation: "Rate limiting, account lockout, CAPTCHA after failures"
+        fallback_plan: "If OAuth providers have issues, maintain local auth as fallback"
+        reasoning: "Security-first approach with research phase ensures we follow best practices. Red-team validation before deployment catches vulnerabilities early."
+
+    - task: "Plan API versioning strategy"
+      expected:
+        plan_title: "API Versioning Strategy Implementation"
+        objective: "Implement API versioning to support backward compatibility while enabling iterative improvements"
+        phases:
+          - phase_number: 1
+            name: "Analysis and Design"
+            tasks:
+              - task_id: "VER-001"
+                description: "Analyze current API consumers and usage patterns"
+                subagent: "researcher"
+                priority: "high"
+                complexity: "normal"
+              - task_id: "VER-002"
+                description: "Design versioning strategy (URL vs header-based)"
+                subagent: "architect"
+                dependencies: ["VER-001"]
+                priority: "critical"
+                complexity: "normal"
+            deliverables:
+              - "API consumer analysis"
+              - "Versioning RFC document"
+            exit_criteria:
+              - "Strategy approved by stakeholders"
+        success_criteria:
+          - "All existing clients continue to work"
+          - "Clear deprecation policy established"
+          - "Documentation updated"
+        risks:
+          - risk: "Breaking changes for existing consumers"
+            severity: "high"
+            likelihood: "possible"
+            mitigation: "Maintain v1 for 6 months, provide migration guide"
+        reasoning: "Research first to understand consumer needs before committing to versioning approach."
+
+classification_rules:
+  # Keywords that suggest planning tasks
+  task_signals:
+    - plan
+    - roadmap
+    - strategy
+    - phases
+    - milestones
+    - timeline
+    - sequence
+    - breakdown
+    - orchestrate
+
+  # Complexity signals
+  complexity_signals:
+    complex:
+      - migration
+      - restructure
+      - overhaul
+      - enterprise
+      - multi-phase
+    simple:
+      - single feature
+      - quick plan
+      - simple breakdown

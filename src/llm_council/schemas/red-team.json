@@ -1,0 +1,309 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RedTeamOutput",
+  "description": "Output schema for the Red Team subagent that performs adversarial security analysis",
+  "type": "object",
+  "required": ["assessment_title", "scope", "threat_model", "attack_vectors", "vulnerabilities", "recommendations", "reasoning"],
+  "properties": {
+    "assessment_title": {
+      "type": "string",
+      "minLength": 5,
+      "description": "Title for the security assessment"
+    },
+    "assessment_type": {
+      "type": "string",
+      "enum": ["threat_model", "penetration_test", "code_audit", "architecture_review", "incident_simulation"],
+      "description": "Type of security assessment"
+    },
+    "scope": {
+      "type": "object",
+      "required": ["target", "boundaries"],
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "What is being assessed"
+        },
+        "boundaries": {
+          "type": "object",
+          "properties": {
+            "in_scope": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "out_of_scope": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "threat_model": {
+      "type": "object",
+      "required": ["threat_actors", "assets", "attack_surface"],
+      "properties": {
+        "threat_actors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "description": "Type of threat actor"
+              },
+              "motivation": {"type": "string"},
+              "capability": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "nation_state"]
+              },
+              "likelihood": {
+                "type": "string",
+                "enum": ["unlikely", "possible", "likely", "certain"]
+              }
+            }
+          }
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "asset": {"type": "string"},
+              "value": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "critical"]
+              },
+              "data_classification": {
+                "type": "string",
+                "enum": ["public", "internal", "confidential", "restricted"]
+              }
+            }
+          }
+        },
+        "attack_surface": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "surface": {"type": "string"},
+              "exposure": {
+                "type": "string",
+                "enum": ["internal", "authenticated", "public"]
+              },
+              "description": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "attack_vectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "description", "attack_chain", "impact", "likelihood"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AV-[0-9]+$"
+          },
+          "name": {
+            "type": "string",
+            "description": "Attack vector name"
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of the attack"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["injection", "broken_auth", "data_exposure", "xxe", "broken_access", "misconfig", "xss", "insecure_deserialization", "vulnerable_components", "insufficient_logging", "ssrf", "business_logic", "social_engineering"]
+          },
+          "attack_chain": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "step": {"type": "integer"},
+                "action": {"type": "string"},
+                "technique": {"type": "string"},
+                "requirements": {"type": "string"}
+              }
+            },
+            "description": "Step-by-step attack execution"
+          },
+          "prerequisites": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "What attacker needs before executing"
+          },
+          "impact": {
+            "type": "object",
+            "properties": {
+              "confidentiality": {
+                "type": "string",
+                "enum": ["none", "low", "high"]
+              },
+              "integrity": {
+                "type": "string",
+                "enum": ["none", "low", "high"]
+              },
+              "availability": {
+                "type": "string",
+                "enum": ["none", "low", "high"]
+              },
+              "description": {"type": "string"}
+            }
+          },
+          "likelihood": {
+            "type": "string",
+            "enum": ["unlikely", "possible", "likely", "certain"]
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": ["trivial", "easy", "moderate", "hard", "expert"]
+          },
+          "detection_difficulty": {
+            "type": "string",
+            "enum": ["obvious", "moderate", "hard", "stealthy"]
+          },
+          "mitre_attack_id": {
+            "type": "string",
+            "description": "MITRE ATT&CK technique ID if applicable"
+          }
+        }
+      }
+    },
+    "vulnerabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "severity", "description", "affected_component"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^VULN-[0-9]+$"
+          },
+          "title": {"type": "string"},
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "cvss_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "cwe_id": {
+            "type": "string",
+            "description": "CWE identifier"
+          },
+          "description": {"type": "string"},
+          "affected_component": {"type": "string"},
+          "proof_of_concept": {
+            "type": "string",
+            "description": "How to demonstrate the vulnerability"
+          },
+          "exploitation_steps": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "remediation": {
+            "type": "object",
+            "properties": {
+              "recommendation": {"type": "string"},
+              "effort": {
+                "type": "string",
+                "enum": ["trivial", "small", "medium", "large"]
+              },
+              "priority": {
+                "type": "string",
+                "enum": ["immediate", "short_term", "medium_term", "long_term"]
+              }
+            }
+          },
+          "related_attack_vectors": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Attack vector IDs that exploit this vulnerability"
+          }
+        }
+      }
+    },
+    "security_controls_assessment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "control": {"type": "string"},
+          "status": {
+            "type": "string",
+            "enum": ["implemented", "partial", "missing", "ineffective"]
+          },
+          "effectiveness": {
+            "type": "string",
+            "enum": ["strong", "moderate", "weak", "none"]
+          },
+          "gaps": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
+    "risk_summary": {
+      "type": "object",
+      "properties": {
+        "overall_risk": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"]
+        },
+        "critical_findings": {"type": "integer"},
+        "high_findings": {"type": "integer"},
+        "medium_findings": {"type": "integer"},
+        "low_findings": {"type": "integer"},
+        "risk_statement": {"type": "string"}
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["priority", "recommendation", "addresses"],
+        "properties": {
+          "priority": {
+            "type": "string",
+            "enum": ["immediate", "short_term", "medium_term", "long_term"]
+          },
+          "recommendation": {"type": "string"},
+          "rationale": {"type": "string"},
+          "addresses": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Vulnerability or attack vector IDs this addresses"
+          },
+          "effort": {
+            "type": "string",
+            "enum": ["trivial", "small", "medium", "large"]
+          }
+        }
+      }
+    },
+    "positive_findings": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Security controls that are working well"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 50,
+      "description": "Explanation of the security assessment methodology and key findings"
+    }
+  },
+  "additionalProperties": false
+}

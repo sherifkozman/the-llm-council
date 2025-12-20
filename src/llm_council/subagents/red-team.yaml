@@ -1,0 +1,294 @@
+# Red Team Subagent Configuration
+# Performs adversarial security analysis and threat modeling
+
+name: red-team
+description: >
+  Performs adversarial security analysis to identify vulnerabilities,
+  attack vectors, and weaknesses. Uses harsh critic model pack for
+  thorough threat modeling and penetration testing mindset.
+
+model_pack: harsh_critic
+calls: 3-5  # Claude + Codex + Gemini drafts, critique, synthesis
+
+schema: red-team
+
+prompts:
+  system: |
+    You are a security red team expert. Your job is to think like an attacker
+    and identify ways to compromise systems, steal data, or cause harm.
+
+    Your analysis should:
+    1. Identify realistic threat actors and their motivations
+    2. Map the attack surface comprehensively
+    3. Develop attack chains showing step-by-step exploitation
+    4. Rate vulnerabilities by severity and exploitability
+    5. Provide actionable remediation recommendations
+    6. Reference OWASP, MITRE ATT&CK, and CWE where applicable
+
+    Think adversarially:
+    - What would an attacker target first?
+    - What shortcuts exist past security controls?
+    - What assumptions can be exploited?
+    - How would attacks be detected (or not)?
+
+    Be thorough but prioritize findings by real-world risk.
+
+  examples:
+    - task: "Red team the user authentication system"
+      expected:
+        assessment_title: "Authentication System Security Assessment"
+        assessment_type: "threat_model"
+        scope:
+          target: "User authentication system including login, password reset, and session management"
+          boundaries:
+            in_scope:
+              - "Login endpoints"
+              - "Password reset flow"
+              - "Session management"
+              - "OAuth integration"
+              - "MFA implementation"
+            out_of_scope:
+              - "Physical security"
+              - "Social engineering of employees"
+          assumptions:
+            - "TLS is properly configured"
+            - "Database access is restricted"
+        threat_model:
+          threat_actors:
+            - actor: "Opportunistic attacker"
+              motivation: "Credential theft for account takeover"
+              capability: "low"
+              likelihood: "certain"
+            - actor: "Competitor"
+              motivation: "Access to user data and business intelligence"
+              capability: "medium"
+              likelihood: "possible"
+            - actor: "Disgruntled employee"
+              motivation: "Data exfiltration or sabotage"
+              capability: "high"
+              likelihood: "possible"
+          assets:
+            - asset: "User credentials"
+              value: "critical"
+              data_classification: "restricted"
+            - asset: "Session tokens"
+              value: "high"
+              data_classification: "confidential"
+            - asset: "Password reset tokens"
+              value: "high"
+              data_classification: "confidential"
+          attack_surface:
+            - surface: "Login endpoint"
+              exposure: "public"
+              description: "POST /api/auth/login accepts email and password"
+            - surface: "Password reset endpoint"
+              exposure: "public"
+              description: "POST /api/auth/reset-password"
+            - surface: "Session cookies"
+              exposure: "authenticated"
+              description: "JWT stored in httpOnly cookie"
+        attack_vectors:
+          - id: "AV-001"
+            name: "Credential Stuffing Attack"
+            description: "Use leaked credentials from other breaches to attempt login"
+            category: "broken_auth"
+            attack_chain:
+              - step: 1
+                action: "Obtain leaked credential database"
+                technique: "Dark web purchase or public dumps"
+                requirements: "None"
+              - step: 2
+                action: "Automate login attempts"
+                technique: "Scripted requests with proxy rotation"
+                requirements: "Credential list, proxy infrastructure"
+              - step: 3
+                action: "Collect successful logins"
+                technique: "Log successful auth responses"
+                requirements: "None"
+            prerequisites:
+              - "Leaked credentials from other services"
+              - "Ability to rotate IPs or proxies"
+            impact:
+              confidentiality: "high"
+              integrity: "high"
+              availability: "none"
+              description: "Full account takeover for reused credentials"
+            likelihood: "likely"
+            difficulty: "easy"
+            detection_difficulty: "moderate"
+            mitre_attack_id: "T1110.004"
+          - id: "AV-002"
+            name: "Password Reset Token Brute Force"
+            description: "Brute force short or predictable password reset tokens"
+            category: "broken_auth"
+            attack_chain:
+              - step: 1
+                action: "Request password reset for target email"
+                technique: "Normal reset flow"
+                requirements: "Target email address"
+              - step: 2
+                action: "Enumerate reset token format"
+                technique: "Analyze reset links"
+                requirements: "Access to own reset email"
+              - step: 3
+                action: "Brute force token space"
+                technique: "Automated requests"
+                requirements: "Token is short or predictable"
+            impact:
+              confidentiality: "high"
+              integrity: "high"
+              availability: "none"
+              description: "Account takeover without credentials"
+            likelihood: "possible"
+            difficulty: "moderate"
+            detection_difficulty: "moderate"
+          - id: "AV-003"
+            name: "Session Fixation via OAuth Flow"
+            description: "Exploit OAuth state parameter handling to fixate sessions"
+            category: "broken_auth"
+            attack_chain:
+              - step: 1
+                action: "Initiate OAuth flow"
+                technique: "Start legitimate OAuth process"
+                requirements: "Valid OAuth client"
+              - step: 2
+                action: "Capture OAuth callback URL"
+                technique: "Pause before callback completion"
+                requirements: "Control over victim browser"
+              - step: 3
+                action: "Deliver URL to victim"
+                technique: "Phishing or link injection"
+                requirements: "Social engineering"
+            impact:
+              confidentiality: "high"
+              integrity: "high"
+              availability: "none"
+              description: "Session hijacking"
+            likelihood: "unlikely"
+            difficulty: "hard"
+            detection_difficulty: "stealthy"
+        vulnerabilities:
+          - id: "VULN-001"
+            title: "No rate limiting on login endpoint"
+            severity: "high"
+            cvss_score: 7.5
+            cwe_id: "CWE-307"
+            description: "Login endpoint allows unlimited attempts without rate limiting or account lockout"
+            affected_component: "POST /api/auth/login"
+            proof_of_concept: "Send 1000 login attempts in under 1 minute without being blocked"
+            exploitation_steps:
+              - "Obtain list of common passwords"
+              - "Script login attempts against known email"
+              - "Observe no rate limiting or lockout"
+            remediation:
+              recommendation: "Implement rate limiting (5 attempts per minute) and account lockout after 10 failures"
+              effort: "small"
+              priority: "immediate"
+            related_attack_vectors: ["AV-001"]
+          - id: "VULN-002"
+            title: "Weak password reset tokens"
+            severity: "medium"
+            cvss_score: 5.3
+            cwe_id: "CWE-330"
+            description: "Password reset tokens are 6 digits, making brute force feasible"
+            affected_component: "Password reset flow"
+            proof_of_concept: "Token space is only 1 million possibilities, brute forceable in hours"
+            remediation:
+              recommendation: "Use cryptographically random tokens of at least 32 bytes"
+              effort: "small"
+              priority: "short_term"
+            related_attack_vectors: ["AV-002"]
+          - id: "VULN-003"
+            title: "Session tokens do not expire"
+            severity: "medium"
+            cvss_score: 4.8
+            cwe_id: "CWE-613"
+            description: "JWT tokens have no expiration, remaining valid indefinitely"
+            affected_component: "Session management"
+            remediation:
+              recommendation: "Set token expiration to 24 hours with refresh token pattern"
+              effort: "medium"
+              priority: "short_term"
+        security_controls_assessment:
+          - control: "Rate limiting"
+            status: "missing"
+            effectiveness: "none"
+            gaps:
+              - "No rate limiting on login"
+              - "No rate limiting on password reset"
+          - control: "Account lockout"
+            status: "missing"
+            effectiveness: "none"
+            gaps:
+              - "Unlimited login attempts allowed"
+          - control: "Password policy"
+            status: "implemented"
+            effectiveness: "moderate"
+            gaps:
+              - "No breach password checking"
+          - control: "MFA"
+            status: "partial"
+            effectiveness: "moderate"
+            gaps:
+              - "MFA is optional, not enforced"
+              - "No MFA for password reset"
+        risk_summary:
+          overall_risk: "high"
+          critical_findings: 0
+          high_findings: 1
+          medium_findings: 2
+          low_findings: 0
+          risk_statement: "The authentication system is vulnerable to credential stuffing attacks due to missing rate limiting. Combined with weak password reset tokens, attackers can gain unauthorized access with moderate effort."
+        recommendations:
+          - priority: "immediate"
+            recommendation: "Implement rate limiting on login endpoint"
+            rationale: "Prevents credential stuffing and brute force attacks"
+            addresses: ["VULN-001", "AV-001"]
+            effort: "small"
+          - priority: "short_term"
+            recommendation: "Replace weak reset tokens with cryptographic tokens"
+            rationale: "Prevents token brute force attacks"
+            addresses: ["VULN-002", "AV-002"]
+            effort: "small"
+          - priority: "short_term"
+            recommendation: "Add session expiration with refresh tokens"
+            rationale: "Limits window of opportunity for stolen tokens"
+            addresses: ["VULN-003"]
+            effort: "medium"
+          - priority: "medium_term"
+            recommendation: "Enforce MFA for all users"
+            rationale: "Provides defense in depth against credential attacks"
+            addresses: ["AV-001"]
+            effort: "large"
+        positive_findings:
+          - "Passwords are properly hashed with bcrypt"
+          - "Session cookies use httpOnly and secure flags"
+          - "OAuth implementation uses PKCE correctly"
+        reasoning: "Assessment focused on authentication bypass attacks as highest risk. Missing rate limiting is the most critical gap, enabling credential stuffing attacks that are common and easy to execute. Recommendations prioritized by impact and implementation effort."
+
+classification_rules:
+  task_signals:
+    - red team
+    - security test
+    - penetration test
+    - threat model
+    - vulnerability
+    - attack vector
+    - exploit
+    - adversarial
+    - security assessment
+    - hack
+
+  assessment_type_signals:
+    threat_model:
+      - threat model
+      - threat actors
+      - attack surface
+    penetration_test:
+      - pentest
+      - penetration test
+      - exploit
+    code_audit:
+      - code review
+      - security audit
+      - source code analysis

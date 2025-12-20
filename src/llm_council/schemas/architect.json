@@ -1,0 +1,309 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ArchitectOutput",
+  "description": "Output schema for the Architect subagent that designs systems, schemas, and technical architecture",
+  "type": "object",
+  "required": ["architecture_title", "overview", "components", "data_model", "design_decisions", "reasoning"],
+  "properties": {
+    "architecture_title": {
+      "type": "string",
+      "minLength": 5,
+      "description": "Descriptive title for the architecture"
+    },
+    "architecture_type": {
+      "type": "string",
+      "enum": ["system", "component", "data", "api", "integration", "infrastructure"],
+      "description": "Category of architecture"
+    },
+    "overview": {
+      "type": "string",
+      "minLength": 50,
+      "description": "High-level description of the architecture"
+    },
+    "requirements": {
+      "type": "object",
+      "properties": {
+        "functional": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "What the system must do"
+        },
+        "non_functional": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Quality attributes (performance, scalability, security)"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Technical or business constraints"
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "purpose", "technology"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Component identifier"
+          },
+          "purpose": {
+            "type": "string",
+            "description": "What this component does"
+          },
+          "technology": {
+            "type": "string",
+            "description": "Technology stack for this component"
+          },
+          "interfaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["rest", "grpc", "graphql", "event", "queue", "file", "database"]
+                },
+                "protocol": {"type": "string"},
+                "description": {"type": "string"}
+              }
+            },
+            "description": "How this component communicates"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Other components this depends on"
+          },
+          "scaling_strategy": {
+            "type": "string",
+            "enum": ["horizontal", "vertical", "stateless", "sharded", "replicated"],
+            "description": "How this component scales"
+          }
+        }
+      }
+    },
+    "data_model": {
+      "type": "object",
+      "properties": {
+        "entities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "fields"],
+            "properties": {
+              "name": {"type": "string"},
+              "description": {"type": "string"},
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name", "type"],
+                  "properties": {
+                    "name": {"type": "string"},
+                    "type": {"type": "string"},
+                    "nullable": {"type": "boolean"},
+                    "description": {"type": "string"},
+                    "constraints": {
+                      "type": "array",
+                      "items": {"type": "string"}
+                    }
+                  }
+                }
+              },
+              "primary_key": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "indexes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {"type": "string"},
+                    "columns": {
+                      "type": "array",
+                      "items": {"type": "string"}
+                    },
+                    "unique": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "relationships": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {"type": "string"},
+              "to": {"type": "string"},
+              "type": {
+                "type": "string",
+                "enum": ["one_to_one", "one_to_many", "many_to_many"]
+              },
+              "description": {"type": "string"}
+            }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "primary_db": {"type": "string"},
+            "cache": {"type": "string"},
+            "search": {"type": "string"},
+            "file_storage": {"type": "string"}
+          }
+        }
+      }
+    },
+    "api_design": {
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": "string",
+          "enum": ["rest", "graphql", "grpc", "websocket", "hybrid"]
+        },
+        "versioning": {
+          "type": "string",
+          "enum": ["url", "header", "query_param", "none"]
+        },
+        "authentication": {
+          "type": "string"
+        },
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "method": {"type": "string"},
+              "path": {"type": "string"},
+              "description": {"type": "string"},
+              "request_schema": {"type": "string"},
+              "response_schema": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "design_decisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["decision", "rationale", "alternatives"],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "The architectural decision made"
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why this decision was made"
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "option": {"type": "string"},
+                "reason_rejected": {"type": "string"}
+              }
+            }
+          },
+          "tradeoffs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "What we gave up with this decision"
+          }
+        }
+      }
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pattern": {"type": "string"},
+          "usage": {"type": "string"}
+        }
+      },
+      "description": "Design patterns applied"
+    },
+    "security_considerations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "concern": {"type": "string"},
+          "mitigation": {"type": "string"}
+        }
+      }
+    },
+    "scalability": {
+      "type": "object",
+      "properties": {
+        "expected_load": {
+          "type": "object",
+          "properties": {
+            "requests_per_second": {"type": "integer"},
+            "concurrent_users": {"type": "integer"},
+            "data_volume_gb": {"type": "integer"}
+          }
+        },
+        "scaling_approach": {"type": "string"},
+        "bottlenecks": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "environment": {
+          "type": "string",
+          "enum": ["kubernetes", "docker_compose", "serverless", "vm", "bare_metal"]
+        },
+        "regions": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "ci_cd": {"type": "string"}
+      }
+    },
+    "diagrams": {
+      "type": "object",
+      "properties": {
+        "system_context": {
+          "type": "string",
+          "description": "ASCII or Mermaid diagram of system context"
+        },
+        "component_diagram": {
+          "type": "string",
+          "description": "ASCII or Mermaid diagram of components"
+        },
+        "sequence_diagram": {
+          "type": "string",
+          "description": "ASCII or Mermaid diagram of key flows"
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Questions that need answers before finalizing"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 50,
+      "description": "Explanation of architectural thinking and key tradeoffs"
+    }
+  },
+  "additionalProperties": false
+}

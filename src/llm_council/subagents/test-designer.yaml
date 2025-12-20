@@ -1,0 +1,325 @@
+# Test Designer Subagent Configuration
+# Creates test plans, test cases, and testing strategies
+
+name: test-designer
+description: >
+  Designs comprehensive test suites with focus on edge cases,
+  boundary conditions, and critical path coverage. Uses code
+  specialist models for generating test code.
+
+model_pack: code_specialist_normal
+calls: 3  # Claude + Codex + Gemini drafts, synthesis
+
+schema: test-designer
+
+prompts:
+  system: |
+    You are a test engineering expert. Your job is to design comprehensive
+    test suites that catch bugs before they reach production.
+
+    Your test designs should:
+    1. Cover happy path, error cases, and edge cases
+    2. Include boundary condition testing
+    3. Identify dependencies that need mocking
+    4. Prioritize critical business logic
+    5. Balance coverage with maintainability
+    6. Follow testing best practices (AAA pattern, single assertion)
+
+    Tests should be:
+    - Fast and deterministic
+    - Independent and isolated
+    - Readable and maintainable
+    - Focused on behavior, not implementation
+
+  examples:
+    - task: "Design tests for the payment processing module"
+      expected:
+        test_plan_title: "Payment Processing Module Test Suite"
+        test_type: "comprehensive"
+        summary: "Comprehensive test suite covering payment creation, validation, processing, refunds, and error handling. Prioritizes financial accuracy and error recovery."
+        target:
+          component: "PaymentService"
+          files:
+            - "src/services/payment/PaymentService.ts"
+            - "src/services/payment/PaymentValidator.ts"
+            - "src/services/payment/RefundService.ts"
+          dependencies:
+            - "StripeClient"
+            - "PaymentRepository"
+            - "NotificationService"
+        test_categories:
+          - category: "Payment Creation"
+            description: "Tests for creating new payments"
+            priority: "critical"
+            test_count: 8
+          - category: "Payment Validation"
+            description: "Input validation and business rules"
+            priority: "critical"
+            test_count: 12
+          - category: "Payment Processing"
+            description: "Processing with external payment provider"
+            priority: "critical"
+            test_count: 10
+          - category: "Refunds"
+            description: "Full and partial refund handling"
+            priority: "high"
+            test_count: 6
+          - category: "Error Handling"
+            description: "Network failures, timeouts, provider errors"
+            priority: "high"
+            test_count: 8
+        test_cases:
+          - id: "TC-001"
+            name: "should create payment with valid credit card"
+            category: "Payment Creation"
+            description: "Verify successful payment creation with valid card details"
+            test_type: "unit"
+            priority: "critical"
+            preconditions:
+              - "User is authenticated"
+              - "Cart has items"
+            test_steps:
+              - "Call createPayment with valid card token"
+              - "Verify payment record created in database"
+              - "Verify Stripe charge initiated"
+            test_data:
+              inputs:
+                amount: 9999
+                currency: "USD"
+                cardToken: "tok_visa"
+            expected_result: "Payment object returned with status 'pending'"
+            mocks_needed:
+              - "StripeClient.createCharge"
+              - "PaymentRepository.create"
+          - id: "TC-002"
+            name: "should reject payment with expired card"
+            category: "Payment Validation"
+            description: "Verify expired cards are rejected with appropriate error"
+            test_type: "unit"
+            priority: "critical"
+            test_data:
+              inputs:
+                cardToken: "tok_expired"
+            expected_result: "PaymentError thrown with code CARD_EXPIRED"
+            edge_cases:
+              - "Card expires during processing"
+          - id: "TC-003"
+            name: "should handle Stripe timeout gracefully"
+            category: "Error Handling"
+            description: "Verify system handles payment provider timeouts"
+            test_type: "integration"
+            priority: "high"
+            preconditions:
+              - "Stripe mock configured to timeout"
+            expected_result: "Payment marked as 'pending_retry', notification sent"
+            mocks_needed:
+              - "StripeClient (timeout simulation)"
+          - id: "TC-004"
+            name: "should prevent duplicate charges on retry"
+            category: "Error Handling"
+            description: "Verify idempotency key prevents duplicate charges"
+            test_type: "integration"
+            priority: "critical"
+            expected_result: "Second charge attempt returns original charge, no duplicate"
+            edge_cases:
+              - "Network failure after charge succeeds but before confirmation"
+          - id: "TC-005"
+            name: "should calculate partial refund correctly"
+            category: "Refunds"
+            description: "Verify partial refund amounts are calculated correctly"
+            test_type: "unit"
+            priority: "high"
+            test_data:
+              inputs:
+                originalAmount: 10000
+                refundAmount: 2500
+            expected_result: "Refund created for $25.00, remaining balance $75.00"
+        edge_cases:
+          - scenario: "Payment amount is exactly $0.50 (Stripe minimum)"
+            test_id: "TC-010"
+            risk_if_untested: "Payments below minimum would fail unexpectedly"
+          - scenario: "Payment in currency with no decimal places (JPY)"
+            test_id: "TC-011"
+            risk_if_untested: "Amount formatting errors for zero-decimal currencies"
+          - scenario: "Network failure after payment succeeds but before DB commit"
+            test_id: "TC-004"
+            risk_if_untested: "Orphaned charges without payment records"
+        negative_tests:
+          - scenario: "Negative payment amount"
+            expected_behavior: "Throw ValidationError"
+            test_id: "TC-020"
+          - scenario: "Invalid currency code"
+            expected_behavior: "Throw ValidationError"
+            test_id: "TC-021"
+          - scenario: "Unsupported card type"
+            expected_behavior: "Throw PaymentError with CARD_NOT_SUPPORTED"
+            test_id: "TC-022"
+        boundary_tests:
+          - boundary: "Payment amount"
+            test_values:
+              - "$0.50 (minimum)"
+              - "$0.49 (below minimum)"
+              - "$999,999.99 (maximum)"
+              - "$1,000,000.00 (above maximum)"
+            test_id: "TC-030"
+          - boundary: "Refund amount"
+            test_values:
+              - "$0.01 (minimum refund)"
+              - "100% of original (full refund)"
+              - "100.01% of original (over-refund)"
+            test_id: "TC-031"
+        coverage_goals:
+          line_coverage: 90
+          branch_coverage: 85
+          critical_paths:
+            - "PaymentService.processPayment"
+            - "PaymentService.refund"
+            - "PaymentValidator.validate"
+        test_files:
+          - path: "src/services/payment/__tests__/PaymentService.test.ts"
+            description: "Main payment service unit tests"
+            test_count: 25
+          - path: "src/services/payment/__tests__/PaymentService.integration.test.ts"
+            description: "Integration tests with mocked Stripe"
+            test_count: 10
+          - path: "src/services/payment/__tests__/RefundService.test.ts"
+            description: "Refund service tests"
+            test_count: 8
+        fixtures_needed:
+          - name: "validPaymentRequest"
+            description: "Factory for creating valid payment requests"
+            data_structure: "{ amount, currency, cardToken, customerId }"
+          - name: "stripeChargeResponse"
+            description: "Mock Stripe charge response"
+            data_structure: "{ id, amount, status, created }"
+        mocking_strategy:
+          approach: "jest_mock"
+          mocks:
+            - dependency: "StripeClient"
+              mock_type: "Module mock"
+              description: "Mock all Stripe API calls"
+            - dependency: "PaymentRepository"
+              mock_type: "Module mock"
+              description: "Mock database operations"
+            - dependency: "NotificationService"
+              mock_type: "Spy"
+              description: "Verify notifications sent without actually sending"
+        test_environment:
+          framework: "Jest"
+          runner: "jest --runInBand"
+          setup_requirements:
+            - "Test database with payment schema"
+            - "Stripe test API keys"
+          environment_variables:
+            - "STRIPE_SECRET_KEY=sk_test_xxx"
+            - "DATABASE_URL=postgres://test"
+        reasoning: "Test strategy prioritizes financial accuracy and error recovery. Payment processing is critical path requiring 100% branch coverage. Edge cases around currency handling and network failures are high risk. Mocking Stripe ensures fast, deterministic tests while integration tests verify real API behavior."
+
+    - task: "Write tests for the user authentication flow"
+      expected:
+        test_plan_title: "User Authentication Test Suite"
+        test_type: "comprehensive"
+        summary: "Test suite covering login, logout, session management, password reset, and security scenarios. Emphasizes security testing and edge cases."
+        target:
+          component: "AuthService"
+          files:
+            - "src/services/auth/AuthService.ts"
+            - "src/services/auth/SessionService.ts"
+            - "src/services/auth/PasswordService.ts"
+          dependencies:
+            - "UserRepository"
+            - "EmailService"
+            - "RedisClient"
+        test_categories:
+          - category: "Login"
+            description: "User login scenarios"
+            priority: "critical"
+            test_count: 10
+          - category: "Session Management"
+            description: "Session creation, validation, expiry"
+            priority: "critical"
+            test_count: 8
+          - category: "Password Reset"
+            description: "Password reset flow"
+            priority: "high"
+            test_count: 6
+          - category: "Security"
+            description: "Brute force, injection, timing attacks"
+            priority: "critical"
+            test_count: 8
+        test_cases:
+          - id: "TC-001"
+            name: "should authenticate user with valid credentials"
+            category: "Login"
+            test_type: "unit"
+            priority: "critical"
+            expected_result: "Session token returned, user marked as logged in"
+          - id: "TC-002"
+            name: "should reject invalid password"
+            category: "Login"
+            test_type: "unit"
+            priority: "critical"
+            expected_result: "AuthError thrown, no session created"
+          - id: "TC-003"
+            name: "should lock account after 5 failed attempts"
+            category: "Security"
+            test_type: "integration"
+            priority: "critical"
+            expected_result: "Account locked, notification sent, login blocked"
+          - id: "TC-004"
+            name: "should invalidate all sessions on password change"
+            category: "Session Management"
+            test_type: "integration"
+            priority: "high"
+            expected_result: "All existing sessions invalidated except current"
+        coverage_goals:
+          line_coverage: 95
+          branch_coverage: 90
+          critical_paths:
+            - "AuthService.login"
+            - "AuthService.validateSession"
+            - "PasswordService.hash"
+            - "PasswordService.verify"
+        mocking_strategy:
+          approach: "jest_mock"
+          mocks:
+            - dependency: "UserRepository"
+              mock_type: "Module mock"
+              description: "Mock user lookups"
+            - dependency: "RedisClient"
+              mock_type: "In-memory mock"
+              description: "Mock session storage"
+        reasoning: "Authentication is security-critical requiring high coverage. Security test category ensures common attack vectors are tested. Session management tests verify no session leakage or fixation vulnerabilities."
+
+classification_rules:
+  task_signals:
+    - test
+    - write tests
+    - unit test
+    - integration test
+    - test coverage
+    - test plan
+    - test cases
+    - QA
+    - verify
+
+  test_type_signals:
+    unit:
+      - unit test
+      - isolated test
+      - mock
+    integration:
+      - integration
+      - API test
+      - database test
+    e2e:
+      - end to end
+      - e2e
+      - browser test
+      - cypress
+      - playwright
+    performance:
+      - load test
+      - stress test
+      - benchmark
+      - performance

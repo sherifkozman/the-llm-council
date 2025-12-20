@@ -1,0 +1,181 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResearcherOutput",
+  "description": "Output schema for the Researcher subagent that conducts market and technical research",
+  "type": "object",
+  "required": ["research_question", "summary", "findings", "sources", "confidence", "reasoning"],
+  "properties": {
+    "research_question": {
+      "type": "string",
+      "minLength": 10,
+      "description": "The specific question being researched"
+    },
+    "research_type": {
+      "type": "string",
+      "enum": ["technical", "market", "competitive", "best_practices", "feasibility", "state_of_art"],
+      "description": "Category of research"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 50,
+      "description": "Executive summary of findings"
+    },
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["finding", "evidence", "confidence"],
+        "properties": {
+          "finding": {
+            "type": "string",
+            "description": "The specific finding or insight"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Evidence supporting this finding"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "verified"],
+            "description": "Confidence level in this finding"
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "Indices into the sources array"
+          }
+        }
+      }
+    },
+    "key_insights": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Most important actionable insights"
+    },
+    "comparison_table": {
+      "type": "object",
+      "description": "Structured comparison (for competitive/option analysis)",
+      "properties": {
+        "headers": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "values": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "market_data": {
+      "type": "object",
+      "description": "Market-specific data (for market research)",
+      "properties": {
+        "market_size": {"type": "string"},
+        "growth_rate": {"type": "string"},
+        "key_players": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "trends": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "technical_data": {
+      "type": "object",
+      "description": "Technical-specific data (for technical research)",
+      "properties": {
+        "technologies": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "patterns": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "performance_benchmarks": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "compatibility": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["title", "type"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Source title or description"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL if available"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["documentation", "article", "paper", "github", "blog", "official", "community", "benchmark"],
+            "description": "Type of source"
+          },
+          "credibility": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "authoritative"],
+            "description": "Source credibility assessment"
+          },
+          "date": {
+            "type": "string",
+            "description": "Publication date if known"
+          }
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Information gaps or areas needing more research"
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Actionable recommendations based on research"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Overall confidence in research findings (0-100%)"
+    },
+    "tools_used": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["context7", "web_search", "firecrawl", "google_search", "github_search", "documentation"]
+      },
+      "description": "Research tools utilized"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 50,
+      "description": "Explanation of research methodology and conclusions"
+    }
+  },
+  "additionalProperties": false
+}

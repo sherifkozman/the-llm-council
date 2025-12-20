@@ -1,0 +1,255 @@
+# Researcher Subagent Configuration
+# Conducts market, technical, and competitive research with tool access
+
+name: researcher
+description: >
+  Conducts thorough research using web search, documentation lookup,
+  and other tools. Provides sourced findings with confidence levels.
+  Uses grounded model pack for retrieval-augmented generation.
+
+model_pack: grounded
+calls: 4-5  # Claude + Codex + Gemini drafts (with tools), critique, synthesis
+
+schema: researcher
+
+suggested_tools:
+  - context7      # Library documentation lookup
+  - web_search    # General web search
+  - firecrawl     # Web page scraping
+  - google_search # Gemini's native search (grounding)
+
+prompts:
+  system: |
+    You are a research expert with access to web search and documentation tools.
+    Your job is to find accurate, up-to-date information and synthesize it
+    into actionable insights.
+
+    Your research should:
+    1. Use available tools to find authoritative sources
+    2. Cross-reference multiple sources for accuracy
+    3. Clearly cite all sources with credibility assessment
+    4. Distinguish between verified facts and opinions
+    5. Identify gaps where more research is needed
+    6. Provide actionable recommendations
+
+    Always prioritize official documentation and authoritative sources.
+    Be explicit about confidence levels for each finding.
+
+  examples:
+    - task: "Research best practices for rate limiting APIs"
+      expected:
+        research_question: "What are the current best practices for implementing API rate limiting?"
+        research_type: "best_practices"
+        summary: "API rate limiting best practices center on token bucket or sliding window algorithms, with Redis as the preferred backing store. Key considerations include per-user vs per-IP limits, graceful degradation via 429 responses with Retry-After headers, and distributed rate limiting for multi-instance deployments."
+        findings:
+          - finding: "Token bucket algorithm is the industry standard for rate limiting"
+            evidence: "Used by Stripe, GitHub, and AWS APIs. Provides burst handling while maintaining average rate limits."
+            confidence: "verified"
+            source_refs: [0, 1]
+          - finding: "Redis with atomic Lua scripts prevents race conditions in distributed environments"
+            evidence: "Redis INCR with TTL or Lua scripting ensures atomic counter updates across instances"
+            confidence: "high"
+            source_refs: [2]
+          - finding: "429 Too Many Requests with Retry-After header is the standard response"
+            evidence: "RFC 6585 defines 429 status code; Retry-After header tells clients when to retry"
+            confidence: "verified"
+            source_refs: [3]
+          - finding: "Sliding window counters provide fairer rate limiting than fixed windows"
+            evidence: "Fixed windows allow burst at window boundaries; sliding windows smooth this out"
+            confidence: "high"
+            source_refs: [0, 4]
+        key_insights:
+          - "Use sliding window algorithm for fairness, token bucket for simplicity"
+          - "Always return Retry-After header with 429 responses"
+          - "Implement different limits for authenticated vs anonymous users"
+          - "Use Redis for distributed rate limiting to avoid single points of failure"
+        technical_data:
+          technologies: ["Redis", "Token Bucket", "Sliding Window", "Leaky Bucket"]
+          patterns: ["Middleware pattern", "Decorator pattern", "Proxy pattern"]
+          performance_benchmarks:
+            redis_latency: "<1ms for INCR operations"
+            memory_per_user: "~50 bytes for counter + TTL"
+        sources:
+          - title: "Rate Limiting Strategies and Techniques"
+            url: "https://cloud.google.com/architecture/rate-limiting-strategies-techniques"
+            type: "official"
+            credibility: "authoritative"
+          - title: "Stripe API Rate Limiting"
+            url: "https://stripe.com/docs/rate-limits"
+            type: "documentation"
+            credibility: "authoritative"
+          - title: "Redis Rate Limiting Pattern"
+            url: "https://redis.io/commands/incr/#pattern-rate-limiter"
+            type: "documentation"
+            credibility: "authoritative"
+          - title: "RFC 6585 - Additional HTTP Status Codes"
+            url: "https://tools.ietf.org/html/rfc6585"
+            type: "official"
+            credibility: "authoritative"
+          - title: "Figma Rate Limiting Implementation"
+            url: "https://www.figma.com/blog/an-alternative-approach-to-rate-limiting/"
+            type: "blog"
+            credibility: "high"
+            date: "2022"
+        gaps:
+          - "Need specific benchmarks for high-throughput scenarios (>100k req/s)"
+          - "Limited data on rate limiting for WebSocket connections"
+        recommendations:
+          - "Implement sliding window with Redis for main API endpoints"
+          - "Use separate limits for different endpoint categories (read vs write)"
+          - "Add monitoring and alerting for rate limit breaches"
+          - "Consider client-side rate limiting SDK for better UX"
+        confidence: 85
+        tools_used: ["context7", "web_search"]
+        reasoning: "Research synthesized from authoritative sources including Google Cloud, Stripe, and Redis documentation. High confidence due to consistent recommendations across multiple sources and RFC standards compliance."
+
+    - task: "Research React server components vs client components"
+      expected:
+        research_question: "When should you use React Server Components vs Client Components?"
+        research_type: "technical"
+        summary: "React Server Components (RSC) render on the server with zero JavaScript bundle impact, ideal for static content and data fetching. Client Components are needed for interactivity, hooks, and browser APIs. The recommended pattern is 'Server by default, Client when needed' with clear boundaries at the component level."
+        findings:
+          - finding: "Server Components have zero client-side JavaScript bundle impact"
+            evidence: "RSC code never ships to browser; only rendered HTML sent to client"
+            confidence: "verified"
+            source_refs: [0]
+          - finding: "Use 'use client' directive at the top of files that need client-side interactivity"
+            evidence: "Next.js 13+ and React 18+ use this convention to mark client component boundaries"
+            confidence: "verified"
+            source_refs: [0, 1]
+          - finding: "Server Components can directly access databases and filesystems"
+            evidence: "Since they run on server, they can use Node.js APIs and direct DB connections"
+            confidence: "verified"
+            source_refs: [1]
+          - finding: "useState, useEffect, and event handlers require Client Components"
+            evidence: "Hooks and interactivity only work in browser environment"
+            confidence: "verified"
+            source_refs: [0]
+        key_insights:
+          - "Default to Server Components; add 'use client' only when needed"
+          - "Keep client component boundaries as low in the tree as possible"
+          - "Pass serializable props from Server to Client components"
+          - "Use Server Components for data fetching, Client for user interaction"
+        comparison_table:
+          headers: ["Feature", "Server Component", "Client Component"]
+          rows:
+            - name: "Bundle size impact"
+              values: ["Feature", "None", "Adds to JS bundle"]
+            - name: "Data fetching"
+              values: ["Data fetching", "Direct (async/await)", "Via hooks (useEffect, useSWR)"]
+            - name: "Interactivity"
+              values: ["Interactivity", "None", "Full (events, state)"]
+            - name: "Hooks"
+              values: ["Hooks", "Not available", "Available"]
+            - name: "Browser APIs"
+              values: ["Browser APIs", "Not available", "Available"]
+        sources:
+          - title: "React Server Components RFC"
+            url: "https://github.com/reactjs/rfcs/blob/main/text/0188-server-components.md"
+            type: "official"
+            credibility: "authoritative"
+          - title: "Next.js Server Components Documentation"
+            url: "https://nextjs.org/docs/app/building-your-application/rendering/server-components"
+            type: "documentation"
+            credibility: "authoritative"
+        confidence: 95
+        tools_used: ["context7", "documentation"]
+        reasoning: "High confidence research based on official React RFC and Next.js documentation. Server Components are a well-documented feature with clear usage guidelines."
+
+    - task: "Compare Kubernetes vs Docker Swarm for container orchestration"
+      expected:
+        research_question: "How do Kubernetes and Docker Swarm compare for container orchestration?"
+        research_type: "competitive"
+        summary: "Kubernetes offers superior scalability, ecosystem, and features but with higher complexity. Docker Swarm provides simpler setup and native Docker integration but limited features. Kubernetes dominates production deployments (>80% market share) while Swarm suits smaller, simpler deployments."
+        findings:
+          - finding: "Kubernetes has 80%+ market share in container orchestration"
+            evidence: "CNCF surveys consistently show Kubernetes dominance in production environments"
+            confidence: "high"
+            source_refs: [0]
+          - finding: "Docker Swarm is simpler to set up but has fewer features"
+            evidence: "Swarm init takes minutes; Kubernetes requires more infrastructure planning"
+            confidence: "verified"
+            source_refs: [1]
+          - finding: "Kubernetes auto-scaling is more sophisticated"
+            evidence: "HPA, VPA, Cluster Autoscaler vs Swarm's basic replica scaling"
+            confidence: "high"
+            source_refs: [2]
+        comparison_table:
+          headers: ["Feature", "Kubernetes", "Docker Swarm"]
+          rows:
+            - name: "Learning curve"
+              values: ["Learning curve", "Steep", "Gentle"]
+            - name: "Setup complexity"
+              values: ["Setup complexity", "Complex", "Simple"]
+            - name: "Auto-scaling"
+              values: ["Auto-scaling", "Advanced (HPA/VPA)", "Basic"]
+            - name: "Ecosystem"
+              values: ["Ecosystem", "Extensive", "Limited"]
+            - name: "Market adoption"
+              values: ["Market adoption", "Dominant (80%+)", "Declining"]
+        market_data:
+          market_size: "Container orchestration market ~$1B"
+          growth_rate: "25% CAGR"
+          key_players: ["Kubernetes (CNCF)", "Docker Swarm", "HashiCorp Nomad", "AWS ECS"]
+          trends:
+            - "Kubernetes becoming default choice"
+            - "Managed Kubernetes offerings (EKS, GKE, AKS) reducing complexity"
+            - "GitOps and Kubernetes operators gaining adoption"
+        sources:
+          - title: "CNCF Survey 2024"
+            url: "https://www.cncf.io/reports/cncf-annual-survey-2024/"
+            type: "official"
+            credibility: "authoritative"
+            date: "2024"
+          - title: "Docker Swarm Documentation"
+            url: "https://docs.docker.com/engine/swarm/"
+            type: "documentation"
+            credibility: "authoritative"
+          - title: "Kubernetes Autoscaling"
+            url: "https://kubernetes.io/docs/concepts/cluster-administration/cluster-autoscaling/"
+            type: "documentation"
+            credibility: "authoritative"
+        recommendations:
+          - "Use Kubernetes for production, especially with managed offerings (EKS/GKE)"
+          - "Consider Docker Swarm only for small teams with simple needs"
+          - "Invest in Kubernetes training given market dominance"
+        confidence: 90
+        tools_used: ["web_search", "context7"]
+        reasoning: "Comprehensive comparison based on official documentation, market surveys, and industry reports. High confidence due to well-established market positions and clear differentiation."
+
+classification_rules:
+  # Keywords that suggest research tasks
+  task_signals:
+    - research
+    - investigate
+    - find out
+    - compare
+    - what are best practices
+    - how does X work
+    - state of the art
+    - market analysis
+    - competitive analysis
+    - alternatives to
+
+  # Research type signals
+  research_type_signals:
+    technical:
+      - how to implement
+      - architecture
+      - performance
+      - compatibility
+    market:
+      - market size
+      - growth
+      - trends
+      - industry
+    competitive:
+      - compare
+      - vs
+      - alternatives
+      - competitors
+    best_practices:
+      - best practices
+      - recommended
+      - industry standard
+      - conventions

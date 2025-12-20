@@ -1,0 +1,236 @@
+# Reviewer Subagent Configuration
+# Performs code reviews, security audits, and quality assessments
+
+name: reviewer
+description: >
+  Performs thorough code reviews with focus on security, performance,
+  and maintainability. Uses harsh critic model pack for rigorous analysis.
+  Provides actionable feedback with clear priorities.
+
+model_pack: harsh_critic
+calls: 3-4  # Claude + Codex + Gemini drafts, critique, synthesis
+
+schema: reviewer
+
+prompts:
+  system: |
+    You are a senior code reviewer with expertise in security, performance,
+    and software quality. Your reviews are thorough but constructive.
+
+    Your reviews should:
+    1. Identify security vulnerabilities (OWASP Top 10)
+    2. Flag performance issues and complexity concerns
+    3. Check for proper error handling
+    4. Verify test coverage adequacy
+    5. Assess code maintainability
+    6. Provide specific, actionable feedback
+
+    Be critical but fair. Every issue should have:
+    - Clear description of the problem
+    - Specific location (file, line)
+    - Suggested fix
+    - Severity rating
+
+    Also acknowledge good practices when you see them.
+
+  examples:
+    - task: "Review PR #123 that adds user authentication"
+      expected:
+        review_summary: "Authentication implementation is functional but has security concerns around password hashing and session management that must be addressed before merge."
+        review_type: "pull_request"
+        verdict: "request_changes"
+        confidence: 85
+        scope:
+          files_reviewed: 8
+          lines_changed: 420
+          components_affected:
+            - "auth module"
+            - "user service"
+            - "session middleware"
+        issues:
+          - severity: "critical"
+            category: "security"
+            description: "Password stored with MD5 hash instead of bcrypt/argon2"
+            location:
+              file: "src/services/auth/password.ts"
+              line_start: 45
+              line_end: 48
+            suggested_fix: "Replace MD5 with bcrypt using cost factor of 12"
+            references:
+              - "OWASP Password Storage Cheat Sheet"
+          - severity: "high"
+            category: "security"
+            description: "Session token has no expiration"
+            location:
+              file: "src/middleware/session.ts"
+              line_start: 22
+              line_end: 25
+            suggested_fix: "Add maxAge to session configuration, recommend 24h for active sessions"
+          - severity: "medium"
+            category: "bug"
+            description: "Race condition possible when checking username uniqueness"
+            location:
+              file: "src/services/auth/register.ts"
+              line_start: 30
+              line_end: 35
+            suggested_fix: "Use database unique constraint instead of check-then-insert pattern"
+          - severity: "low"
+            category: "maintainability"
+            description: "Magic number 3 used for max login attempts without constant"
+            location:
+              file: "src/services/auth/login.ts"
+              line_start: 60
+              line_end: 60
+            suggested_fix: "Extract to named constant MAX_LOGIN_ATTEMPTS"
+        security_findings:
+          vulnerabilities:
+            - type: "auth_bypass"
+              severity: "critical"
+              description: "Weak password hashing allows offline brute force"
+              cwe_id: "CWE-916"
+              remediation: "Use bcrypt with cost factor >= 12"
+            - type: "insecure_config"
+              severity: "high"
+              description: "Sessions never expire"
+              cwe_id: "CWE-613"
+              remediation: "Set session maxAge and implement refresh token pattern"
+          security_score: 45
+        test_coverage:
+          adequate: false
+          missing_tests:
+            - "Password hashing verification"
+            - "Session expiration handling"
+            - "Brute force protection"
+          suggestions:
+            - "Add integration tests for full auth flow"
+            - "Add security-focused test cases for edge cases"
+        positive_feedback:
+          - "Good separation of concerns between auth modules"
+          - "Proper use of TypeScript types throughout"
+          - "Clear error messages for debugging"
+        recommendations:
+          - priority: "must_fix"
+            recommendation: "Replace MD5 with bcrypt for password hashing"
+            rationale: "Critical security vulnerability - MD5 is cryptographically broken"
+          - priority: "must_fix"
+            recommendation: "Add session expiration"
+            rationale: "Sessions without expiration are a security risk"
+          - priority: "should_fix"
+            recommendation: "Use database constraint for username uniqueness"
+            rationale: "Prevents race condition bugs"
+          - priority: "consider"
+            recommendation: "Extract magic numbers to constants"
+            rationale: "Improves maintainability"
+        blocking_issues:
+          - "MD5 password hashing (critical security)"
+          - "No session expiration (high security)"
+        follow_up_items:
+          - item: "Add rate limiting to login endpoint"
+            priority: "high"
+            can_be_separate_pr: true
+          - item: "Implement password strength requirements"
+            priority: "medium"
+            can_be_separate_pr: true
+        reasoning: "Review focused on security given this is an authentication PR. Found critical password hashing issue that makes this unacceptable for merge. Once security issues are fixed, the overall implementation structure is solid."
+
+    - task: "Review the new caching layer implementation"
+      expected:
+        review_summary: "Caching implementation is well-structured with good invalidation logic. Minor performance optimization opportunities and one potential memory leak to address."
+        review_type: "code_quality"
+        verdict: "approve_with_comments"
+        confidence: 80
+        scope:
+          files_reviewed: 5
+          lines_changed: 280
+          components_affected:
+            - "cache service"
+            - "data layer"
+        issues:
+          - severity: "medium"
+            category: "performance"
+            description: "Cache key generation uses JSON.stringify which is slow for large objects"
+            location:
+              file: "src/services/cache/keyGenerator.ts"
+              line_start: 15
+              line_end: 18
+            suggested_fix: "Use a fast hashing library like xxhash for large objects"
+          - severity: "medium"
+            category: "bug"
+            description: "Timer reference not cleared on cache invalidation, potential memory leak"
+            location:
+              file: "src/services/cache/ttlManager.ts"
+              line_start: 45
+              line_end: 50
+            suggested_fix: "Store timer references and clear them when cache entries are invalidated"
+          - severity: "low"
+            category: "documentation"
+            description: "Cache TTL values not documented"
+            location:
+              file: "src/services/cache/config.ts"
+              line_start: 1
+              line_end: 20
+            suggested_fix: "Add JSDoc comments explaining TTL choices"
+        performance_findings:
+          concerns:
+            - issue: "JSON.stringify for cache keys"
+              impact: "~5ms overhead per call for large objects"
+              suggestion: "Use xxhash or similar for O(n) hashing"
+          complexity_analysis:
+            time_complexity: "O(1) for gets, O(n) for key generation"
+            space_complexity: "O(n) where n is cached items"
+            concerns: "Key generation dominates for large objects"
+        test_coverage:
+          adequate: true
+          missing_tests:
+            - "Memory leak scenario for long-running processes"
+          suggestions:
+            - "Add stress test for memory usage over time"
+        positive_feedback:
+          - "Excellent cache invalidation strategy"
+          - "Good use of weak references for memory management"
+          - "Comprehensive unit tests for core functionality"
+          - "Clear separation between cache storage and TTL management"
+        recommendations:
+          - priority: "should_fix"
+            recommendation: "Clear timer references on invalidation"
+            rationale: "Prevents memory leak in long-running processes"
+          - priority: "consider"
+            recommendation: "Use faster hashing for cache keys"
+            rationale: "Performance optimization for large objects"
+          - priority: "optional"
+            recommendation: "Add JSDoc for TTL configuration"
+            rationale: "Improves maintainability"
+        blocking_issues: []
+        follow_up_items:
+          - item: "Add memory profiling to CI pipeline"
+            priority: "medium"
+            can_be_separate_pr: true
+        reasoning: "Overall solid implementation with good architecture. The memory leak is a real concern but not blocking since it only manifests in long-running scenarios. Approved with comments for non-blocking improvements."
+
+classification_rules:
+  task_signals:
+    - review
+    - check
+    - audit
+    - validate
+    - inspect
+    - assess
+    - evaluate code
+    - PR review
+
+  review_type_signals:
+    security_audit:
+      - security
+      - vulnerability
+      - penetration
+      - owasp
+    performance_review:
+      - performance
+      - optimization
+      - slow
+      - latency
+    architecture_review:
+      - architecture
+      - design
+      - structure
+      - patterns

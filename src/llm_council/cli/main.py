@@ -1,0 +1,188 @@
+"""
+CLI entry point for LLM Council.
+
+Commands:
+    council run <subagent> <task>  - Run a council task
+    council doctor                  - Check provider status
+    council config                  - Manage configuration
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+
+import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+app = typer.Typer(
+    name="council",
+    help="Multi-LLM Council Framework - Orchestrate multiple LLM backends",
+    no_args_is_help=True,
+)
+console = Console()
+
+
+@app.command()
+def run(
+    subagent: str = typer.Argument(..., help="Subagent type (router, planner, implementer, etc.)"),
+    task: str = typer.Argument(..., help="Task description"),
+    providers: str | None = typer.Option(
+        None,
+        "--providers",
+        "-p",
+        help="Comma-separated provider list (default: openrouter)",
+    ),
+    timeout: int = typer.Option(120, "--timeout", "-t", help="Timeout per call in seconds"),
+    max_retries: int = typer.Option(3, "--max-retries", help="Max validation retries"),
+    no_artifacts: bool = typer.Option(False, "--no-artifacts", help="Disable artifact storage"),
+    health_check: bool = typer.Option(False, "--health-check", help="Run preflight health check"),
+    no_degradation: bool = typer.Option(False, "--no-degradation", help="Disable graceful degradation"),
+    output_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
+) -> None:
+    """Run a council task with the specified subagent."""
+    provider_list = providers.split(",") if providers else ["openrouter"]
+
+    if not output_json:
+        console.print(f"[bold blue]Council[/bold blue] Running {subagent} with {len(provider_list)} provider(s)...")
+
+    try:
+        from llm_council import Council
+        from llm_council.protocol.types import CouncilConfig
+
+        config = CouncilConfig(
+            providers=provider_list,
+            timeout=timeout,
+            max_retries=max_retries,
+            enable_artifact_store=not no_artifacts,
+            enable_health_check=health_check,
+            enable_graceful_degradation=not no_degradation,
+        )
+
+        council = Council(config=config)
+        result = asyncio.run(council.run(task=task, subagent=subagent))
+
+        if output_json:
+            print(json.dumps(result.model_dump(), indent=2, default=str))
+        else:
+            if result.success:
+                console.print(Panel(
+                    json.dumps(result.output, indent=2),
+                    title="[green]Council Result: SUCCESS[/green]",
+                    border_style="green",
+                ))
+            else:
+                console.print(Panel(
+                    "\n".join(result.validation_errors or ["Unknown error"]),
+                    title="[red]Council Result: FAILED[/red]",
+                    border_style="red",
+                ))
+
+            if verbose:
+                console.print("\n[bold]Metrics:[/bold]")
+                console.print(f"  Duration: {result.duration_ms}ms")
+                console.print(f"  Attempts: {result.synthesis_attempts}")
+                if result.cost_estimate:
+                    console.print(f"  Est. cost: ${result.cost_estimate.estimated_cost_usd:.4f}")
+
+    except Exception as e:
+        if output_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@app.command()
+def doctor() -> None:
+    """Check provider availability and configuration."""
+    console.print("[bold blue]Council Doctor[/bold blue] Checking providers...\n")
+
+    from llm_council.providers.registry import get_registry
+
+    # Get registered providers
+    registry = get_registry()
+    provider_names = registry.list_providers()
+
+    if not provider_names:
+        console.print("[yellow]No providers registered.[/yellow]")
+        console.print("Install provider packages: pip install llm-council[all]")
+        return
+
+    table = Table(title="Provider Status")
+    table.add_column("Provider", style="cyan")
+    table.add_column("Status")
+    table.add_column("Message")
+    table.add_column("Latency")
+
+    for name in provider_names:
+        try:
+            provider = registry.get_provider(name)
+            result = asyncio.run(provider.doctor())
+
+            status = "[green]OK[/green]" if result.ok else "[red]FAIL[/red]"
+            message = result.message or "-"
+            latency = f"{result.latency_ms:.0f}ms" if result.latency_ms else "-"
+
+            table.add_row(name, status, message, latency)
+        except Exception as e:
+            table.add_row(name, "[red]ERROR[/red]", str(e), "-")
+
+    console.print(table)
+
+
+@app.command()
+def config(
+    show: bool = typer.Option(False, "--show", help="Show current configuration"),
+    init: bool = typer.Option(False, "--init", help="Initialize default configuration"),
+) -> None:
+    """Manage LLM Council configuration."""
+    from pathlib import Path
+
+    config_dir = Path.home() / ".config" / "llm-council"
+    config_file = config_dir / "config.yaml"
+
+    if show:
+        if config_file.exists():
+            console.print(config_file.read_text())
+        else:
+            console.print("[yellow]No configuration file found.[/yellow]")
+            console.print(f"Run 'council config --init' to create one at {config_file}")
+        return
+
+    if init:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        default_config = """\
+# LLM Council Configuration
+
+providers:
+  - name: openrouter
+    # api_key: ${OPENROUTER_API_KEY}
+    default_model: anthropic/claude-3.5-sonnet
+
+defaults:
+  timeout: 120
+  max_retries: 3
+  summary_tier: actions
+"""
+        config_file.write_text(default_config)
+        console.print(f"[green]Created configuration at {config_file}[/green]")
+        return
+
+    console.print("Usage: council config [--show | --init]")
+
+
+@app.command()
+def version() -> None:
+    """Show version information."""
+    from llm_council import __version__
+
+    console.print(f"LLM Council v{__version__}")
+
+
+if __name__ == "__main__":
+    app()

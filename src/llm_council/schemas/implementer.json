@@ -1,0 +1,229 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ImplementerOutput",
+  "description": "Output schema for the Implementer subagent that generates code and implementation",
+  "type": "object",
+  "required": ["implementation_title", "summary", "files", "testing_notes", "reasoning"],
+  "properties": {
+    "implementation_title": {
+      "type": "string",
+      "minLength": 5,
+      "description": "Brief title for the implementation"
+    },
+    "implementation_type": {
+      "type": "string",
+      "enum": ["feature", "bug_fix", "refactor", "migration", "integration", "utility"],
+      "description": "Category of implementation"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 30,
+      "description": "Overview of what was implemented"
+    },
+    "requirements_addressed": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Requirements this implementation fulfills"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "action", "description"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path relative to project root"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["create", "modify", "delete", "rename"],
+            "description": "What action to take on this file"
+          },
+          "description": {
+            "type": "string",
+            "description": "What changes are made to this file"
+          },
+          "language": {
+            "type": "string",
+            "description": "Programming language of the file"
+          },
+          "code": {
+            "type": "string",
+            "description": "Full file contents for create, or diff for modify"
+          },
+          "diff": {
+            "type": "object",
+            "properties": {
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "old_start": {"type": "integer"},
+                    "old_lines": {"type": "integer"},
+                    "new_start": {"type": "integer"},
+                    "new_lines": {"type": "integer"},
+                    "content": {"type": "string"}
+                  }
+                }
+              }
+            },
+            "description": "Diff hunks for modify action"
+          },
+          "exports": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Functions/classes/types exported from this file"
+          }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "add": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "version": {"type": "string"},
+              "dev": {"type": "boolean"}
+            }
+          },
+          "description": "Dependencies to add"
+        },
+        "remove": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Dependencies to remove"
+        }
+      }
+    },
+    "environment_variables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "required": {"type": "boolean"},
+          "example": {"type": "string"}
+        }
+      },
+      "description": "New environment variables needed"
+    },
+    "database_changes": {
+      "type": "object",
+      "properties": {
+        "migrations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "sql": {"type": "string"},
+              "rollback_sql": {"type": "string"}
+            }
+          }
+        },
+        "seeds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "data": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "api_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "endpoint": {"type": "string"},
+          "method": {"type": "string"},
+          "change_type": {
+            "type": "string",
+            "enum": ["add", "modify", "deprecate", "remove"]
+          },
+          "breaking": {"type": "boolean"},
+          "description": {"type": "string"}
+        }
+      }
+    },
+    "breaking_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {"type": "string"},
+          "migration_path": {"type": "string"}
+        }
+      }
+    },
+    "testing_notes": {
+      "type": "object",
+      "required": ["manual_tests"],
+      "properties": {
+        "manual_tests": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"},
+          "description": "Manual testing steps"
+        },
+        "automated_tests": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Automated tests added or modified"
+        },
+        "test_data_needed": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Test data or fixtures required"
+        }
+      }
+    },
+    "deployment_notes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Special deployment considerations"
+    },
+    "performance_considerations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Performance implications of this change"
+    },
+    "security_considerations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Security implications of this change"
+    },
+    "follow_up_tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "task": {"type": "string"},
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "subagent": {"type": "string"}
+        }
+      },
+      "description": "Additional work identified during implementation"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 50,
+      "description": "Explanation of implementation decisions"
+    }
+  },
+  "additionalProperties": false
+}

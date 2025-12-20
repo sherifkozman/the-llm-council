@@ -1,0 +1,247 @@
+# Assessor Subagent Configuration
+# Makes build/no-build, go/no-go, and prioritization decisions
+
+name: assessor
+description: >
+  Makes structured decisions on whether to proceed with proposals,
+  features, or changes. Uses weighted criteria evaluation and
+  risk analysis for high-confidence decision-making.
+
+model_pack: deep_reasoner
+calls: 5  # Claude + Codex + Gemini drafts, critique, synthesis (high-stakes)
+
+schema: assessor
+
+prompts:
+  system: |
+    You are a decision-making expert. Your job is to evaluate proposals
+    and make clear, defensible decisions using structured criteria.
+
+    Your assessments should:
+    1. Define clear evaluation criteria with weights
+    2. Score each criterion objectively with rationale
+    3. Identify all risks with impact and likelihood
+    4. Consider alternatives before recommending
+    5. Provide actionable next steps
+
+    Be decisive but thorough. Avoid wishy-washy recommendations.
+    Every decision should have clear criteria and reasoning.
+
+  examples:
+    - task: "Should we build our own authentication system or use Auth0?"
+      expected:
+        decision: "proceed_with_conditions"
+        confidence: 75
+        decision_context:
+          question: "Build vs buy decision for authentication"
+          decision_type: "build_or_buy"
+          stakeholders: ["Engineering", "Security", "Product"]
+        criteria_evaluation:
+          - criterion: "Security"
+            weight: 0.30
+            score: 8
+            rationale: "Auth0 has SOC2, dedicated security team, handles compliance"
+          - criterion: "Cost"
+            weight: 0.25
+            score: 6
+            rationale: "Auth0 costs $0.05/MAU, building costs engineering time"
+          - criterion: "Customization"
+            weight: 0.20
+            score: 5
+            rationale: "Auth0 has limits on custom flows, building allows full control"
+          - criterion: "Time to Market"
+            weight: 0.15
+            score: 9
+            rationale: "Auth0 can be integrated in days vs weeks for custom build"
+          - criterion: "Maintenance"
+            weight: 0.10
+            score: 8
+            rationale: "Auth0 handles updates, security patches automatically"
+        weighted_score: 7.15
+        pros:
+          - "Proven security track record"
+          - "Fast implementation"
+          - "Automatic security updates"
+          - "SOC2 and HIPAA compliance included"
+        cons:
+          - "Ongoing monthly cost at scale"
+          - "Vendor lock-in risk"
+          - "Limited customization for edge cases"
+        risks:
+          - risk: "Vendor lock-in makes future migration costly"
+            impact: "medium"
+            likelihood: "likely"
+            mitigation: "Abstract auth layer with interface pattern"
+          - risk: "Auth0 outage causes service disruption"
+            impact: "high"
+            likelihood: "unlikely"
+            mitigation: "Monitor Auth0 status, have fallback local auth for admins"
+        conditions:
+          - "Create abstraction layer to avoid tight coupling"
+          - "Negotiate enterprise contract with SLA guarantees"
+          - "Document migration path if needed later"
+        alternatives_considered:
+          - alternative: "Build custom auth from scratch"
+            reason_rejected: "6+ weeks of engineering, ongoing security burden"
+          - alternative: "Use Firebase Auth"
+            reason_rejected: "Less enterprise features, GCP lock-in"
+          - alternative: "Use Clerk"
+            reason_rejected: "Newer, less proven at enterprise scale"
+        resource_requirements:
+          effort_level: "small"
+          skills_needed: ["Backend integration", "OAuth knowledge"]
+          dependencies: ["Auth0 account setup", "Domain verification"]
+        recommendation: "Use Auth0 for authentication with an abstraction layer to preserve optionality. The security and time-to-market benefits outweigh the vendor lock-in risk."
+        next_steps:
+          - "Set up Auth0 tenant for development"
+          - "Design auth abstraction interface"
+          - "Implement OAuth integration"
+          - "Configure MFA policies"
+        reversibility: "reversible_with_effort"
+        reasoning: "The weighted analysis favors Auth0 (7.15/10) primarily due to security and speed advantages. Custom build would score higher on customization but the 6+ week timeline and ongoing security maintenance burden make it suboptimal for current stage. Auth0's proven track record and compliance certifications reduce risk significantly."
+
+    - task: "Should we add GraphQL to our REST API?"
+      expected:
+        decision: "defer"
+        confidence: 65
+        decision_context:
+          question: "Add GraphQL alongside REST API"
+          decision_type: "technical_choice"
+          stakeholders: ["Frontend", "Backend", "DevOps"]
+        criteria_evaluation:
+          - criterion: "Developer Experience"
+            weight: 0.30
+            score: 8
+            rationale: "GraphQL provides better typing and query flexibility for frontend"
+          - criterion: "Complexity"
+            weight: 0.25
+            score: 4
+            rationale: "Adds significant infrastructure: resolvers, schema, caching layer"
+          - criterion: "Performance"
+            weight: 0.20
+            score: 6
+            rationale: "Reduces over-fetching but adds N+1 query risks"
+          - criterion: "Team Readiness"
+            weight: 0.15
+            score: 3
+            rationale: "Team has no GraphQL experience, requires training"
+          - criterion: "Business Value"
+            weight: 0.10
+            score: 5
+            rationale: "Current REST API meets needs, GraphQL is nice-to-have"
+        weighted_score: 5.45
+        pros:
+          - "Better frontend developer experience"
+          - "Reduces over-fetching"
+          - "Strong typing with schema"
+        cons:
+          - "Significant learning curve"
+          - "Adds operational complexity"
+          - "Requires caching strategy rethink"
+          - "Current REST API is working fine"
+        risks:
+          - risk: "Team lacks GraphQL expertise"
+            impact: "high"
+            likelihood: "certain"
+            mitigation: "Training program before implementation"
+          - risk: "Performance issues from N+1 queries"
+            impact: "medium"
+            likelihood: "likely"
+            mitigation: "Use DataLoader pattern from start"
+        recommendation: "Defer GraphQL adoption. The team's lack of experience (certain high-impact risk) combined with working REST API suggests this is premature optimization. Revisit when team has capacity for training."
+        next_steps:
+          - "Document current REST API pain points"
+          - "Schedule GraphQL training when capacity allows"
+          - "Re-evaluate in 6 months"
+        reversibility: "easily_reversible"
+        reasoning: "While GraphQL scores well on developer experience, the low team readiness score (3/10) and moderate overall score (5.45/10) indicate this isn't the right time. The current REST API is functional and the risk of introducing complexity without expertise outweighs the benefits."
+
+    - task: "Should we migrate from PostgreSQL to MongoDB for our user service?"
+      expected:
+        decision: "reject"
+        confidence: 85
+        decision_context:
+          question: "Database migration from PostgreSQL to MongoDB"
+          decision_type: "technical_choice"
+          stakeholders: ["Backend", "Data", "DevOps"]
+        criteria_evaluation:
+          - criterion: "Data Model Fit"
+            weight: 0.35
+            score: 3
+            rationale: "User data is highly relational with joins, not a document model fit"
+          - criterion: "Migration Risk"
+            weight: 0.25
+            score: 2
+            rationale: "High risk of data loss, requires rewrite of all queries"
+          - criterion: "Team Expertise"
+            weight: 0.20
+            score: 7
+            rationale: "Team has some MongoDB experience"
+          - criterion: "Performance"
+            weight: 0.20
+            score: 4
+            rationale: "Postgres actually faster for relational queries"
+        weighted_score: 3.65
+        pros:
+          - "Flexible schema for future changes"
+          - "Team has some MongoDB familiarity"
+        cons:
+          - "User data is inherently relational"
+          - "Loses ACID transactions for user operations"
+          - "High migration risk"
+          - "No clear performance benefit"
+          - "Adds operational overhead of second database type"
+        risks:
+          - risk: "Data integrity issues from eventual consistency"
+            impact: "critical"
+            likelihood: "likely"
+            mitigation: "None - fundamental architecture mismatch"
+          - risk: "Migration causes data loss"
+            impact: "critical"
+            likelihood: "possible"
+            mitigation: "Extensive migration testing, but risk remains"
+        recommendation: "Reject migration to MongoDB for user service. The relational nature of user data (roles, permissions, relationships) is poorly suited to document model. PostgreSQL is the right tool for this use case."
+        alternatives_considered:
+          - alternative: "Use MongoDB for a different service"
+            reason_rejected: "Valid option - consider for event logs or analytics"
+          - alternative: "Optimize current PostgreSQL"
+            reason_rejected: "This IS the recommended path"
+        next_steps:
+          - "Identify actual pain points with current PostgreSQL setup"
+          - "Optimize queries and add indexes as needed"
+          - "Consider MongoDB only for new services with document-oriented data"
+        reversibility: "irreversible"
+        reasoning: "The low weighted score (3.65/10) reflects fundamental mismatch between relational user data and document database model. The migration proposal addresses no specific pain point and introduces critical risks around data integrity. This is a solution looking for a problem."
+
+classification_rules:
+  # Keywords that suggest assessment tasks
+  task_signals:
+    - should we
+    - build or buy
+    - go/no-go
+    - feasibility
+    - evaluate
+    - assess
+    - decide
+    - worth it
+    - tradeoff
+    - compare options
+    - prioritize
+
+  # Decision type signals
+  decision_type_signals:
+    build_or_buy:
+      - build vs
+      - buy vs
+      - make or buy
+      - vendor vs custom
+    go_no_go:
+      - should we proceed
+      - green light
+      - approve
+      - launch decision
+    technical_choice:
+      - which technology
+      - framework choice
+      - database choice
+      - architecture decision

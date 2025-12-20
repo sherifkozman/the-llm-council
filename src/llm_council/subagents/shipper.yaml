@@ -1,0 +1,243 @@
+# Shipper Subagent Configuration
+# Creates release notes, changelogs, and shipping checklists
+
+name: shipper
+description: >
+  Generates release notes, changelogs, and deployment checklists.
+  Uses fast generator models for efficient content creation.
+  Follows Keep a Changelog and Semantic Versioning conventions.
+
+model_pack: fast_generator
+calls: 3  # Claude + Codex + Gemini drafts, synthesis
+
+schema: shipper
+
+prompts:
+  system: |
+    You are a release management expert. Your job is to create clear,
+    comprehensive release documentation that helps users understand
+    what changed and how to upgrade.
+
+    Your release notes should:
+    1. Follow Keep a Changelog format (Added, Changed, Deprecated, Removed, Fixed, Security)
+    2. Use Semantic Versioning (MAJOR.MINOR.PATCH)
+    3. Highlight breaking changes prominently
+    4. Include migration guides for breaking changes
+    5. Provide actionable checklists for release process
+    6. Be written for the audience (developers, users, operators)
+
+    Style guidelines:
+    - Start each item with a verb (Add, Fix, Update, Remove)
+    - Be specific about what changed
+    - Link to PRs and issues where relevant
+    - Keep summaries concise but informative
+
+  examples:
+    - task: "Create release notes for v2.0.0 with OAuth support"
+      expected:
+        release_version: "v2.0.0"
+        release_type: "major"
+        release_date: "2024-03-15"
+        summary: "Version 2.0.0 introduces OAuth 2.0 authentication support, replacing the legacy API key system. This is a breaking change that requires migration of all API consumers to the new authentication flow."
+        highlights:
+          - "OAuth 2.0 authentication with support for authorization code and client credentials flows"
+          - "New token management dashboard for API consumers"
+          - "Improved rate limiting with per-client quotas"
+          - "Enhanced security with automatic token rotation"
+        changes:
+          added:
+            - description: "OAuth 2.0 authentication with authorization code flow"
+              pr_number: 456
+              contributor: "@oauth-team"
+            - description: "Client credentials grant for server-to-server auth"
+              pr_number: 457
+              contributor: "@oauth-team"
+            - description: "Token management dashboard at /settings/tokens"
+              pr_number: 460
+              contributor: "@frontend-team"
+            - description: "Per-client rate limit quotas"
+              pr_number: 462
+              contributor: "@platform-team"
+          changed:
+            - description: "Rate limit headers now include client-specific limits"
+              pr_number: 463
+              contributor: "@platform-team"
+          deprecated:
+            - description: "API key authentication (X-API-Key header)"
+              removal_version: "v3.0.0"
+              migration_path: "Switch to OAuth 2.0 client credentials flow"
+          removed:
+            - description: "Legacy session-based authentication"
+              replacement: "OAuth 2.0 authorization code flow"
+          fixed:
+            - description: "Token refresh race condition causing 401 errors"
+              issue_number: 234
+              pr_number: 458
+          security:
+            - description: "Fixed timing attack vulnerability in token validation"
+              severity: "medium"
+              cve_id: "CVE-2024-1234"
+        breaking_changes:
+          - description: "API authentication now requires OAuth 2.0 tokens instead of API keys"
+            affected_apis:
+              - "All authenticated endpoints"
+            migration_steps:
+              - "Register your application at /settings/oauth/applications"
+              - "Obtain client_id and client_secret"
+              - "Implement OAuth flow (see docs/oauth-migration.md)"
+              - "Replace X-API-Key header with Authorization: Bearer <token>"
+              - "Test with staging environment before production"
+            code_example:
+              before: "curl -H 'X-API-Key: your-api-key' https://api.example.com/data"
+              after: "curl -H 'Authorization: Bearer your-access-token' https://api.example.com/data"
+        upgrade_guide:
+          prerequisites:
+            - "Review breaking changes documentation"
+            - "Back up current API key configurations"
+            - "Ensure OAuth application is registered"
+          steps:
+            - "Update SDK to v2.0.0 or later"
+            - "Configure OAuth credentials in environment"
+            - "Test authentication flow in staging"
+            - "Deploy with feature flag for gradual rollout"
+            - "Monitor error rates and auth failures"
+          post_upgrade_verification:
+            - "Verify all API calls succeed with new tokens"
+            - "Check token refresh is working correctly"
+            - "Confirm rate limits are applied correctly"
+          rollback_procedure:
+            - "Revert to previous SDK version"
+            - "Re-enable API key authentication (supported until v3.0)"
+            - "Contact support if issues persist"
+        known_issues:
+          - description: "Token refresh may fail if system clock is more than 30s out of sync"
+            workaround: "Ensure NTP is configured on servers"
+            tracking_issue: 567
+        checklist:
+          pre_release:
+            - task: "All tests passing on main branch"
+              status: "done"
+              owner: "CI"
+            - task: "Security audit completed"
+              status: "done"
+              owner: "security-team"
+            - task: "Documentation updated"
+              status: "done"
+              owner: "docs-team"
+            - task: "Migration guide reviewed"
+              status: "done"
+              owner: "developer-relations"
+            - task: "Staging environment tested"
+              status: "done"
+              owner: "qa-team"
+          release:
+            - task: "Tag release in git"
+              status: "pending"
+              owner: "release-manager"
+            - task: "Publish to package registry"
+              status: "pending"
+              owner: "release-manager"
+            - task: "Deploy to production"
+              status: "pending"
+              owner: "ops-team"
+            - task: "Update status page"
+              status: "pending"
+              owner: "ops-team"
+          post_release:
+            - task: "Monitor error rates for 24h"
+              status: "pending"
+              owner: "ops-team"
+            - task: "Send announcement email"
+              status: "pending"
+              owner: "marketing"
+            - task: "Publish blog post"
+              status: "pending"
+              owner: "marketing"
+            - task: "Close release milestone"
+              status: "pending"
+              owner: "release-manager"
+        metrics_to_watch:
+          - metric: "Authentication error rate"
+            baseline: "0.1%"
+            alert_threshold: "1%"
+          - metric: "Token refresh success rate"
+            baseline: "99.9%"
+            alert_threshold: "99%"
+          - metric: "API response time p95"
+            baseline: "150ms"
+            alert_threshold: "300ms"
+        reasoning: "Major version bump is appropriate due to breaking authentication change. Deprecated API keys with clear migration path to ease transition. Comprehensive checklist ensures smooth release process."
+
+    - task: "Create changelog for v1.5.2 bug fix release"
+      expected:
+        release_version: "v1.5.2"
+        release_type: "patch"
+        release_date: "2024-03-10"
+        summary: "Bug fix release addressing pagination issues and improving error messages. No breaking changes."
+        highlights:
+          - "Fixed cursor pagination returning duplicate results"
+          - "Improved error messages for validation failures"
+        changes:
+          fixed:
+            - description: "Fixed cursor pagination returning duplicate results on page boundaries"
+              issue_number: 789
+              pr_number: 801
+            - description: "Fixed timezone handling in date range queries"
+              issue_number: 792
+              pr_number: 803
+            - description: "Improved validation error messages to include field path"
+              issue_number: 795
+              pr_number: 805
+        breaking_changes: []
+        upgrade_guide:
+          prerequisites: []
+          steps:
+            - "Update to v1.5.2 using your package manager"
+            - "No configuration changes required"
+          post_upgrade_verification:
+            - "Verify pagination works correctly"
+          rollback_procedure:
+            - "Downgrade to v1.5.1 if issues occur"
+        checklist:
+          pre_release:
+            - task: "All tests passing"
+              status: "done"
+              owner: "CI"
+            - task: "Changelog updated"
+              status: "done"
+              owner: "developer"
+          release:
+            - task: "Tag and publish"
+              status: "pending"
+              owner: "release-manager"
+          post_release:
+            - task: "Verify fix in production"
+              status: "pending"
+              owner: "developer"
+        reasoning: "Patch release with no breaking changes. Simple upgrade path with minimal verification needed."
+
+classification_rules:
+  task_signals:
+    - release
+    - changelog
+    - release notes
+    - ship
+    - deploy
+    - publish
+    - version bump
+    - announcement
+
+  release_type_signals:
+    major:
+      - breaking change
+      - major release
+      - v2.0
+      - incompatible
+    minor:
+      - new feature
+      - minor release
+      - backwards compatible
+    patch:
+      - bug fix
+      - hotfix
+      - patch release

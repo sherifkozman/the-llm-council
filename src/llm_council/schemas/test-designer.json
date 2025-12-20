@@ -1,0 +1,285 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TestDesignerOutput",
+  "description": "Output schema for the Test Designer subagent that creates test suites and test strategies",
+  "type": "object",
+  "required": ["test_plan_title", "summary", "test_categories", "test_cases", "coverage_goals", "reasoning"],
+  "properties": {
+    "test_plan_title": {
+      "type": "string",
+      "minLength": 5,
+      "description": "Title for the test plan"
+    },
+    "test_type": {
+      "type": "string",
+      "enum": ["unit", "integration", "e2e", "performance", "security", "accessibility", "comprehensive"],
+      "description": "Primary type of testing"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 30,
+      "description": "Overview of the testing strategy"
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "description": "Component or module being tested"
+        },
+        "files": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Files under test"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Dependencies that need mocking"
+        }
+      }
+    },
+    "test_categories": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["category", "description", "priority"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Test category name"
+          },
+          "description": {
+            "type": "string",
+            "description": "What this category covers"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "test_count": {
+            "type": "integer",
+            "description": "Number of test cases in this category"
+          }
+        }
+      }
+    },
+    "test_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "category", "description", "expected_result"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^TC-[0-9]+$",
+            "description": "Test case ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "Test case name (should read like a sentence)"
+          },
+          "category": {
+            "type": "string",
+            "description": "Which category this test belongs to"
+          },
+          "description": {
+            "type": "string",
+            "description": "What the test verifies"
+          },
+          "test_type": {
+            "type": "string",
+            "enum": ["unit", "integration", "e2e", "performance", "security"]
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "preconditions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Setup required before test"
+          },
+          "test_steps": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Steps to execute the test"
+          },
+          "test_data": {
+            "type": "object",
+            "properties": {
+              "inputs": {"type": "object"},
+              "fixtures": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            }
+          },
+          "expected_result": {
+            "type": "string",
+            "description": "Expected outcome"
+          },
+          "edge_cases": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Edge cases this test covers"
+          },
+          "mocks_needed": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Dependencies to mock"
+          }
+        }
+      }
+    },
+    "edge_cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {"type": "string"},
+          "test_id": {"type": "string"},
+          "risk_if_untested": {"type": "string"}
+        }
+      },
+      "description": "Edge cases identified and their test coverage"
+    },
+    "negative_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {"type": "string"},
+          "expected_behavior": {"type": "string"},
+          "test_id": {"type": "string"}
+        }
+      },
+      "description": "Tests for error conditions and invalid inputs"
+    },
+    "boundary_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "boundary": {"type": "string"},
+          "test_values": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "test_id": {"type": "string"}
+        }
+      },
+      "description": "Boundary condition tests"
+    },
+    "coverage_goals": {
+      "type": "object",
+      "required": ["line_coverage", "branch_coverage"],
+      "properties": {
+        "line_coverage": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Target line coverage percentage"
+        },
+        "branch_coverage": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Target branch coverage percentage"
+        },
+        "critical_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Critical code paths that must have 100% coverage"
+        }
+      }
+    },
+    "test_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "description": {"type": "string"},
+          "test_count": {"type": "integer"}
+        }
+      },
+      "description": "Test files to create or modify"
+    },
+    "fixtures_needed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "data_structure": {"type": "string"}
+        }
+      },
+      "description": "Test fixtures and factories needed"
+    },
+    "mocking_strategy": {
+      "type": "object",
+      "properties": {
+        "approach": {
+          "type": "string",
+          "enum": ["manual", "jest_mock", "sinon", "msw", "nock", "testcontainers"]
+        },
+        "mocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "dependency": {"type": "string"},
+              "mock_type": {"type": "string"},
+              "description": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "test_environment": {
+      "type": "object",
+      "properties": {
+        "framework": {"type": "string"},
+        "runner": {"type": "string"},
+        "setup_requirements": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "environment_variables": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "automation_notes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Notes for test automation"
+    },
+    "manual_test_cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {"type": "string"},
+          "steps": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "reason_not_automated": {"type": "string"}
+        }
+      },
+      "description": "Tests that should remain manual"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 50,
+      "description": "Explanation of testing strategy and priorities"
+    }
+  },
+  "additionalProperties": false
+}

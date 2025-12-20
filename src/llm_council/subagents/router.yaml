@@ -1,0 +1,179 @@
+# Router Subagent Configuration
+# Classifies tasks and routes to appropriate handlers
+
+name: router
+description: >
+  Classifies incoming tasks and routes them to the appropriate subagent.
+  Uses fast models for quick classification decisions.
+
+model_pack: fast_generator
+calls: 3  # Claude + Codex + Gemini drafts, then synthesis
+
+schema: router
+
+prompts:
+  system: |
+    You are a task classification and routing expert. Your job is to analyze
+    incoming tasks and determine:
+    1. What type of task is this?
+    2. What is the risk level?
+    3. Which subagent should handle it?
+    4. What complexity level is appropriate?
+
+  examples:
+    - task: "Build a login page for our React app with OAuth integration"
+      expected:
+        task_type: implementation
+        risk_level: medium
+        complexity: normal
+        subagent_to_run: implementer
+        model_pack: code_specialist_normal
+        reasoning: "Standard UI implementation with auth integration"
+
+    - task: "Review PR #123 for security vulnerabilities"
+      expected:
+        task_type: review
+        risk_level: high
+        complexity: normal
+        subagent_to_run: reviewer
+        model_pack: harsh_critic
+        reasoning: "Security review requires careful critical analysis"
+
+    - task: "Plan the migration from monolith to microservices"
+      expected:
+        task_type: planning
+        risk_level: critical
+        complexity: complex
+        subagent_to_run: planner
+        model_pack: deep_reasoner
+        reasoning: "Major architectural change requires thorough planning"
+
+    - task: "Research best practices for rate limiting APIs"
+      expected:
+        task_type: research
+        risk_level: low
+        complexity: normal
+        subagent_to_run: researcher
+        model_pack: grounded
+        suggested_tools: ["context7", "web_search"]
+        reasoning: "External research task, needs grounding"
+
+    - task: "Design the database schema for multi-tenant SaaS"
+      expected:
+        task_type: architecture
+        risk_level: high
+        complexity: complex
+        subagent_to_run: architect
+        model_pack: deep_reasoner
+        reasoning: "Foundational architecture decision with long-term impact"
+
+    - task: "Write unit tests for the payment processing module"
+      expected:
+        task_type: test
+        risk_level: medium
+        complexity: normal
+        subagent_to_run: test-designer
+        model_pack: code_specialist_normal
+        reasoning: "Test generation for critical financial code"
+
+    - task: "Create release notes for v2.0"
+      expected:
+        task_type: shipping
+        risk_level: low
+        complexity: simple
+        subagent_to_run: shipper
+        model_pack: fast_generator
+        reasoning: "Straightforward documentation task"
+
+    - task: "Find all the ways an attacker could exploit our auth system"
+      expected:
+        task_type: red-team
+        risk_level: critical
+        complexity: complex
+        subagent_to_run: red-team
+        model_pack: harsh_critic
+        reasoning: "Security adversarial analysis requires thorough critique"
+
+classification_rules:
+  # Keywords that suggest specific task types
+  task_type_signals:
+    planning:
+      - plan
+      - roadmap
+      - strategy
+      - milestone
+      - sequence
+    research:
+      - research
+      - investigate
+      - find out
+      - compare
+      - analyze market
+    architecture:
+      - design
+      - schema
+      - architecture
+      - structure
+      - system design
+    implementation:
+      - build
+      - implement
+      - create
+      - add feature
+      - code
+    review:
+      - review
+      - check
+      - validate
+      - audit
+    test:
+      - test
+      - verify
+      - qa
+      - unit test
+    shipping:
+      - release
+      - deploy
+      - publish
+      - changelog
+    red-team:
+      - attack
+      - exploit
+      - vulnerability
+      - security test
+      - adversarial
+
+  # Risk level signals
+  risk_signals:
+    critical:
+      - production
+      - security
+      - financial
+      - pii
+      - auth
+    high:
+      - database
+      - migration
+      - refactor
+      - api change
+    medium:
+      - feature
+      - ui
+      - integration
+    low:
+      - docs
+      - test
+      - style
+      - format
+
+  # Complexity signals
+  complexity_signals:
+    complex:
+      - migration
+      - refactor
+      - redesign
+      - overhaul
+    simple:
+      - fix typo
+      - update text
+      - small change

@@ -1,0 +1,205 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReviewerOutput",
+  "description": "Output schema for the Reviewer subagent that performs code reviews and audits",
+  "type": "object",
+  "required": ["review_summary", "verdict", "issues", "recommendations", "reasoning"],
+  "properties": {
+    "review_summary": {
+      "type": "string",
+      "minLength": 30,
+      "description": "Brief summary of the review findings"
+    },
+    "review_type": {
+      "type": "string",
+      "enum": ["pull_request", "security_audit", "performance_review", "architecture_review", "code_quality", "accessibility"],
+      "description": "Type of review performed"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "approve_with_comments", "request_changes", "reject"],
+      "description": "Overall review decision"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Confidence in the review (0-100%)"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "files_reviewed": {
+          "type": "integer",
+          "description": "Number of files reviewed"
+        },
+        "lines_changed": {
+          "type": "integer",
+          "description": "Lines of code changed"
+        },
+        "components_affected": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Components or modules affected"
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "description", "location"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"],
+            "description": "Issue severity"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["security", "bug", "performance", "maintainability", "style", "documentation", "testing", "accessibility", "logic"],
+            "description": "Issue category"
+          },
+          "description": {
+            "type": "string",
+            "description": "Clear description of the issue"
+          },
+          "location": {
+            "type": "object",
+            "properties": {
+              "file": {"type": "string"},
+              "line_start": {"type": "integer"},
+              "line_end": {"type": "integer"}
+            },
+            "description": "Where the issue is located"
+          },
+          "code_snippet": {
+            "type": "string",
+            "description": "Relevant code snippet"
+          },
+          "suggested_fix": {
+            "type": "string",
+            "description": "How to fix the issue"
+          },
+          "references": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Documentation or resources related to this issue"
+          }
+        }
+      }
+    },
+    "security_findings": {
+      "type": "object",
+      "properties": {
+        "vulnerabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["injection", "xss", "csrf", "auth_bypass", "data_exposure", "insecure_config", "dependency", "other"]
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["critical", "high", "medium", "low"]
+              },
+              "description": {"type": "string"},
+              "cwe_id": {"type": "string"},
+              "remediation": {"type": "string"}
+            }
+          }
+        },
+        "security_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Security posture score (0-100)"
+        }
+      }
+    },
+    "performance_findings": {
+      "type": "object",
+      "properties": {
+        "concerns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "issue": {"type": "string"},
+              "impact": {"type": "string"},
+              "suggestion": {"type": "string"}
+            }
+          }
+        },
+        "complexity_analysis": {
+          "type": "object",
+          "properties": {
+            "time_complexity": {"type": "string"},
+            "space_complexity": {"type": "string"},
+            "concerns": {"type": "string"}
+          }
+        }
+      }
+    },
+    "test_coverage": {
+      "type": "object",
+      "properties": {
+        "adequate": {"type": "boolean"},
+        "missing_tests": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "positive_feedback": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Good practices and well-done aspects"
+    },
+    "recommendations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["priority", "recommendation"],
+        "properties": {
+          "priority": {
+            "type": "string",
+            "enum": ["must_fix", "should_fix", "consider", "optional"]
+          },
+          "recommendation": {"type": "string"},
+          "rationale": {"type": "string"}
+        }
+      }
+    },
+    "blocking_issues": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Issues that must be fixed before merge"
+    },
+    "follow_up_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": {"type": "string"},
+          "priority": {"type": "string"},
+          "can_be_separate_pr": {"type": "boolean"}
+        }
+      },
+      "description": "Items that can be addressed in follow-up PRs"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 50,
+      "description": "Explanation of the review process and key findings"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,314 @@
+# Architect Subagent Configuration
+# Designs systems, APIs, data models, and technical architecture
+
+name: architect
+description: >
+  Designs technical architecture including system components, data models,
+  APIs, and infrastructure. Uses deep reasoning for thorough analysis
+  of tradeoffs and architectural decisions.
+
+model_pack: deep_reasoner
+calls: 5  # Claude + Codex + Gemini drafts, critique, synthesis (high-stakes)
+
+schema: architect
+
+prompts:
+  system: |
+    You are a software architect expert. Your job is to design robust,
+    scalable, and maintainable technical architectures.
+
+    Your designs should:
+    1. Start with requirements (functional and non-functional)
+    2. Define clear component boundaries and interfaces
+    3. Include comprehensive data models with relationships
+    4. Document all design decisions with rationale
+    5. Consider security, scalability, and deployment
+    6. Include diagrams where helpful
+
+    Design for the stated requirements, not for hypothetical futures.
+    Every decision should have clear rationale and documented tradeoffs.
+
+  examples:
+    - task: "Design the database schema for a multi-tenant SaaS application"
+      expected:
+        architecture_title: "Multi-Tenant SaaS Database Schema"
+        architecture_type: "data"
+        overview: "A shared-database, tenant-discriminator architecture for multi-tenant SaaS. All tenant data lives in shared tables with tenant_id column for isolation. Optimized for cost efficiency and operational simplicity while maintaining data isolation through row-level security."
+        requirements:
+          functional:
+            - "Store user accounts per tenant"
+            - "Tenant-specific configuration and branding"
+            - "Usage tracking per tenant for billing"
+            - "Audit logging for compliance"
+          non_functional:
+            - "Data isolation between tenants"
+            - "Query performance < 100ms p95"
+            - "Support 1000+ tenants"
+            - "GDPR-compliant data handling"
+          constraints:
+            - "Single PostgreSQL database (cost constraint)"
+            - "Must support tenant deletion for GDPR"
+        components:
+          - name: "Tenant Context Middleware"
+            purpose: "Sets tenant context from JWT/session for all queries"
+            technology: "Application layer middleware"
+            interfaces:
+              - type: "rest"
+                description: "Extracts tenant_id from auth token"
+        data_model:
+          entities:
+            - name: "tenants"
+              description: "Root tenant entity"
+              fields:
+                - name: "id"
+                  type: "uuid"
+                  nullable: false
+                  description: "Primary key"
+                - name: "name"
+                  type: "varchar(255)"
+                  nullable: false
+                - name: "slug"
+                  type: "varchar(100)"
+                  nullable: false
+                  constraints: ["unique"]
+                - name: "plan"
+                  type: "varchar(50)"
+                  nullable: false
+                - name: "settings"
+                  type: "jsonb"
+                  nullable: true
+                - name: "created_at"
+                  type: "timestamp"
+                  nullable: false
+                - name: "deleted_at"
+                  type: "timestamp"
+                  nullable: true
+                  description: "Soft delete for GDPR"
+              primary_key: ["id"]
+              indexes:
+                - name: "idx_tenants_slug"
+                  columns: ["slug"]
+                  unique: true
+            - name: "users"
+              description: "User accounts per tenant"
+              fields:
+                - name: "id"
+                  type: "uuid"
+                  nullable: false
+                - name: "tenant_id"
+                  type: "uuid"
+                  nullable: false
+                  description: "Tenant discriminator"
+                - name: "email"
+                  type: "varchar(255)"
+                  nullable: false
+                - name: "role"
+                  type: "varchar(50)"
+                  nullable: false
+              primary_key: ["id"]
+              indexes:
+                - name: "idx_users_tenant_email"
+                  columns: ["tenant_id", "email"]
+                  unique: true
+                - name: "idx_users_tenant"
+                  columns: ["tenant_id"]
+                  unique: false
+            - name: "usage_events"
+              description: "Metered usage for billing"
+              fields:
+                - name: "id"
+                  type: "uuid"
+                  nullable: false
+                - name: "tenant_id"
+                  type: "uuid"
+                  nullable: false
+                - name: "event_type"
+                  type: "varchar(100)"
+                  nullable: false
+                - name: "quantity"
+                  type: "integer"
+                  nullable: false
+                - name: "timestamp"
+                  type: "timestamp"
+                  nullable: false
+              primary_key: ["id"]
+              indexes:
+                - name: "idx_usage_tenant_time"
+                  columns: ["tenant_id", "timestamp"]
+                  unique: false
+          relationships:
+            - from: "users"
+              to: "tenants"
+              type: "many_to_one"
+              description: "Users belong to exactly one tenant"
+            - from: "usage_events"
+              to: "tenants"
+              type: "many_to_one"
+              description: "Usage tracked per tenant"
+          storage:
+            primary_db: "PostgreSQL 15+ with RLS"
+            cache: "Redis for session/tenant config"
+        design_decisions:
+          - decision: "Shared database with tenant_id discriminator (not separate schemas)"
+            rationale: "Operational simplicity, lower cost, easier migrations"
+            alternatives:
+              - option: "Database per tenant"
+                reason_rejected: "Expensive, hard to manage at scale"
+              - option: "Schema per tenant"
+                reason_rejected: "Migration complexity, connection pooling issues"
+            tradeoffs:
+              - "Less physical isolation (mitigated by RLS)"
+              - "Noisy neighbor risk (mitigated by query analysis)"
+          - decision: "Row-Level Security (RLS) for tenant isolation"
+            rationale: "Database-enforced isolation prevents app-level bugs from leaking data"
+            alternatives:
+              - option: "Application-level filtering only"
+                reason_rejected: "Single bug can expose all tenant data"
+            tradeoffs:
+              - "Slight query overhead (~5%)"
+              - "Need to manage RLS policies"
+          - decision: "Soft delete for tenant data (GDPR)"
+            rationale: "Allows recovery window before permanent deletion"
+            alternatives:
+              - option: "Hard delete immediately"
+                reason_rejected: "No recovery possible, compliance risk"
+            tradeoffs:
+              - "Storage overhead for deleted data"
+              - "Need background job for permanent cleanup"
+        patterns:
+          - pattern: "Discriminator Column"
+            usage: "tenant_id on all tenant-scoped tables"
+          - pattern: "Row-Level Security"
+            usage: "PostgreSQL RLS policies enforce isolation"
+          - pattern: "Soft Delete"
+            usage: "deleted_at timestamp for GDPR compliance"
+        security_considerations:
+          - concern: "Cross-tenant data leakage"
+            mitigation: "RLS policies, mandatory tenant context, security testing"
+          - concern: "Tenant enumeration"
+            mitigation: "Use UUIDs not sequential IDs for tenants"
+          - concern: "Data at rest encryption"
+            mitigation: "PostgreSQL TDE or disk-level encryption"
+        scalability:
+          expected_load:
+            requests_per_second: 1000
+            concurrent_users: 10000
+            data_volume_gb: 100
+          scaling_approach: "Read replicas for queries, connection pooling via PgBouncer"
+          bottlenecks:
+            - "Write-heavy usage_events table (consider partitioning)"
+            - "Large tenant queries (add tenant-specific indexes)"
+        reasoning: "Shared-database multi-tenancy balances cost efficiency with security through RLS. The tenant_id discriminator pattern is industry-standard for SaaS. Design decisions prioritize operational simplicity while maintaining strong isolation guarantees."
+
+    - task: "Design an API for a file upload service"
+      expected:
+        architecture_title: "File Upload Service API Design"
+        architecture_type: "api"
+        overview: "RESTful API for file upload service with presigned URL pattern for direct-to-storage uploads. Supports chunked uploads for large files, virus scanning, and thumbnail generation for images."
+        requirements:
+          functional:
+            - "Upload files up to 5GB"
+            - "Generate thumbnails for images"
+            - "Virus scanning before file is accessible"
+            - "Organize files in folders/collections"
+          non_functional:
+            - "Upload latency < 100ms for metadata operations"
+            - "Support 100 concurrent uploads"
+            - "99.9% upload success rate"
+          constraints:
+            - "Use S3-compatible storage"
+            - "Max request body 10MB (use presigned URLs for larger)"
+        components:
+          - name: "Upload API"
+            purpose: "Handle upload requests and generate presigned URLs"
+            technology: "Node.js/Express"
+            interfaces:
+              - type: "rest"
+                protocol: "HTTPS"
+                description: "RESTful endpoints for file operations"
+            dependencies: ["S3", "PostgreSQL", "Redis"]
+            scaling_strategy: "horizontal"
+          - name: "Processing Worker"
+            purpose: "Virus scan, thumbnail generation, metadata extraction"
+            technology: "Node.js worker with Bull queue"
+            interfaces:
+              - type: "queue"
+                protocol: "Redis"
+                description: "Job queue for async processing"
+            scaling_strategy: "horizontal"
+        api_design:
+          style: "rest"
+          versioning: "url"
+          authentication: "Bearer JWT with scope validation"
+          endpoints:
+            - method: "POST"
+              path: "/v1/files/upload-url"
+              description: "Request presigned upload URL"
+              request_schema: "{ filename: string, contentType: string, size: number }"
+              response_schema: "{ uploadUrl: string, fileId: string, expiresAt: string }"
+            - method: "POST"
+              path: "/v1/files/:fileId/complete"
+              description: "Mark upload complete, trigger processing"
+              request_schema: "{ etag: string }"
+              response_schema: "{ file: FileObject, processingStatus: string }"
+            - method: "GET"
+              path: "/v1/files/:fileId"
+              description: "Get file metadata and download URL"
+              response_schema: "{ file: FileObject, downloadUrl: string }"
+            - method: "DELETE"
+              path: "/v1/files/:fileId"
+              description: "Delete file"
+              response_schema: "{ deleted: boolean }"
+            - method: "GET"
+              path: "/v1/files"
+              description: "List files with pagination and filtering"
+              response_schema: "{ files: FileObject[], nextCursor: string }"
+        design_decisions:
+          - decision: "Presigned URLs for direct-to-S3 upload"
+            rationale: "Avoids proxying large files through API, reduces latency and cost"
+            alternatives:
+              - option: "Proxy uploads through API"
+                reason_rejected: "High memory/bandwidth cost, latency"
+            tradeoffs:
+              - "Client must handle multipart upload logic"
+              - "CORS configuration required on S3"
+          - decision: "Async processing via job queue"
+            rationale: "Virus scan and thumbnail gen can take seconds, don't block upload"
+            alternatives:
+              - option: "Synchronous processing"
+                reason_rejected: "Blocks client, timeout risk for large files"
+            tradeoffs:
+              - "Client must poll for processing status"
+              - "Additional infrastructure (Redis queue)"
+        security_considerations:
+          - concern: "Malicious file uploads"
+            mitigation: "ClamAV scanning before file marked accessible"
+          - concern: "Unauthorized access"
+            mitigation: "Presigned URLs expire in 15 minutes, scoped to user"
+          - concern: "Path traversal in filenames"
+            mitigation: "Sanitize filenames, use UUIDs for storage keys"
+        reasoning: "Presigned URL pattern is industry standard for scalable file uploads. Async processing ensures responsive API while enabling thorough security scanning."
+
+classification_rules:
+  task_signals:
+    - design
+    - architecture
+    - schema
+    - data model
+    - system design
+    - component
+    - API design
+    - infrastructure
+    - structure
+
+  complexity_signals:
+    complex:
+      - distributed
+      - multi-tenant
+      - microservices
+      - real-time
+      - high availability
+    simple:
+      - single table
+      - simple CRUD
+      - basic API

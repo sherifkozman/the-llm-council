@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm-council"
+version = "0.1.0"
+description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Sherif Kozman" }
+]
+keywords = [
+    "llm",
+    "ai",
+    "agents",
+    "multi-model",
+    "council",
+    "adversarial",
+    "claude",
+    "openai",
+    "gemini"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "httpx>=0.25",
+    "typer>=0.9",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "jsonschema>=4.0",
+    "aiosqlite>=0.19",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+    "types-PyYAML>=6.0",
+    "types-jsonschema>=4.0",
+]
+anthropic = ["anthropic>=0.18"]
+openai = ["openai>=1.0"]
+google = ["google-generativeai>=0.3"]
+all = [
+    "llm-council[anthropic,openai,google]"
+]
+
+[project.scripts]
+council = "llm_council.cli.main:app"
+
+[project.entry-points."llm_council.providers"]
+openrouter = "llm_council.providers.openrouter:OpenRouterProvider"
+openai = "llm_council.providers.openai:OpenAIProvider"
+anthropic = "llm_council.providers.anthropic:AnthropicProvider"
+google = "llm_council.providers.google:GoogleProvider"
+codex-cli = "llm_council.providers.cli.codex:CodexCLIProvider"
+gemini-cli = "llm_council.providers.cli.gemini:GeminiCLIProvider"
+
+[project.urls]
+Homepage = "https://github.com/sherifkozman/the-llm-council"
+Documentation = "https://github.com/sherifkozman/the-llm-council#readme"
+Repository = "https://github.com/sherifkozman/the-llm-council"
+Issues = "https://github.com/sherifkozman/the-llm-council/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_council"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
