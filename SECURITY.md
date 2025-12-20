@@ -29,7 +29,7 @@ The LLM Council implements several security measures:
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT** open a public issue
-2. Email security concerns to the maintainers directly
+2. Email security concerns to **vibecode@sherifkozman.com**
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce

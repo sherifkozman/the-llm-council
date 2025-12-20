@@ -357,7 +357,7 @@ ruff check src/ && mypy src/llm_council
 
 ## Security
 
-For security concerns, please see our [Security Policy](SECURITY.md) or email security@example.com.
+For security concerns, please see our [Security Policy](SECURITY.md) or email vibecode@sherifkozman.com.
 
 **Key security features:**
 - CLI adapters use exec-style subprocess (no shell injection)
