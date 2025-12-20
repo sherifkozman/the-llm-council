@@ -31,7 +31,7 @@ class OpenAIProvider(ProviderAdapter):
         OPENAI_API_KEY: Required. Your OpenAI API key.
 
     Requires the 'openai' extra:
-        pip install llm-council[openai]
+        pip install the-llm-council[openai]
     """
 
     name: ClassVar[str] = "openai"
@@ -66,7 +66,7 @@ class OpenAIProvider(ProviderAdapter):
             except ImportError as e:
                 raise ImportError(
                     "The 'openai' package is required for the OpenAI provider. "
-                    "Install it with: pip install llm-council[openai]"
+                    "Install it with: pip install the-llm-council[openai]"
                 ) from e
 
             if not self._api_key:
@@ -190,7 +190,7 @@ class OpenAIProvider(ProviderAdapter):
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="openai package not installed. Run: pip install llm-council[openai]",
+                message="openai package not installed. Run: pip install the-llm-council[openai]",
                 details={"error": "missing_package"},
             )
 

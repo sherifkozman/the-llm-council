@@ -6,7 +6,7 @@ This directory contains runnable Python examples demonstrating the llm-council p
 
 1. **Install llm-council**:
    ```bash
-   pip install llm-council
+   pip install the-llm-council
    ```
 
 2. **Set up API key** (easiest with OpenRouter):

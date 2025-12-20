@@ -130,7 +130,7 @@ def doctor() -> None:
 
     if not provider_names:
         console.print("[yellow]No providers registered.[/yellow]")
-        console.print("Install provider packages: pip install llm-council[all]")
+        console.print("Install provider packages: pip install the-llm-council[all]")
         return
 
     table = Table(title="Provider Status")

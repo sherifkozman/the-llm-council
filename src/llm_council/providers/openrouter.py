@@ -107,7 +107,7 @@ class OpenRouterProvider(ProviderAdapter):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": os.environ.get(
-                "OPENROUTER_HTTP_REFERER", "https://github.com/sherifkozman/llm-council"
+                "OPENROUTER_HTTP_REFERER", "https://github.com/sherifkozman/the-llm-council"
             ),
             "X-Title": os.environ.get("OPENROUTER_APP_TITLE", "LLM Council"),
         }

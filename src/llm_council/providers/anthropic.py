@@ -31,7 +31,7 @@ class AnthropicProvider(ProviderAdapter):
         ANTHROPIC_API_KEY: Required. Your Anthropic API key.
 
     Requires the 'anthropic' extra:
-        pip install llm-council[anthropic]
+        pip install the-llm-council[anthropic]
     """
 
     name: ClassVar[str] = "anthropic"
@@ -66,7 +66,7 @@ class AnthropicProvider(ProviderAdapter):
             except ImportError as e:
                 raise ImportError(
                     "The 'anthropic' package is required for the Anthropic provider. "
-                    "Install it with: pip install llm-council[anthropic]"
+                    "Install it with: pip install the-llm-council[anthropic]"
                 ) from e
 
             if not self._api_key:
@@ -184,7 +184,7 @@ class AnthropicProvider(ProviderAdapter):
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="anthropic package not installed. Run: pip install llm-council[anthropic]",
+                message="anthropic package not installed. Run: pip install the-llm-council[anthropic]",
                 details={"error": "missing_package"},
             )
 

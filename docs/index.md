@@ -45,20 +45,20 @@ Built-in redaction pipeline prevents API keys and credentials from leaking into 
 Basic installation:
 
 ```bash
-pip install llm-council
+pip install the-llm-council
 ```
 
 With specific providers:
 
 ```bash
 # OpenRouter only (recommended)
-pip install llm-council
+pip install the-llm-council
 
 # Direct APIs
-pip install llm-council[anthropic,openai,google]
+pip install the-llm-council[anthropic,openai,google]
 
 # All providers
-pip install llm-council[all]
+pip install the-llm-council[all]
 ```
 
 ## Quick Start
@@ -223,6 +223,6 @@ llm_council/
 
 ## Support
 
-- **GitHub**: [sherifkozman/llm-council](https://github.com/sherifkozman/llm-council)
-- **Issues**: [Report bugs or request features](https://github.com/sherifkozman/llm-council/issues)
+- **GitHub**: [sherifkozman/the-llm-council](https://github.com/sherifkozman/the-llm-council)
+- **Issues**: [Report bugs or request features](https://github.com/sherifkozman/the-llm-council/issues)
 - **License**: MIT

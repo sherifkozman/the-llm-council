@@ -17,16 +17,16 @@ Install provider-specific dependencies:
 
 ```bash
 # For Anthropic (Claude)
-pip install llm-council[anthropic]
+pip install the-llm-council[anthropic]
 
 # For OpenAI (GPT)
-pip install llm-council[openai]
+pip install the-llm-council[openai]
 
 # For Google (Gemini)
-pip install llm-council[google]
+pip install the-llm-council[google]
 
 # For all providers
-pip install llm-council[all]
+pip install the-llm-council[all]
 ```
 
 ## Anthropic (Claude)
@@ -413,7 +413,7 @@ export GOOGLE_API_KEY="..."
 **Solution**: Install provider-specific dependencies:
 
 ```bash
-pip install llm-council[anthropic,openai,google]
+pip install the-llm-council[anthropic,openai,google]
 ```
 
 ### Issue: "Rate limit exceeded"

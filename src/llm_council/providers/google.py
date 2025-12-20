@@ -31,7 +31,7 @@ class GoogleProvider(ProviderAdapter):
         GOOGLE_API_KEY: Required. Your Google AI API key.
 
     Requires the 'google' extra:
-        pip install llm-council[google]
+        pip install the-llm-council[google]
     """
 
     name: ClassVar[str] = "google"
@@ -65,7 +65,7 @@ class GoogleProvider(ProviderAdapter):
         except ImportError as e:
             raise ImportError(
                 "The 'google-generativeai' package is required for the Google provider. "
-                "Install it with: pip install llm-council[google]"
+                "Install it with: pip install the-llm-council[google]"
             ) from e
 
         if not self._api_key:
@@ -178,7 +178,7 @@ class GoogleProvider(ProviderAdapter):
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="google-generativeai package not installed. Run: pip install llm-council[google]",
+                message="google-generativeai package not installed. Run: pip install the-llm-council[google]",
                 details={"error": "missing_package"},
             )
 
