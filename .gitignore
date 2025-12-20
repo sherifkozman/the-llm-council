@@ -57,6 +57,9 @@ htmlcov/
 *.sqlite
 council-artifacts/
 
+# Design assets (generated, not for repo)
+design/
+
 # Secrets (never commit)
 .env.local
 .env.*.local

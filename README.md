@@ -47,6 +47,10 @@ $ council run architect "Design a mass hallucination prevention system"
 [Council] Task completed in 45.2s | 3 judges | 2 debate rounds | Cost: $0.12
 ```
 
+<p align="center">
+  <img src="assets/council-hero.png" alt="The LLM Council - Multiple AI models debating as judges" width="800">
+</p>
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![OS: Cross-platform](https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/sherifkozman/the-llm-council)
