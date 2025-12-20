@@ -69,8 +69,8 @@ jobs:
 
   publish-to-testpypi:
     name: Publish to TestPyPI
-    # Publish to TestPyPI on pushes to main (for testing)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Publish to TestPyPI on pushes to main or manual trigger (for testing)
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     needs:
       - build
     runs-on: ubuntu-latest
