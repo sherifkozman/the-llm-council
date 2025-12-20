@@ -35,6 +35,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![OS: Cross-platform](https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/sherifkozman/the-llm-council)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
 
@@ -64,13 +65,20 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 
 ## Requirements
 
-- **Python**: 3.10 or higher
-- **OS**: macOS, Linux, Windows (WSL recommended)
-- **API Keys**: At least one of:
-  - `OPENROUTER_API_KEY` (recommended - single key for all models)
-  - `OPENAI_API_KEY`
-  - `ANTHROPIC_API_KEY`
-  - `GOOGLE_API_KEY` or `GEMINI_API_KEY`
+| Requirement | Details |
+|-------------|---------|
+| **Python** | 3.10, 3.11, or 3.12 |
+| **OS** | macOS, Linux, Windows (native or WSL) |
+| **API Key** | At least one provider key (see below) |
+
+### Supported API Keys
+
+| Provider | Environment Variable | Notes |
+|----------|---------------------|-------|
+| OpenRouter | `OPENROUTER_API_KEY` | **Recommended** - single key for all models |
+| OpenAI | `OPENAI_API_KEY` | Direct GPT access |
+| Anthropic | `ANTHROPIC_API_KEY` | Direct Claude access |
+| Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
 
 ## Installation
 
@@ -208,7 +216,9 @@ council doctor
 
 ## Writing a Provider
 
-Providers are pluggable via Python entry points:
+Providers are pluggable via Python entry points. See the full [Provider Development Guide](docs/providers/creating-providers.md) for detailed instructions.
+
+### Quick Example
 
 ```python
 from llm_council.providers.base import ProviderAdapter, GenerateRequest, GenerateResponse
@@ -230,6 +240,15 @@ Register via `pyproject.toml`:
 [project.entry-points."llm_council.providers"]
 myprovider = "my_package.providers:MyProvider"
 ```
+
+### Reference Implementations
+
+| Provider | Type | File |
+|----------|------|------|
+| OpenRouter | HTTP API | `src/llm_council/providers/openrouter.py` |
+| Anthropic | Native SDK | `src/llm_council/providers/anthropic.py` |
+| OpenAI | Native SDK | `src/llm_council/providers/openai.py` |
+| Codex CLI | Subprocess | `src/llm_council/providers/cli/codex.py` |
 
 ## Configuration
 
