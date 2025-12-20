@@ -307,6 +307,25 @@ class OpenRouterProvider(ProviderAdapter):
             )
 
 
+def create_openrouter_for_model(model: str) -> OpenRouterProvider:
+    """Create an OpenRouter provider instance configured for a specific model.
+
+    This factory function is used to create multiple provider instances
+    for multi-model council runs.
+
+    Args:
+        model: OpenRouter model ID (e.g., "anthropic/claude-3.5-sonnet").
+
+    Returns:
+        Configured OpenRouterProvider instance.
+
+    Example:
+        >>> provider = create_openrouter_for_model("openai/gpt-4o")
+        >>> # This provider will always use gpt-4o for requests
+    """
+    return OpenRouterProvider(default_model=model)
+
+
 # Register the provider
 def _register() -> None:
     """Register the OpenRouter provider with the global registry."""

@@ -68,7 +68,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Model Orchestration** | Run parallel drafts from Claude, OpenAI, Gemini, or any provider |
+| **Multi-Model Council** | Run Claude, GPT-4, and Gemini in parallel via single OpenRouter key |
 | **Adversarial Critique** | Built-in critique phase identifies weaknesses and blind spots |
 | **Schema Validation** | JSON schema validation with automatic retry for structured outputs |
 | **Provider Agnostic** | Swap between OpenRouter, direct APIs, or CLI-based providers |
@@ -126,6 +126,14 @@ export OPENROUTER_API_KEY="your-key"
 
 # Run a council task
 council run implementer "Build a login page with OAuth"
+
+# Multi-model council (Claude + GPT-4 + Gemini debating)
+council run architect "Design a caching layer" \
+  --models "anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
+
+# Or set via environment variable
+export COUNCIL_MODELS="anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
+council run implementer "Build a login page"
 
 # With health check and verbose output
 council run implementer "Build a login page" --health-check --verbose
@@ -266,6 +274,24 @@ myprovider = "my_package.providers:MyProvider"
 
 ## Configuration
 
+### Environment Variables
+
+```bash
+# Required: OpenRouter API key
+export OPENROUTER_API_KEY="your-key"
+
+# Multi-model council: comma-separated OpenRouter model IDs
+export COUNCIL_MODELS="anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
+
+# Optional: Model pack overrides for specific task types
+export COUNCIL_MODEL_FAST="anthropic/claude-3-haiku"      # Quick tasks
+export COUNCIL_MODEL_REASONING="anthropic/claude-3-opus"  # Deep analysis
+export COUNCIL_MODEL_CODE="openai/gpt-4o"                 # Code generation
+export COUNCIL_MODEL_CRITIC="anthropic/claude-3.5-sonnet" # Adversarial critique
+```
+
+### Config File
+
 ```yaml
 # ~/.config/llm-council/config.yaml
 providers:
@@ -288,6 +314,7 @@ council config                      # Show configuration
 
 # Options
 --providers, -p    Comma-separated provider list
+--models, -m       Comma-separated OpenRouter model IDs for multi-model council
 --timeout, -t      Timeout in seconds (default: 120)
 --max-retries      Max retry attempts (default: 3)
 --health-check     Run preflight health check

@@ -49,6 +49,7 @@ class Council:
             enable_artifacts=config.enable_artifact_store if config else True,
             enable_health_check=config.enable_health_check if config else False,
             enable_graceful_degradation=config.enable_graceful_degradation if config else True,
+            models=config.models if config else None,
         )
 
         self.config = config or CouncilConfig(providers=self._providers)

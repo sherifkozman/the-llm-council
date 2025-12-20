@@ -28,6 +28,7 @@ from typing import (
 from jsonschema import Draft7Validator
 from pydantic import BaseModel, ConfigDict, Field
 
+from llm_council.config.models import get_council_models, is_multi_model_enabled
 from llm_council.engine.degradation import DegradationAction, DegradationPolicy
 from llm_council.engine.health import HealthReport, preflight_check
 from llm_council.protocol.types import PhaseTiming, SummaryTier
@@ -83,6 +84,14 @@ class OrchestratorConfig(BaseModel):
     )
     enable_graceful_degradation: bool = Field(
         default=True, description="Use degradation policy for provider failure handling."
+    )
+    models: list[str] | None = Field(
+        default=None,
+        description=(
+            "List of OpenRouter model IDs for multi-model council. "
+            "If set, creates virtual providers for each model. "
+            "Example: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o', 'google/gemini-pro']"
+        ),
     )
 
 
@@ -775,16 +784,47 @@ class Orchestrator:
         return results
 
     def _initialize_providers(self) -> None:
-        """Instantiate provider adapters from the registry."""
+        """Instantiate provider adapters from the registry.
+
+        If multi-model council is enabled (via config.models or COUNCIL_MODELS env var),
+        and only 'openrouter' is in the provider list, this method creates virtual
+        providers for each model to enable parallel drafts from different LLMs.
+        """
+        from llm_council.providers.openrouter import create_openrouter_for_model
 
         self._providers = {}
         self._provider_init_errors = {}
 
-        for name in self._provider_names:
-            try:
-                self._providers[name] = self._registry.get_provider(name)
-            except Exception as exc:
-                self._provider_init_errors[name] = str(exc)
+        # Check for multi-model configuration
+        models = self._config.models
+        if models is None and is_multi_model_enabled():
+            models = get_council_models()
+
+        # If we have multiple models and only openrouter is configured,
+        # create virtual providers for each model
+        if (
+            models
+            and len(models) > 1
+            and self._provider_names == ["openrouter"]
+        ):
+            logger.info(
+                "Multi-model council enabled with %d models: %s",
+                len(models),
+                ", ".join(models),
+            )
+            for model in models:
+                # Use model name as provider name (e.g., "anthropic/claude-3.5-sonnet")
+                try:
+                    self._providers[model] = create_openrouter_for_model(model)
+                except Exception as exc:
+                    self._provider_init_errors[model] = str(exc)
+        else:
+            # Standard provider initialization
+            for name in self._provider_names:
+                try:
+                    self._providers[name] = self._registry.get_provider(name)
+                except Exception as exc:
+                    self._provider_init_errors[name] = str(exc)
 
         if self._provider_init_errors:
             logger.debug("Provider initialization errors: %s", self._provider_init_errors)
