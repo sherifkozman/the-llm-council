@@ -348,7 +348,7 @@ mypy src/llm_council
 
 ## Contributing
 
-Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+Contributions are welcome! See our [Roadmap](ROADMAP.md) for planned features and [Contributing Guide](CONTRIBUTING.md) for details.
 
 ### Quick Start
 
