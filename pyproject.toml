@@ -107,6 +107,18 @@ strict = true
 warn_return_any = true
 warn_unused_ignores = true
 
+# Ignore missing imports for optional provider packages
+[[tool.mypy.overrides]]
+module = [
+    "anthropic",
+    "anthropic.*",
+    "openai",
+    "openai.*",
+    "google",
+    "google.*",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
