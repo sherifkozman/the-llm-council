@@ -21,6 +21,8 @@ from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
+import contextlib
+
 from llm_council.providers.base import (
     DoctorResult,
     ErrorType,
@@ -125,16 +127,15 @@ class CodexCLIProvider(ProviderAdapter):
 
         # Safe: uses argument list, no shell; minimal environment
         proc = await asyncio.create_subprocess_exec(
-            cmd[0], *cmd[1:],
+            cmd[0],
+            *cmd[1:],
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._get_minimal_env(),
         )
 
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.communicate()
@@ -163,8 +164,7 @@ class CodexCLIProvider(ProviderAdapter):
                 )
             elif error_type == ErrorType.RATE_LIMIT:
                 raise RuntimeError(
-                    f"RATE LIMIT: Too many requests. Wait and retry.\n"
-                    f"Details: {stderr_text[:200]}"
+                    f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {stderr_text[:200]}"
                 )
             else:
                 raise RuntimeError(f"CLI failed ({error_type.value}): {stderr_text}")
@@ -190,9 +190,9 @@ class CodexCLIProvider(ProviderAdapter):
 
 def _register() -> None:
     from llm_council.providers.registry import get_registry
-    try:
+
+    with contextlib.suppress(ValueError):
         get_registry().register_provider("codex-cli", CodexCLIProvider)
-    except ValueError:
-        pass
+
 
 _register()

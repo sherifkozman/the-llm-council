@@ -29,11 +29,13 @@ class ErrorType(str, Enum):
 
 
 # Error types that should NOT be retried (permanent failures)
-NON_RETRYABLE_ERRORS = frozenset({
-    ErrorType.BILLING,
-    ErrorType.AUTH,
-    ErrorType.CLI_NOT_FOUND,
-})
+NON_RETRYABLE_ERRORS = frozenset(
+    {
+        ErrorType.BILLING,
+        ErrorType.AUTH,
+        ErrorType.CLI_NOT_FOUND,
+    }
+)
 
 # Patterns to detect specific error types from error messages
 _BILLING_PATTERNS = (
@@ -168,7 +170,9 @@ class ProviderCapabilities(BaseModel):
     )
 
 
-ProviderCapabilityName = Literal["streaming", "tool_use", "structured_output", "multimodal", "max_tokens"]
+ProviderCapabilityName = Literal[
+    "streaming", "tool_use", "structured_output", "multimodal", "max_tokens"
+]
 
 
 class Message(BaseModel):
@@ -223,9 +227,7 @@ class GenerateResponse(BaseModel):
     content: Any | None = Field(
         default=None, description="Structured content payload for non-text outputs."
     )
-    tool_calls: Any | None = Field(
-        default=None, description="Tool call payloads if applicable."
-    )
+    tool_calls: Any | None = Field(default=None, description="Tool call payloads if applicable.")
     usage: Mapping[str, int] | None = Field(
         default=None, description="Token usage information (prompt/completion/total)."
     )

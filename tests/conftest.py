@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, ClassVar, Optional, Union
 from collections.abc import AsyncIterator
-from unittest.mock import AsyncMock, MagicMock
+from typing import ClassVar
 
 import pytest
 
@@ -45,7 +44,7 @@ class MockProvider(ProviderAdapter):
 
     async def generate(
         self, request: GenerateRequest
-    ) -> Union[GenerateResponse, AsyncIterator[GenerateResponse]]:
+    ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate a mock response."""
         self._call_count += 1
         if self._should_fail:
@@ -92,7 +91,7 @@ class StreamingMockProvider(MockProvider):
 
     async def generate(
         self, request: GenerateRequest
-    ) -> Union[GenerateResponse, AsyncIterator[GenerateResponse]]:
+    ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate with optional streaming."""
         self._call_count += 1
         if self._should_fail:
@@ -115,7 +114,9 @@ class StreamingMockProvider(MockProvider):
             yield GenerateResponse(
                 text=chunk + " ",
                 content=chunk + " ",
-                usage={"prompt_tokens": 100, "completion_tokens": i + 1} if i == len(chunks) - 1 else None,
+                usage={"prompt_tokens": 100, "completion_tokens": i + 1}
+                if i == len(chunks) - 1
+                else None,
             )
 
 

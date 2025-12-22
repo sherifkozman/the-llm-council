@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from llm_council.engine.orchestrator import (
-    CouncilResult,
     CostEstimate,
+    CouncilResult,
     Orchestrator,
     OrchestratorConfig,
     ValidationResult,
 )
-from llm_council.providers.base import DoctorResult, GenerateResponse
 
 
 class TestOrchestratorConfig:

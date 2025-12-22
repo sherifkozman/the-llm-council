@@ -160,7 +160,7 @@ class ArtifactStore:
         try:
             resolved.relative_to(base_resolved)
         except ValueError:
-            raise ValueError(f"Path escapes artifact directory: {path}")
+            raise ValueError(f"Path escapes artifact directory: {path}") from None
 
     def _init_db(self) -> None:
         """Initialize SQLite ledger with schema."""
@@ -584,7 +584,9 @@ class ArtifactStore:
         # Apply filters if specified
         if filter_type == "errors_only":
             lines = content.split("\n")
-            error_lines = [l for l in lines if "error" in l.lower() or "exception" in l.lower()]
+            error_lines = [
+                line for line in lines if "error" in line.lower() or "exception" in line.lower()
+            ]
             content = "\n".join(error_lines) if error_lines else "[No errors found]"
         elif filter_type == "code_only":
             import re
@@ -653,7 +655,9 @@ class ArtifactStore:
                         (excess,),
                     )
                     for artifact_id, file_path in cursor.fetchall():
-                        cursor.execute("DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,))
+                        cursor.execute(
+                            "DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+                        )
                         files_to_delete.append(file_path)
                         removed += 1
 
@@ -669,6 +673,39 @@ class ArtifactStore:
                 pass
 
         return removed
+
+    def cleanup_stale_runs(self, age_hours: float = 1.0) -> int:
+        """Mark stale runs (still 'running' after age_hours) as 'timed_out'.
+
+        Cleans up orphaned runs that were never properly completed due to
+        crashes, timeouts, or other failures.
+
+        Args:
+            age_hours: Age threshold in hours (default: 1.0)
+
+        Returns:
+            Number of runs cleaned up
+        """
+        if not self.enabled:
+            return 0
+
+        cutoff = datetime.now(timezone.utc).timestamp() - (age_hours * 3600)
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE runs
+                SET status = 'timed_out', completed_at = ?
+                WHERE status = 'running' AND created_at < ?
+            """,
+                (datetime.now(timezone.utc).isoformat(), cutoff_iso),
+            )
+            cleaned = cursor.rowcount
+            conn.commit()
+
+        return cleaned
 
 
 # Module-level default store singleton

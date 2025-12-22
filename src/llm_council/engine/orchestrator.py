@@ -267,7 +267,7 @@ class Orchestrator:
 
             # Store drafts as artifacts if enabled
             if self._artifact_store and self._run_id:
-                for provider_name, draft_text in drafts.items():
+                for _provider_name, draft_text in drafts.items():
                     if draft_text:
                         try:
                             self._artifact_store.store_artifact(
@@ -522,7 +522,9 @@ class Orchestrator:
             if isinstance(result, GenerateResponse):
                 response = result
             else:
-                response = await asyncio.wait_for(_consume_stream(result), timeout=self._config.timeout)
+                response = await asyncio.wait_for(
+                    _consume_stream(result), timeout=self._config.timeout
+                )
 
             self._record_usage(provider_name, response.usage)
             return response
@@ -611,10 +613,7 @@ class Orchestrator:
         if cleaned.startswith("```"):
             # Find closing triple backticks
             end_fence = cleaned.rfind("```")
-            if end_fence > 3:
-                cleaned = cleaned[3:end_fence].strip()
-            else:
-                cleaned = cleaned.strip("`")
+            cleaned = cleaned[3:end_fence].strip() if end_fence > 3 else cleaned.strip("`")
             # Remove optional language identifier
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:].strip()
@@ -802,11 +801,7 @@ class Orchestrator:
 
         # If we have multiple models and only openrouter is configured,
         # create virtual providers for each model
-        if (
-            models
-            and len(models) > 1
-            and self._provider_names == ["openrouter"]
-        ):
+        if models and len(models) > 1 and self._provider_names == ["openrouter"]:
             logger.info(
                 "Multi-model council enabled with %d models: %s",
                 len(models),

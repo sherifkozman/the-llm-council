@@ -282,7 +282,7 @@ class DegradationPolicy:
             if current_retries < self._max_retries:
                 # Calculate exponential backoff delay
                 delay = min(
-                    self.BASE_RETRY_DELAY_MS * (2 ** current_retries),
+                    self.BASE_RETRY_DELAY_MS * (2**current_retries),
                     self.MAX_RETRY_DELAY_MS,
                 )
                 return DegradationDecision(

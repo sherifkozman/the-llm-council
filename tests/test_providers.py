@@ -180,6 +180,7 @@ class TestProviderRegistry:
         """Test registering same name with different class raises error."""
         # Register a different class with the same name
         from conftest import StreamingMockProvider
+
         with pytest.raises(ValueError, match="already registered"):
             mock_registry.register_provider("mock", StreamingMockProvider)
 

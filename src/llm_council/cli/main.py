@@ -49,7 +49,9 @@ def run(
     max_retries: int = typer.Option(3, "--max-retries", help="Max validation retries"),
     no_artifacts: bool = typer.Option(False, "--no-artifacts", help="Disable artifact storage"),
     health_check: bool = typer.Option(False, "--health-check", help="Run preflight health check"),
-    no_degradation: bool = typer.Option(False, "--no-degradation", help="Disable graceful degradation"),
+    no_degradation: bool = typer.Option(
+        False, "--no-degradation", help="Disable graceful degradation"
+    ),
     output_json: bool = typer.Option(False, "--json", help="Output as JSON"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -90,17 +92,21 @@ def run(
             print(json.dumps(result.model_dump(), indent=2, default=str))
         else:
             if result.success:
-                console.print(Panel(
-                    json.dumps(result.output, indent=2),
-                    title="[green]Council Result: SUCCESS[/green]",
-                    border_style="green",
-                ))
+                console.print(
+                    Panel(
+                        json.dumps(result.output, indent=2),
+                        title="[green]Council Result: SUCCESS[/green]",
+                        border_style="green",
+                    )
+                )
             else:
-                console.print(Panel(
-                    "\n".join(result.validation_errors or ["Unknown error"]),
-                    title="[red]Council Result: FAILED[/red]",
-                    border_style="red",
-                ))
+                console.print(
+                    Panel(
+                        "\n".join(result.validation_errors or ["Unknown error"]),
+                        title="[red]Council Result: FAILED[/red]",
+                        border_style="red",
+                    )
+                )
 
             if verbose:
                 console.print("\n[bold]Metrics:[/bold]")

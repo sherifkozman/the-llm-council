@@ -6,6 +6,7 @@ Direct integration with the Google Generative AI API for Gemini models.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import AsyncIterator
@@ -208,10 +209,8 @@ def _register() -> None:
     from llm_council.providers.registry import get_registry
 
     registry = get_registry()
-    try:
+    with contextlib.suppress(ValueError):
         registry.register_provider("google", GoogleProvider)
-    except ValueError:
-        pass
 
 
 _register()

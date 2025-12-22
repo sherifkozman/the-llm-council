@@ -85,7 +85,9 @@ class TieredSummary:
             rationale = f"\nRationale:\n{self.rationale}"
             return findings + actions + rationale
         else:  # AUDIT
-            ref_note = f"\n[Full details: artifact {self.artifact_ref}]" if self.artifact_ref else ""
+            ref_note = (
+                f"\n[Full details: artifact {self.artifact_ref}]" if self.artifact_ref else ""
+            )
             return self.get_tier(SummaryTier.RATIONALE) + ref_note
 
     def to_dict(self) -> dict[str, Any]:
@@ -224,14 +226,16 @@ class Summarizer:
                     return gist
 
         # Fall back to first meaningful line
-        lines = [l.strip() for l in content.split("\n") if l.strip() and len(l.strip()) > 10]
+        lines = [
+            line.strip() for line in content.split("\n") if line.strip() and len(line.strip()) > 10
+        ]
         if lines:
             first_line = lines[0]
             if len(first_line) <= char_limit:
                 return first_line
-            return first_line[:char_limit - 3] + "..."
+            return first_line[: char_limit - 3] + "..."
 
-        return content[:char_limit - 3] + "..."
+        return content[: char_limit - 3] + "..."
 
     def _extract_findings(self, content: str, char_limit: int) -> str:
         """Extract key findings from content."""

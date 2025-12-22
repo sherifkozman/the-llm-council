@@ -199,6 +199,7 @@ class OpenRouterProvider(ProviderAdapter):
                     break
                 try:
                     import json
+
                     data = json.loads(data_str)
                     yield self._parse_stream_chunk(data)
                 except Exception:
