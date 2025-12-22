@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "llm-council",
-      "source": ".",
+      "source": "./",
       "description": "Multi-LLM Council for adversarial debate, cross-validation, and structured decision-making"
     }
   ]

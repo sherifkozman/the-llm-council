@@ -8,9 +8,9 @@
   "repository": "https://github.com/sherifkozman/the-llm-council",
   "license": "MIT",
   "skills": [
-    "skills/council"
+    "./skills/council"
   ],
   "commands": [
-    "commands/council.md"
+    "./commands/council.md"
   ]
 }
