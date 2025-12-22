@@ -120,6 +120,38 @@ pip install the-llm-council[all]
 pip install the-llm-council[dev]
 ```
 
+## Agent Skills (Claude Code, OpenAI Codex, Cursor, etc.)
+
+The LLM Council is available as an **Agent Skill** following the open [Agent Skills](https://agentskills.io) standard. This works across Claude Code, OpenAI Codex, Cursor, VS Code, and other skill-compatible agents.
+
+### Claude Code
+
+```bash
+# Direct installation from GitHub
+/plugin install sherifkozman/the-llm-council
+
+# Or add as marketplace and install
+/plugin marketplace add sherifkozman/the-llm-council
+/plugin install llm-council@the-llm-council
+```
+
+Once installed, the `council` skill is auto-invoked when relevant, or use the `/council` command:
+
+```
+/council implementer "Build a login page with OAuth"
+```
+
+### OpenAI Codex
+
+```bash
+# Copy skills directory to Codex skills location
+cp -r skills/council ~/.codex/skills/
+```
+
+### Other Agents (Cursor, VS Code, GitHub, etc.)
+
+Copy the `skills/council/` directory to your agent's skills folder. The skill follows the open Agent Skills spec and works with any compatible agent.
+
 ## Quick Start
 
 ### CLI Usage

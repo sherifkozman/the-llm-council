@@ -1,0 +1,16 @@
+{
+  "name": "llm-council",
+  "version": "0.2.0",
+  "description": "Multi-LLM Council for adversarial debate, cross-validation, and structured decision-making",
+  "author": {
+    "name": "Sherif Kozman"
+  },
+  "repository": "https://github.com/sherifkozman/the-llm-council",
+  "license": "MIT",
+  "skills": [
+    "skills/council"
+  ],
+  "commands": [
+    "commands/council.md"
+  ]
+}
