@@ -1,11 +1,13 @@
 {
   "name": "the-llm-council",
-  "description": "Multi-LLM Council plugins for adversarial debate, cross-validation, and structured decision-making",
+  "owner": {
+    "name": "Sherif Kozman"
+  },
   "plugins": [
     {
       "name": "llm-council",
-      "path": ".",
-      "description": "Run multi-LLM council for production-grade implementation, code review, architecture, and security analysis"
+      "source": ".",
+      "description": "Multi-LLM Council for adversarial debate, cross-validation, and structured decision-making"
     }
   ]
 }
