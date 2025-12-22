@@ -189,9 +189,7 @@ class TestArtifactStore:
 
         # Verify status changed
         with sqlite3.connect(store.db_path) as conn:
-            cursor = conn.execute(
-                "SELECT status FROM runs WHERE run_id = ?", (run.run_id,)
-            )
+            cursor = conn.execute("SELECT status FROM runs WHERE run_id = ?", (run.run_id,))
             status = cursor.fetchone()[0]
         assert status == "timed_out"
 
@@ -224,9 +222,7 @@ class TestArtifactStore:
 
         # Verify status unchanged
         with sqlite3.connect(store.db_path) as conn:
-            cursor = conn.execute(
-                "SELECT status FROM runs WHERE run_id = ?", (run.run_id,)
-            )
+            cursor = conn.execute("SELECT status FROM runs WHERE run_id = ?", (run.run_id,))
             status = cursor.fetchone()[0]
         assert status == "completed"
 
@@ -246,10 +242,9 @@ class TestArtifactStore:
 
         # Verify status unchanged
         import sqlite3
+
         with sqlite3.connect(store.db_path) as conn:
-            cursor = conn.execute(
-                "SELECT status FROM runs WHERE run_id = ?", (run.run_id,)
-            )
+            cursor = conn.execute("SELECT status FROM runs WHERE run_id = ?", (run.run_id,))
             status = cursor.fetchone()[0]
         assert status == "running"
 

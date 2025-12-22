@@ -119,16 +119,15 @@ class GeminiCLIProvider(ProviderAdapter):
 
         # Use minimal environment to reduce secret exposure
         proc = await asyncio.create_subprocess_exec(
-            cmd[0], *cmd[1:],
+            cmd[0],
+            *cmd[1:],
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._get_minimal_env(),
         )
 
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.communicate()
@@ -159,8 +158,7 @@ class GeminiCLIProvider(ProviderAdapter):
                 )
             elif error_type == ErrorType.RATE_LIMIT:
                 raise RuntimeError(
-                    f"RATE LIMIT: Too many requests. Wait and retry.\n"
-                    f"Details: {stderr_text[:200]}"
+                    f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {stderr_text[:200]}"
                 )
             else:
                 raise RuntimeError(f"CLI failed ({error_type.value}): {stderr_text}")
@@ -188,7 +186,9 @@ class GeminiCLIProvider(ProviderAdapter):
 
 def _register() -> None:
     from llm_council.providers.registry import get_registry
+
     with contextlib.suppress(ValueError):
         get_registry().register_provider("gemini-cli", GeminiCLIProvider)
+
 
 _register()

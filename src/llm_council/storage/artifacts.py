@@ -584,7 +584,9 @@ class ArtifactStore:
         # Apply filters if specified
         if filter_type == "errors_only":
             lines = content.split("\n")
-            error_lines = [line for line in lines if "error" in line.lower() or "exception" in line.lower()]
+            error_lines = [
+                line for line in lines if "error" in line.lower() or "exception" in line.lower()
+            ]
             content = "\n".join(error_lines) if error_lines else "[No errors found]"
         elif filter_type == "code_only":
             import re
@@ -653,7 +655,9 @@ class ArtifactStore:
                         (excess,),
                     )
                     for artifact_id, file_path in cursor.fetchall():
-                        cursor.execute("DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,))
+                        cursor.execute(
+                            "DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+                        )
                         files_to_delete.append(file_path)
                         removed += 1
 

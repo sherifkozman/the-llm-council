@@ -206,10 +206,7 @@ class HealthChecker:
         """
         start = time.monotonic()
 
-        tasks = [
-            self.check_provider(name, adapter)
-            for name, adapter in providers.items()
-        ]
+        tasks = [self.check_provider(name, adapter) for name, adapter in providers.items()]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -283,9 +280,7 @@ async def preflight_check(
     if skip_on_failure:
         usable_names = set(report.get_usable_providers())
         usable_providers = {
-            name: adapter
-            for name, adapter in providers.items()
-            if name in usable_names
+            name: adapter for name, adapter in providers.items() if name in usable_names
         }
     else:
         usable_providers = dict(providers)

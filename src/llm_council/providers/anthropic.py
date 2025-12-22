@@ -139,11 +139,13 @@ class AnthropicProvider(ProviderAdapter):
             elif hasattr(block, "type") and block.type == "tool_use":
                 if tool_calls is None:
                     tool_calls = []
-                tool_calls.append({
-                    "id": block.id,
-                    "type": "function",
-                    "function": {"name": block.name, "arguments": block.input},
-                })
+                tool_calls.append(
+                    {
+                        "id": block.id,
+                        "type": "function",
+                        "function": {"name": block.name, "arguments": block.input},
+                    }
+                )
 
         usage = None
         if hasattr(response, "usage"):

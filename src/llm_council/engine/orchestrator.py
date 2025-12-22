@@ -522,7 +522,9 @@ class Orchestrator:
             if isinstance(result, GenerateResponse):
                 response = result
             else:
-                response = await asyncio.wait_for(_consume_stream(result), timeout=self._config.timeout)
+                response = await asyncio.wait_for(
+                    _consume_stream(result), timeout=self._config.timeout
+                )
 
             self._record_usage(provider_name, response.usage)
             return response
@@ -799,11 +801,7 @@ class Orchestrator:
 
         # If we have multiple models and only openrouter is configured,
         # create virtual providers for each model
-        if (
-            models
-            and len(models) > 1
-            and self._provider_names == ["openrouter"]
-        ):
+        if models and len(models) > 1 and self._provider_names == ["openrouter"]:
             logger.info(
                 "Multi-model council enabled with %d models: %s",
                 len(models),

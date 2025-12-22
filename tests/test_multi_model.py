@@ -206,7 +206,10 @@ class TestOrchestratorMultiModel:
         orchestrator = Orchestrator(providers=["anthropic"], config=config)
 
         # Should not create virtual providers for non-openrouter
-        assert "anthropic" in orchestrator._providers or "anthropic" in orchestrator._provider_init_errors
+        assert (
+            "anthropic" in orchestrator._providers
+            or "anthropic" in orchestrator._provider_init_errors
+        )
 
 
 class TestCouncilMultiModel:
@@ -226,13 +229,14 @@ class TestCouncilMultiModel:
         from llm_council import Council
         from llm_council.protocol.types import CouncilConfig
 
-        config = CouncilConfig(
-            models=["anthropic/claude-3.5-sonnet", "openai/gpt-4o"]
-        )
+        config = CouncilConfig(models=["anthropic/claude-3.5-sonnet", "openai/gpt-4o"])
         council = Council(config=config)
 
         # Verify the orchestrator was configured with models
-        assert council._orchestrator._config.models == ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"]
+        assert council._orchestrator._config.models == [
+            "anthropic/claude-3.5-sonnet",
+            "openai/gpt-4o",
+        ]
 
 
 class TestDefaultCouncilModels:

@@ -36,9 +36,7 @@ def _ensure_path_containment(path: Path, base_dir: Path, resource_type: str) -> 
     try:
         resolved.relative_to(base_resolved)
     except ValueError:
-        raise ValueError(
-            f"{resource_type} path escapes allowed directory: {path}"
-        )
+        raise ValueError(f"{resource_type} path escapes allowed directory: {path}")
 
 
 def load_subagent(name: str) -> dict[str, Any]:

@@ -114,7 +114,9 @@ class StreamingMockProvider(MockProvider):
             yield GenerateResponse(
                 text=chunk + " ",
                 content=chunk + " ",
-                usage={"prompt_tokens": 100, "completion_tokens": i + 1} if i == len(chunks) - 1 else None,
+                usage={"prompt_tokens": 100, "completion_tokens": i + 1}
+                if i == len(chunks) - 1
+                else None,
             )
 
 
