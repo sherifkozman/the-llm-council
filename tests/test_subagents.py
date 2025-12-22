@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from llm_council.subagents import load_subagent, list_subagents
-from llm_council.schemas import load_schema, list_schemas
+from llm_council.schemas import list_schemas, load_schema
+from llm_council.subagents import list_subagents, load_subagent
 
 
 class TestSubagentLoading:

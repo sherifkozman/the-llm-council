@@ -1,19 +1,18 @@
 """Tests for engine health checks and degradation."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from llm_council.engine import (
-    HealthChecker,
-    HealthStatus,
-    HealthReport,
-    ProviderHealth,
-    preflight_check,
     DegradationAction,
     DegradationPolicy,
+    HealthChecker,
+    HealthReport,
+    HealthStatus,
+    ProviderHealth,
     create_default_policy,
+    preflight_check,
 )
 from llm_council.providers.base import DoctorResult, ErrorType
 

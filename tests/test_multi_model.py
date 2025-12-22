@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from llm_council.config.models import (
     DEFAULT_COUNCIL_MODELS,

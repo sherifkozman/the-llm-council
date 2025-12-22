@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -14,13 +14,13 @@ class TestCouncilInit:
 
     def test_default_init(self):
         """Test Council with default options."""
-        with patch("llm_council.council.Orchestrator") as mock_orch:
+        with patch("llm_council.council.Orchestrator"):
             council = Council()
             assert council.providers == ["openrouter"]
 
     def test_init_with_providers(self):
         """Test Council with custom providers."""
-        with patch("llm_council.council.Orchestrator") as mock_orch:
+        with patch("llm_council.council.Orchestrator"):
             council = Council(providers=["anthropic", "openai"])
             assert council.providers == ["anthropic", "openai"]
 
@@ -31,7 +31,7 @@ class TestCouncilInit:
             timeout=60,
             max_retries=5,
         )
-        with patch("llm_council.council.Orchestrator") as mock_orch:
+        with patch("llm_council.council.Orchestrator"):
             council = Council(config=config)
             assert council.providers == ["google"]
             assert council.config.timeout == 60
