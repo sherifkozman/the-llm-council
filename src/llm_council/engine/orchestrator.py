@@ -267,7 +267,7 @@ class Orchestrator:
 
             # Store drafts as artifacts if enabled
             if self._artifact_store and self._run_id:
-                for provider_name, draft_text in drafts.items():
+                for _provider_name, draft_text in drafts.items():
                     if draft_text:
                         try:
                             self._artifact_store.store_artifact(
@@ -611,10 +611,7 @@ class Orchestrator:
         if cleaned.startswith("```"):
             # Find closing triple backticks
             end_fence = cleaned.rfind("```")
-            if end_fence > 3:
-                cleaned = cleaned[3:end_fence].strip()
-            else:
-                cleaned = cleaned.strip("`")
+            cleaned = cleaned[3:end_fence].strip() if end_fence > 3 else cleaned.strip("`")
             # Remove optional language identifier
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:].strip()

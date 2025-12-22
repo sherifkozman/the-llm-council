@@ -160,7 +160,7 @@ class ArtifactStore:
         try:
             resolved.relative_to(base_resolved)
         except ValueError:
-            raise ValueError(f"Path escapes artifact directory: {path}")
+            raise ValueError(f"Path escapes artifact directory: {path}") from None
 
     def _init_db(self) -> None:
         """Initialize SQLite ledger with schema."""
@@ -584,7 +584,7 @@ class ArtifactStore:
         # Apply filters if specified
         if filter_type == "errors_only":
             lines = content.split("\n")
-            error_lines = [l for l in lines if "error" in l.lower() or "exception" in l.lower()]
+            error_lines = [line for line in lines if "error" in line.lower() or "exception" in line.lower()]
             content = "\n".join(error_lines) if error_lines else "[No errors found]"
         elif filter_type == "code_only":
             import re

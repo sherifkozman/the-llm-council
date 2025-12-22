@@ -6,6 +6,7 @@ Direct integration with the Anthropic API for Claude models.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import AsyncIterator
@@ -191,7 +192,7 @@ class AnthropicProvider(ProviderAdapter):
         try:
             client = self._get_client()
             # Minimal API call
-            response = await client.messages.create(
+            await client.messages.create(
                 model="claude-3-haiku-20240307",
                 max_tokens=1,
                 messages=[{"role": "user", "content": "Hi"}],
@@ -218,10 +219,8 @@ def _register() -> None:
     from llm_council.providers.registry import get_registry
 
     registry = get_registry()
-    try:
+    with contextlib.suppress(ValueError):
         registry.register_provider("anthropic", AnthropicProvider)
-    except ValueError:
-        pass
 
 
 _register()

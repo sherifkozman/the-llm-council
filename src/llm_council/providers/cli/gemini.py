@@ -17,6 +17,8 @@ from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
+import contextlib
+
 from llm_council.providers.base import (
     DoctorResult,
     ErrorType,
@@ -186,9 +188,7 @@ class GeminiCLIProvider(ProviderAdapter):
 
 def _register() -> None:
     from llm_council.providers.registry import get_registry
-    try:
+    with contextlib.suppress(ValueError):
         get_registry().register_provider("gemini-cli", GeminiCLIProvider)
-    except ValueError:
-        pass
 
 _register()

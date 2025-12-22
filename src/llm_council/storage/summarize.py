@@ -224,7 +224,7 @@ class Summarizer:
                     return gist
 
         # Fall back to first meaningful line
-        lines = [l.strip() for l in content.split("\n") if l.strip() and len(l.strip()) > 10]
+        lines = [line.strip() for line in content.split("\n") if line.strip() and len(line.strip()) > 10]
         if lines:
             first_line = lines[0]
             if len(first_line) <= char_limit:

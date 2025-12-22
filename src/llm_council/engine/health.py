@@ -214,7 +214,7 @@ class HealthChecker:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         provider_healths: list[ProviderHealth] = []
-        for name, result in zip(providers.keys(), results):
+        for name, result in zip(providers.keys(), results, strict=False):
             if isinstance(result, BaseException):
                 provider_healths.append(
                     ProviderHealth(
@@ -257,10 +257,7 @@ class HealthChecker:
             return True
 
         # Skip on non-retryable errors
-        if health.error_type in (ErrorType.AUTH, ErrorType.BILLING, ErrorType.CLI_NOT_FOUND):
-            return True
-
-        return False
+        return health.error_type in (ErrorType.AUTH, ErrorType.BILLING, ErrorType.CLI_NOT_FOUND)
 
 
 async def preflight_check(

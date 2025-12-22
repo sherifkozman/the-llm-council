@@ -21,6 +21,8 @@ from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
+import contextlib
+
 from llm_council.providers.base import (
     DoctorResult,
     ErrorType,
@@ -190,9 +192,7 @@ class CodexCLIProvider(ProviderAdapter):
 
 def _register() -> None:
     from llm_council.providers.registry import get_registry
-    try:
+    with contextlib.suppress(ValueError):
         get_registry().register_provider("codex-cli", CodexCLIProvider)
-    except ValueError:
-        pass
 
 _register()
