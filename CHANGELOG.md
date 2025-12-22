@@ -8,8 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agent Skills plugin** for cross-platform IDE integration (Claude Code, OpenAI Codex, Cursor, VS Code)
+  - `.claude-plugin/plugin.json` and `marketplace.json` for Claude Code marketplace
+  - `skills/council/SKILL.md` with comprehensive configuration reference
+  - 10 subagent reference files with JSON output examples (`skills/council/subagents/*.md`)
+  - `/council` slash command (`commands/council.md`)
 - `cleanup_stale_runs()` method in `ArtifactStore` to mark orphaned runs as timed out
 - Stale run cleanup tests
+
+### Security
+- Added security notes to skill docs (API key handling, data sensitivity, skill integrity)
+- Version pinning requirement (`>=0.2.0`) in skill prerequisites
 
 ### Changed
 - Updated ruff config to ignore pre-existing lint patterns (E402, F401, B904, SIM102, SIM105)
