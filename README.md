@@ -127,11 +127,10 @@ The LLM Council is available as an **Agent Skill** following the open [Agent Ski
 ### Claude Code
 
 ```bash
-# Direct installation from GitHub
-/plugin install sherifkozman/the-llm-council
-
-# Or add as marketplace and install
+# Step 1: Add the repo as a marketplace
 /plugin marketplace add sherifkozman/the-llm-council
+
+# Step 2: Install the plugin
 /plugin install llm-council@the-llm-council
 ```
 
