@@ -1,19 +1,18 @@
 """Tests for artifact storage and summarization."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
+from llm_council.protocol.types import SummaryTier
 from llm_council.storage import (
+    TIER_TOKEN_LIMITS,
     ArtifactStore,
     ArtifactType,
     ProcessingState,
     Summarizer,
     summarize_for_context,
-    TIER_TOKEN_LIMITS,
 )
-from llm_council.protocol.types import SummaryTier
 
 
 class TestArtifactStore:
@@ -163,6 +162,97 @@ class TestArtifactStore:
         artifacts = store.get_run_artifacts(run.run_id)
         assert artifacts == []
 
+    def test_cleanup_stale_runs(self, tmp_path):
+        """Test that stale runs are marked as timed_out."""
+        import sqlite3
+        from datetime import datetime, timedelta, timezone
+
+        store = ArtifactStore(
+            artifact_dir=tmp_path / "artifacts",
+            db_path=tmp_path / "ledger.db",
+        )
+
+        # Create a run and manually backdate it
+        run = store.create_run(subagent="test", task="test")
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "UPDATE runs SET created_at = ? WHERE run_id = ?",
+                (old_time, run.run_id),
+            )
+            conn.commit()
+
+        # Cleanup with 1 hour threshold
+        cleaned = store.cleanup_stale_runs(age_hours=1.0)
+        assert cleaned == 1
+
+        # Verify status changed
+        with sqlite3.connect(store.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run.run_id,)
+            )
+            status = cursor.fetchone()[0]
+        assert status == "timed_out"
+
+    def test_cleanup_stale_runs_ignores_completed(self, tmp_path):
+        """Test that completed runs are not affected by cleanup."""
+        import sqlite3
+        from datetime import datetime, timedelta, timezone
+
+        store = ArtifactStore(
+            artifact_dir=tmp_path / "artifacts",
+            db_path=tmp_path / "ledger.db",
+        )
+
+        # Create a run and complete it
+        run = store.create_run(subagent="test", task="test")
+        store.complete_run(run.run_id, status="completed")
+
+        # Backdate it
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "UPDATE runs SET created_at = ? WHERE run_id = ?",
+                (old_time, run.run_id),
+            )
+            conn.commit()
+
+        # Cleanup should not affect completed runs
+        cleaned = store.cleanup_stale_runs(age_hours=1.0)
+        assert cleaned == 0
+
+        # Verify status unchanged
+        with sqlite3.connect(store.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run.run_id,)
+            )
+            status = cursor.fetchone()[0]
+        assert status == "completed"
+
+    def test_cleanup_stale_runs_respects_threshold(self, tmp_path):
+        """Test that runs younger than threshold are not cleaned up."""
+        store = ArtifactStore(
+            artifact_dir=tmp_path / "artifacts",
+            db_path=tmp_path / "ledger.db",
+        )
+
+        # Create a fresh run
+        run = store.create_run(subagent="test", task="test")
+
+        # Cleanup with 1 hour threshold - run is fresh
+        cleaned = store.cleanup_stale_runs(age_hours=1.0)
+        assert cleaned == 0
+
+        # Verify status unchanged
+        import sqlite3
+        with sqlite3.connect(store.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run.run_id,)
+            )
+            status = cursor.fetchone()[0]
+        assert status == "running"
+
 
 class TestSummarizer:
     """Tests for Summarizer."""
@@ -243,7 +333,7 @@ class TestSummarizer:
         assert "provider2" in results
 
         # Verify summarization happened for large content
-        for provider, result in results.items():
+        for _provider, result in results.items():
             assert result.original_tokens > 0
             # With GIST tier and large content, should have tokens saved
             if result.original_tokens > TIER_TOKEN_LIMITS[SummaryTier.GIST]:

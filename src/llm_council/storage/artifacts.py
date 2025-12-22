@@ -670,6 +670,39 @@ class ArtifactStore:
 
         return removed
 
+    def cleanup_stale_runs(self, age_hours: float = 1.0) -> int:
+        """Mark stale runs (still 'running' after age_hours) as 'timed_out'.
+
+        Cleans up orphaned runs that were never properly completed due to
+        crashes, timeouts, or other failures.
+
+        Args:
+            age_hours: Age threshold in hours (default: 1.0)
+
+        Returns:
+            Number of runs cleaned up
+        """
+        if not self.enabled:
+            return 0
+
+        cutoff = datetime.now(timezone.utc).timestamp() - (age_hours * 3600)
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE runs
+                SET status = 'timed_out', completed_at = ?
+                WHERE status = 'running' AND created_at < ?
+            """,
+                (datetime.now(timezone.utc).isoformat(), cutoff_iso),
+            )
+            cleaned = cursor.rowcount
+            conn.commit()
+
+        return cleaned
+
 
 # Module-level default store singleton
 _default_store: ArtifactStore | None = None
