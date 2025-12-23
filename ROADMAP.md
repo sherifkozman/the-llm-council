@@ -4,7 +4,7 @@
 
 This document outlines the development direction for The LLM Council. We welcome community input on priorities and feature design.
 
-## Current Release: v0.2.0
+## Current Release: v0.4.8
 
 The foundation is complete:
 
@@ -13,8 +13,10 @@ The foundation is complete:
 - **Validated synthesis** - JSON schema validation with retry logic
 - **10 specialized subagents** - router, planner, assessor, researcher, architect, implementer, reviewer, test-designer, shipper, red-team
 - **Graceful degradation** - Continues if some providers fail
-- **Provider flexibility** - OpenRouter (single key) or direct APIs (Anthropic, OpenAI, Google)
+- **Provider flexibility** - OpenRouter, direct APIs (Anthropic, OpenAI, Google), Vertex AI (Enterprise GCP)
 - **CLI tooling** - `council run`, `council doctor`, `council config`
+- **Extended reasoning** - Support for thinking/reasoning modes (Anthropic, Google, OpenAI)
+- **Artifact store** - Content-addressed storage with tiered summarization
 
 ---
 
@@ -174,4 +176,4 @@ Have an idea not listed here? [Open an issue](https://github.com/sherifkozman/th
 
 ---
 
-*Last updated: 2025-12-20*
+*Last updated: 2025-12-23*
