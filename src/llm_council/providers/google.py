@@ -47,22 +47,43 @@ LEGACY_MODEL_PREFIXES = (
 
 
 def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
-    """Strip meta fields from JSON schema that Google's SDK doesn't accept.
+    """Strip fields from JSON schema that Google's SDK doesn't accept.
 
-    Google's Generative AI SDK doesn't accept the `$schema` meta field
-    that's standard in JSON Schema. This function recursively removes it.
+    Google's protos.Schema only accepts a limited subset of JSON Schema fields:
+    - type, properties, required, items, enum, description
+
+    It rejects standard JSON Schema fields like $schema, title, additionalProperties.
+    This function recursively removes unsupported fields.
 
     Args:
         schema: The original JSON schema.
 
     Returns:
-        A new schema without $schema and other meta fields.
+        A new schema with only Google-supported fields.
     """
+    # Fields NOT supported by Google's Schema protobuf
+    unsupported_fields = {
+        "$schema",
+        "$id",
+        "$ref",
+        "$comment",
+        "title",
+        "additionalProperties",
+        "default",
+        "examples",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "pattern",
+        "format",
+    }
+
     result: dict[str, Any] = {}
 
     for key, value in schema.items():
-        # Skip $schema and other meta fields Google doesn't accept
-        if key in ("$schema", "$id", "$ref", "$comment"):
+        # Skip unsupported fields
+        if key in unsupported_fields:
             continue
 
         if isinstance(value, dict):
