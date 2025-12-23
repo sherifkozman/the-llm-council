@@ -10,6 +10,10 @@ description: >
 model_pack: fast_generator
 calls: 3  # Claude + Codex + Gemini drafts, synthesis
 
+# Fast content generation, no extended reasoning needed
+reasoning:
+  enabled: false
+
 schema: shipper
 
 prompts:

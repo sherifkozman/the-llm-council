@@ -10,6 +10,13 @@ description: >
 model_pack: code_specialist_normal  # Upgrades to code_specialist_complex for complex tasks
 calls: 4-5  # Claude + Codex + Gemini drafts, critique, synthesis
 
+# Moderate reasoning for code generation balance
+reasoning:
+  enabled: true
+  effort: medium         # OpenAI o-series: medium reasoning effort
+  budget_tokens: 8192    # Anthropic extended thinking budget
+  thinking_level: medium # Gemini 3.x thinking level
+
 schema: implementer
 
 complexity_override:

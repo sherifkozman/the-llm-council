@@ -9,6 +9,10 @@ description: >
 model_pack: fast_generator
 calls: 3  # Claude + Codex + Gemini drafts, then synthesis
 
+# Fast classification, no extended reasoning needed
+reasoning:
+  enabled: false
+
 schema: router
 
 prompts:

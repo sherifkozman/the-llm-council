@@ -10,6 +10,10 @@ description: >
 model_pack: code_specialist_normal
 calls: 3  # Claude + Codex + Gemini drafts, synthesis
 
+# Test generation is straightforward, no extended reasoning needed
+reasoning:
+  enabled: false
+
 schema: test-designer
 
 prompts:

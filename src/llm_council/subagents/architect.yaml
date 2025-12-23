@@ -10,6 +10,13 @@ description: >
 model_pack: deep_reasoner
 calls: 5  # Claude + Codex + Gemini drafts, critique, synthesis (high-stakes)
 
+# Extended reasoning for deep system design thinking
+reasoning:
+  enabled: true
+  effort: high           # OpenAI o-series: high reasoning effort
+  budget_tokens: 16384   # Anthropic extended thinking budget
+  thinking_level: high   # Gemini 3.x thinking level
+
 schema: architect
 
 prompts:

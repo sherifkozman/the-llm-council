@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Extended reasoning config for all subagents** (implements #16)
+  - **High reasoning** (architect, assessor, planner, reviewer): `effort: high`, `budget_tokens: 16384`, `thinking_level: high`
+  - **Medium reasoning** (implementer, researcher): `effort: medium`, `budget_tokens: 8192`, `thinking_level: medium`
+  - **No reasoning** (router, shipper, test-designer): `enabled: false` for fast tasks
+  - All configs are optional with sensible defaults for quick installation
+
 ## [0.3.1] - 2025-12-22
 
 ### Fixed
