@@ -25,70 +25,76 @@ DEFAULT_MODEL = "gpt-5.1"
 
 # Models that support structured output with json_schema response_format
 # See: https://platform.openai.com/docs/guides/structured-outputs
-STRUCTURED_OUTPUT_MODELS = frozenset({
-    # GPT-5.2 family (December 2025)
-    "gpt-5.2",
-    "gpt-5.2-codex",
-    # GPT-5.1 family (2025)
-    "gpt-5.1",
-    "gpt-5.1-codex",
-    "gpt-5.1-mini",
-    "gpt-5.1-nano",
-    # GPT-4o family (August 2024+)
-    "gpt-4o",
-    "gpt-4o-2024-08-06",
-    "gpt-4o-2024-11-20",
-    "gpt-4o-2025-01-15",
-    # GPT-4o mini
-    "gpt-4o-mini",
-    "gpt-4o-mini-2024-07-18",
-    # GPT-4.1 family
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    # o-series reasoning models
-    "o1",
-    "o1-2024-12-17",
-    "o1-mini",
-    "o1-mini-2024-09-12",
-    "o3-mini",
-    "o4-mini",
-})
+STRUCTURED_OUTPUT_MODELS = frozenset(
+    {
+        # GPT-5.2 family (December 2025)
+        "gpt-5.2",
+        "gpt-5.2-codex",
+        # GPT-5.1 family (2025)
+        "gpt-5.1",
+        "gpt-5.1-codex",
+        "gpt-5.1-mini",
+        "gpt-5.1-nano",
+        # GPT-4o family (August 2024+)
+        "gpt-4o",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-2024-11-20",
+        "gpt-4o-2025-01-15",
+        # GPT-4o mini
+        "gpt-4o-mini",
+        "gpt-4o-mini-2024-07-18",
+        # GPT-4.1 family
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        # o-series reasoning models
+        "o1",
+        "o1-2024-12-17",
+        "o1-mini",
+        "o1-mini-2024-09-12",
+        "o3-mini",
+        "o4-mini",
+    }
+)
 
 # Model prefixes for easier matching (handles dated versions)
 STRUCTURED_OUTPUT_MODEL_PREFIXES = (
-    "gpt-5",     # All GPT-5.x models
-    "gpt-4o",    # All GPT-4o variants
-    "gpt-4.1",   # All GPT-4.1 variants
-    "o1",        # o1 series
-    "o3",        # o3 series
-    "o4",        # o4 series
+    "gpt-5",  # All GPT-5.x models
+    "gpt-4o",  # All GPT-4o variants
+    "gpt-4.1",  # All GPT-4.1 variants
+    "o1",  # o1 series
+    "o3",  # o3 series
+    "o4",  # o4 series
 )
 
 # Models that only support simple JSON mode (not full schema)
-JSON_MODE_ONLY_MODELS = frozenset({
-    "gpt-4-turbo",
-    "gpt-4-turbo-2024-04-09",
-    "gpt-4-turbo-preview",
-    "gpt-4-1106-preview",
-    "gpt-4-0125-preview",
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0125",
-    "gpt-3.5-turbo-1106",
-})
+JSON_MODE_ONLY_MODELS = frozenset(
+    {
+        "gpt-4-turbo",
+        "gpt-4-turbo-2024-04-09",
+        "gpt-4-turbo-preview",
+        "gpt-4-1106-preview",
+        "gpt-4-0125-preview",
+        "gpt-3.5-turbo",
+        "gpt-3.5-turbo-0125",
+        "gpt-3.5-turbo-1106",
+    }
+)
 
 # o-series reasoning models that support reasoning_effort parameter
 # See: https://platform.openai.com/docs/guides/reasoning
-REASONING_MODELS = frozenset({
-    "o1",
-    "o1-2024-12-17",
-    "o1-mini",
-    "o1-mini-2024-09-12",
-    "o3",
-    "o3-mini",
-    "o3-pro",
-    "o4-mini",
-})
+REASONING_MODELS = frozenset(
+    {
+        "o1",
+        "o1-2024-12-17",
+        "o1-mini",
+        "o1-mini-2024-09-12",
+        "o3",
+        "o3-mini",
+        "o3-pro",
+        "o4-mini",
+    }
+)
 
 # Prefixes for reasoning model detection
 REASONING_MODEL_PREFIXES = ("o1", "o3", "o4")

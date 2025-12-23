@@ -32,15 +32,15 @@ DEFAULT_MODEL = "gemini-3-flash-preview"
 # Gemini 2.0+ models support structured output
 STRUCTURED_OUTPUT_MODEL_PREFIXES = (
     # Gemini 3.x family (December 2025+)
-    "gemini-3",           # All Gemini 3.x models (gemini-3-pro, gemini-3-flash, etc.)
-    "gemini-3.0",         # Explicit 3.0 version
-    "gemini-3-preview",   # Gemini 3 preview models
+    "gemini-3",  # All Gemini 3.x models (gemini-3-pro, gemini-3-flash, etc.)
+    "gemini-3.0",  # Explicit 3.0 version
+    "gemini-3-preview",  # Gemini 3 preview models
     # Gemini 2.x family
-    "gemini-2.5",         # Gemini 2.5 (full support)
-    "gemini-2.0",         # Gemini 2.0 (full support)
-    "gemini-2",           # Catch-all for Gemini 2.x
+    "gemini-2.5",  # Gemini 2.5 (full support)
+    "gemini-2.0",  # Gemini 2.0 (full support)
+    "gemini-2",  # Catch-all for Gemini 2.x
     # Experimental/preview models
-    "gemini-exp",         # Experimental models (gemini-exp-1206, etc.)
+    "gemini-exp",  # Experimental models (gemini-exp-1206, etc.)
 )
 
 # Gemini 1.5 and older models only support simple JSON mode (no schema)

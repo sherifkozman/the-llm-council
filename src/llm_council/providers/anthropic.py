@@ -32,22 +32,24 @@ STRUCTURED_OUTPUTS_BETA = "structured-outputs-2025-11-13"
 # Claude 4.x family (December 2025+) supports structured outputs
 # Claude 3.x family does NOT support structured outputs
 STRUCTURED_OUTPUT_MODEL_PREFIXES = (
-    "claude-opus-4",      # Claude Opus 4.x series
-    "claude-sonnet-4",    # Claude Sonnet 4.x series
-    "claude-haiku-4",     # Claude Haiku 4.x series
-    "claude-4",           # Alternative naming pattern
+    "claude-opus-4",  # Claude Opus 4.x series
+    "claude-sonnet-4",  # Claude Sonnet 4.x series
+    "claude-haiku-4",  # Claude Haiku 4.x series
+    "claude-4",  # Alternative naming pattern
 )
 
 # Explicit model names known to support structured output
-STRUCTURED_OUTPUT_MODELS = frozenset({
-    # Claude Opus 4.x
-    "claude-opus-4-5",
-    "claude-opus-4-1",
-    # Claude Sonnet 4.x
-    "claude-sonnet-4-5",
-    # Claude Haiku 4.x
-    "claude-haiku-4-5",
-})
+STRUCTURED_OUTPUT_MODELS = frozenset(
+    {
+        # Claude Opus 4.x
+        "claude-opus-4-5",
+        "claude-opus-4-1",
+        # Claude Sonnet 4.x
+        "claude-sonnet-4-5",
+        # Claude Haiku 4.x
+        "claude-haiku-4-5",
+    }
+)
 
 
 def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
@@ -205,7 +207,11 @@ class AnthropicProvider(ProviderAdapter):
                 use_beta = True
                 # Handle both OpenAI format (nested json_schema) and flat format
                 json_schema = request.response_format.get("json_schema", {})
-                schema = json_schema.get("schema") if json_schema else request.response_format.get("schema")
+                schema = (
+                    json_schema.get("schema")
+                    if json_schema
+                    else request.response_format.get("schema")
+                )
                 if schema:
                     kwargs["output_format"] = {
                         "type": "json_schema",

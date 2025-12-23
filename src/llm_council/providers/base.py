@@ -260,7 +260,8 @@ class GenerateRequest(BaseModel):
     )
     tool_choice: Any | None = Field(default=None, description="Tool choice preference.")
     response_format: Mapping[str, Any] | None = Field(
-        default=None, description="Legacy structured output constraints (use structured_output instead)."
+        default=None,
+        description="Legacy structured output constraints (use structured_output instead).",
     )
     structured_output: StructuredOutputConfig | None = Field(
         default=None,

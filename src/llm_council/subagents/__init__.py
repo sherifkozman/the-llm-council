@@ -87,6 +87,7 @@ class ReasoningBudget(BaseModel):
         description="Google Gemini 3.x thinking level.",
     )
 
+
 SUBAGENTS_DIR = Path(__file__).parent
 
 # Strict allowlist pattern: lowercase alphanumeric, hyphens, underscores only
