@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2025-12-22
+
+### Fixed
+- **Missing logger import in all providers** (fixes CI failure)
+  - Added `import logging` and `logger = logging.getLogger(__name__)` to OpenAI, Google, and Anthropic providers
+  - Reasoning warnings now log correctly without `NameError`
+
 ## [0.4.1] - 2025-12-22
 
 ### Fixed
-- **Missing logger import in OpenAI and Google providers** (fixes CI failure)
-  - Added `import logging` and `logger = logging.getLogger(__name__)` to both providers
-  - Reasoning warnings now log correctly without `NameError`
+- **Missing logger import in OpenAI and Google providers**
+  - Partial fix - Anthropic provider also needed the logger import
 
 ## [0.4.0] - 2025-12-22
 
@@ -155,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.3.0...v0.3.1
