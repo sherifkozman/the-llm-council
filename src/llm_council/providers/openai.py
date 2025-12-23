@@ -121,7 +121,7 @@ def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
     Returns:
         A new schema compatible with OpenAI strict mode.
     """
-    result = {}
+    result: dict[str, Any] = {}
 
     for key, value in schema.items():
         # Skip $schema meta field
