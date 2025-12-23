@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-llm-council"
-version = "0.4.5"
+version = "0.4.6"
 description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
 readme = "README.md"
 license = "MIT"
@@ -55,7 +55,7 @@ dev = [
 ]
 anthropic = ["anthropic>=0.18"]
 openai = ["openai>=1.0"]
-google = ["google-generativeai>=0.3"]
+google = ["google-genai>=1.0"]
 all = [
     "the-llm-council[anthropic,openai,google]"
 ]

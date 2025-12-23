@@ -2,6 +2,7 @@
 Google AI provider adapter.
 
 Direct integration with the Google Generative AI API for Gemini models.
+Uses the new google-genai SDK (replaces deprecated google-generativeai).
 """
 
 from __future__ import annotations
@@ -10,10 +11,6 @@ import contextlib
 import logging
 import os
 import time
-
-# Suppress noisy gRPC ALTS warnings when running outside GCP (Issue #12)
-# These warnings appear multiple times per API call but are harmless
-os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
@@ -25,7 +22,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "gemini-3-flash-preview"
+DEFAULT_MODEL = "gemini-2.0-flash"
 
 # Model prefixes that support structured output with response_schema
 # See: https://ai.google.dev/gemini-api/docs/structured-output
@@ -140,9 +137,10 @@ class GoogleProvider(ProviderAdapter):
     """Google AI API provider adapter.
 
     Direct access to Gemini models via the Google Generative AI API.
+    Uses the new google-genai SDK.
 
     Environment variables:
-        GOOGLE_API_KEY: Required. Your Google AI API key.
+        GOOGLE_API_KEY or GEMINI_API_KEY: Required. Your Google AI API key.
 
     Requires the 'google' extra:
         pip install the-llm-council[google]
@@ -165,72 +163,78 @@ class GoogleProvider(ProviderAdapter):
         """Initialize the Google AI provider.
 
         Args:
-            api_key: Google AI API key. Falls back to GOOGLE_API_KEY env var.
+            api_key: Google AI API key. Falls back to GOOGLE_API_KEY or GEMINI_API_KEY env var.
             default_model: Default model to use if not specified in request.
         """
-        self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
+        self._api_key = (
+            api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        )
         self._default_model = default_model or DEFAULT_MODEL
         self._client: Any = None
 
-    def _get_client(self, model: str) -> Any:
-        """Get or create a Generative Model client."""
-        try:
-            import google.generativeai as genai
-        except ImportError as e:
-            raise ImportError(
-                "The 'google-generativeai' package is required for the Google provider. "
-                "Install it with: pip install the-llm-council[google]"
-            ) from e
+    def _get_client(self) -> Any:
+        """Get or create the Google GenAI client."""
+        if self._client is None:
+            try:
+                from google import genai
+            except ImportError as e:
+                raise ImportError(
+                    "The 'google-genai' package is required for the Google provider. "
+                    "Install it with: pip install the-llm-council[google]"
+                ) from e
 
-        if not self._api_key:
-            raise ValueError(
-                "Google AI API key not configured. "
-                "Set GOOGLE_API_KEY environment variable or pass api_key."
-            )
+            if not self._api_key:
+                raise ValueError(
+                    "Google AI API key not configured. "
+                    "Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable or pass api_key."
+                )
 
-        genai.configure(api_key=self._api_key)
-        return genai.GenerativeModel(model)
+            self._client = genai.Client(api_key=self._api_key)
+        return self._client
 
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate a response using Google AI API."""
+        client = self._get_client()
         model = request.model or self._default_model
-        client = self._get_client(model)
 
-        # Build content
-        contents: list[dict[str, Any]] = []
+        # Build content - new SDK uses simple string or list format
+        contents: str | list[dict[str, Any]]
         if request.messages:
+            # Convert messages to the format expected by the new SDK
+            contents = []
             for m in request.messages:
                 role = "user" if m.role == "user" else "model"
-                contents.append({"role": role, "parts": [m.content]})
+                contents.append({"role": role, "parts": [{"text": m.content}]})
         elif request.prompt:
-            contents = [{"role": "user", "parts": [request.prompt]}]
+            contents = request.prompt
         else:
             raise ValueError("Either 'messages' or 'prompt' must be provided")
 
-        generation_config: dict[str, Any] = {}
+        # Build config dict
+        config: dict[str, Any] = {}
         if request.max_tokens is not None:
-            generation_config["max_output_tokens"] = request.max_tokens
+            config["max_output_tokens"] = request.max_tokens
         if request.temperature is not None:
-            generation_config["temperature"] = request.temperature
+            config["temperature"] = request.temperature
         if request.top_p is not None:
-            generation_config["top_p"] = request.top_p
+            config["top_p"] = request.top_p
         if request.stop:
-            generation_config["stop_sequences"] = list(request.stop)
+            config["stop_sequences"] = list(request.stop)
 
         # Handle structured output - requires response_mime_type and response_schema
         # See: https://ai.google.dev/gemini-api/docs/structured-output
         if request.structured_output:
             if self._model_supports_structured_output(model):
-                generation_config["response_mime_type"] = "application/json"
+                config["response_mime_type"] = "application/json"
                 # Strip $schema and other meta fields Google doesn't accept
-                generation_config["response_schema"] = _strip_schema_meta_fields(
+                config["response_schema"] = _strip_schema_meta_fields(
                     dict(request.structured_output.json_schema)
                 )
             elif self._is_legacy_model(model):
                 # Fall back to simple JSON mode for older models (no schema enforcement)
-                generation_config["response_mime_type"] = "application/json"
+                config["response_mime_type"] = "application/json"
             # else: model doesn't support structured output, skip
 
         # Handle reasoning/thinking configuration
@@ -238,7 +242,7 @@ class GoogleProvider(ProviderAdapter):
         if request.reasoning and request.reasoning.enabled:
             if request.reasoning.thinking_level:
                 # Gemini 3.x style: minimal, low, medium, high
-                generation_config["thinking_config"] = {
+                config["thinking_config"] = {
                     "thinking_level": request.reasoning.thinking_level.upper(),
                 }
             elif request.reasoning.budget_tokens:
@@ -251,34 +255,37 @@ class GoogleProvider(ProviderAdapter):
                         request.reasoning.budget_tokens,
                         max_budget,
                     )
-                generation_config["thinking_config"] = {
+                config["thinking_config"] = {
                     "thinking_budget": budget,
                 }
             else:
                 # Default: medium thinking level
-                generation_config["thinking_config"] = {
+                config["thinking_config"] = {
                     "thinking_level": "MEDIUM",
                 }
 
         if request.stream:
-            return self._generate_stream(client, contents, generation_config)
+            return self._generate_stream(client, model, contents, config)
 
-        response = await client.generate_content_async(
-            contents,
-            generation_config=generation_config if generation_config else None,
+        # Use async client for generate_content
+        response = await client.aio.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config if config else None,
         )
         return self._parse_response(response)
 
     async def _generate_stream(
-        self, client: Any, contents: Any, generation_config: dict[str, Any]
+        self, client: Any, model: str, contents: Any, config: dict[str, Any]
     ) -> AsyncIterator[GenerateResponse]:
         """Stream responses from Google AI API."""
-        response = await client.generate_content_async(
-            contents,
-            generation_config=generation_config if generation_config else None,
-            stream=True,
+        # The new SDK's stream method is a coroutine that returns an async iterator
+        stream = await client.aio.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=config if config else None,
         )
-        async for chunk in response:
+        async for chunk in stream:
             if chunk.text:
                 yield GenerateResponse(text=chunk.text, content=chunk.text)
 
@@ -288,20 +295,28 @@ class GoogleProvider(ProviderAdapter):
         try:
             text = response.text
         except Exception:
-            if response.parts:
-                text = "".join(part.text for part in response.parts if hasattr(part, "text"))
+            # Try to extract text from parts if .text fails
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, "content") and candidate.content:
+                    parts = candidate.content.parts
+                    if parts:
+                        text = "".join(part.text for part in parts if hasattr(part, "text"))
 
         usage = None
-        if hasattr(response, "usage_metadata"):
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            um = response.usage_metadata
             usage = {
-                "prompt_tokens": response.usage_metadata.prompt_token_count,
-                "completion_tokens": response.usage_metadata.candidates_token_count,
-                "total_tokens": response.usage_metadata.total_token_count,
+                "prompt_tokens": getattr(um, "prompt_token_count", 0),
+                "completion_tokens": getattr(um, "candidates_token_count", 0),
+                "total_tokens": getattr(um, "total_token_count", 0),
             }
 
         finish_reason = None
-        if response.candidates:
-            finish_reason = str(response.candidates[0].finish_reason)
+        if hasattr(response, "candidates") and response.candidates:
+            fr = getattr(response.candidates[0], "finish_reason", None)
+            if fr:
+                finish_reason = str(fr)
 
         return GenerateResponse(
             text=text,
@@ -355,18 +370,19 @@ class GoogleProvider(ProviderAdapter):
             )
 
         try:
-            import google.generativeai as genai
+            from google import genai
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="google-generativeai package not installed. Run: pip install the-llm-council[google]",
+                message="google-genai package not installed. Run: pip install the-llm-council[google]",
                 details={"error": "missing_package"},
             )
 
         try:
-            genai.configure(api_key=self._api_key)
-            # List models to verify API key
-            list(genai.list_models())
+            client = self._get_client()
+            # List models to verify API key works
+            # The new SDK uses client.models.list()
+            list(client.models.list())
             latency_ms = (time.time() - start_time) * 1000
 
             return DoctorResult(

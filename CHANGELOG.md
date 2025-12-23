@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2025-12-23
+
+### Changed
+- **Google provider: Migrated to new google-genai SDK**
+  - Replaced deprecated `google-generativeai` package with new `google-genai>=1.0`
+  - Complete rewrite of `GoogleProvider` using new SDK patterns:
+    - `genai.Client(api_key=...)` instead of `genai.configure()`
+    - `client.aio.models.generate_content()` for async generation
+    - `config={}` parameter instead of `generation_config`
+  - Default model updated to `gemini-2.0-flash`
+  - Fixed streaming implementation for new SDK async pattern
+
 ## [0.4.5] - 2025-12-23
 
 ### Fixed
@@ -193,7 +205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.2...v0.4.3
