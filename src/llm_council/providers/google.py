@@ -22,6 +22,29 @@ from llm_council.providers.base import (
 
 DEFAULT_MODEL = "gemini-2.0-flash-exp"
 
+# Model prefixes that support structured output with response_schema
+# See: https://ai.google.dev/gemini-api/docs/structured-output
+# Gemini 2.0+ models support structured output
+STRUCTURED_OUTPUT_MODEL_PREFIXES = (
+    # Gemini 3.x family (December 2025+)
+    "gemini-3",           # All Gemini 3.x models (gemini-3-pro, gemini-3-flash, etc.)
+    "gemini-3.0",         # Explicit 3.0 version
+    "gemini-3-preview",   # Gemini 3 preview models
+    # Gemini 2.x family
+    "gemini-2.5",         # Gemini 2.5 (full support)
+    "gemini-2.0",         # Gemini 2.0 (full support)
+    "gemini-2",           # Catch-all for Gemini 2.x
+    # Experimental/preview models
+    "gemini-exp",         # Experimental models (gemini-exp-1206, etc.)
+)
+
+# Gemini 1.5 and older models only support simple JSON mode (no schema)
+LEGACY_MODEL_PREFIXES = (
+    "gemini-1.5",
+    "gemini-1.0",
+    "gemini-pro",  # Original Gemini Pro (1.0)
+)
+
 
 class GoogleProvider(ProviderAdapter):
     """Google AI API provider adapter.
@@ -106,6 +129,17 @@ class GoogleProvider(ProviderAdapter):
         if request.stop:
             generation_config["stop_sequences"] = list(request.stop)
 
+        # Handle structured output - requires response_mime_type and response_schema
+        # See: https://ai.google.dev/gemini-api/docs/structured-output
+        if request.structured_output:
+            if self._model_supports_structured_output(model):
+                generation_config["response_mime_type"] = "application/json"
+                generation_config["response_schema"] = dict(request.structured_output.json_schema)
+            elif self._is_legacy_model(model):
+                # Fall back to simple JSON mode for older models (no schema enforcement)
+                generation_config["response_mime_type"] = "application/json"
+            # else: model doesn't support structured output, skip
+
         if request.stream:
             return self._generate_stream(client, contents, generation_config)
 
@@ -156,6 +190,32 @@ class GoogleProvider(ProviderAdapter):
             finish_reason=finish_reason,
             raw=response,
         )
+
+    def _model_supports_structured_output(self, model: str) -> bool:
+        """Check if a specific model supports structured output with response_schema.
+
+        Gemini 2.0+ models support structured output with JSON schema.
+        Gemini 1.5 and older only support simple JSON mode.
+
+        Args:
+            model: The model identifier to check.
+
+        Returns:
+            True if the model supports response_schema in generation_config.
+        """
+        # Check if model starts with any supported prefix (Gemini 2.0+)
+        return any(model.startswith(prefix) for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES)
+
+    def _is_legacy_model(self, model: str) -> bool:
+        """Check if a model is a legacy model that only supports JSON mode.
+
+        Args:
+            model: The model identifier to check.
+
+        Returns:
+            True if the model only supports simple JSON mode (no schema).
+        """
+        return any(model.startswith(prefix) for prefix in LEGACY_MODEL_PREFIXES)
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""

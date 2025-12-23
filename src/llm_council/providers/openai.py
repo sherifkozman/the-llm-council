@@ -22,6 +22,60 @@ from llm_council.providers.base import (
 
 DEFAULT_MODEL = "gpt-4o"
 
+# Models that support structured output with json_schema response_format
+# See: https://platform.openai.com/docs/guides/structured-outputs
+STRUCTURED_OUTPUT_MODELS = frozenset({
+    # GPT-5.2 family (December 2025)
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    # GPT-5.1 family (2025)
+    "gpt-5.1",
+    "gpt-5.1-codex",
+    "gpt-5.1-mini",
+    "gpt-5.1-nano",
+    # GPT-4o family (August 2024+)
+    "gpt-4o",
+    "gpt-4o-2024-08-06",
+    "gpt-4o-2024-11-20",
+    "gpt-4o-2025-01-15",
+    # GPT-4o mini
+    "gpt-4o-mini",
+    "gpt-4o-mini-2024-07-18",
+    # GPT-4.1 family
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    # o-series reasoning models
+    "o1",
+    "o1-2024-12-17",
+    "o1-mini",
+    "o1-mini-2024-09-12",
+    "o3-mini",
+    "o4-mini",
+})
+
+# Model prefixes for easier matching (handles dated versions)
+STRUCTURED_OUTPUT_MODEL_PREFIXES = (
+    "gpt-5",     # All GPT-5.x models
+    "gpt-4o",    # All GPT-4o variants
+    "gpt-4.1",   # All GPT-4.1 variants
+    "o1",        # o1 series
+    "o3",        # o3 series
+    "o4",        # o4 series
+)
+
+# Models that only support simple JSON mode (not full schema)
+JSON_MODE_ONLY_MODELS = frozenset({
+    "gpt-4-turbo",
+    "gpt-4-turbo-2024-04-09",
+    "gpt-4-turbo-preview",
+    "gpt-4-1106-preview",
+    "gpt-4-0125-preview",
+    "gpt-3.5-turbo",
+    "gpt-3.5-turbo-0125",
+    "gpt-3.5-turbo-1106",
+})
+
 
 class OpenAIProvider(ProviderAdapter):
     """OpenAI API provider adapter.
@@ -112,7 +166,25 @@ class OpenAIProvider(ProviderAdapter):
             kwargs["tools"] = list(request.tools)
         if request.tool_choice is not None:
             kwargs["tool_choice"] = request.tool_choice
-        if request.response_format:
+
+        # Handle structured output - transform to OpenAI's native format
+        if request.structured_output:
+            model = request.model or self._default_model
+            if self._model_supports_structured_output(model):
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": request.structured_output.name,
+                        "strict": request.structured_output.strict,
+                        "schema": dict(request.structured_output.json_schema),
+                    },
+                }
+            elif model in JSON_MODE_ONLY_MODELS:
+                # Fall back to simple JSON mode for older models
+                kwargs["response_format"] = {"type": "json_object"}
+            # else: model doesn't support structured output, skip
+        elif request.response_format:
+            # Legacy pass-through for backwards compatibility
             kwargs["response_format"] = dict(request.response_format)
 
         if request.stream:
@@ -168,6 +240,39 @@ class OpenAIProvider(ProviderAdapter):
             finish_reason=choice.finish_reason,
             raw=response,
         )
+
+    def _model_supports_structured_output(self, model: str) -> bool:
+        """Check if a specific model supports structured output with JSON schema.
+
+        Supported models include:
+        - GPT-5.x family (gpt-5.1, gpt-5.2, gpt-5.1-codex, gpt-5.2-codex)
+        - GPT-4o family (gpt-4o, gpt-4o-mini)
+        - GPT-4.1 family (gpt-4.1, gpt-4.1-mini, gpt-4.1-nano)
+        - o-series reasoning models (o1, o3-mini, o4-mini)
+
+        Args:
+            model: The model identifier to check.
+
+        Returns:
+            True if the model supports json_schema response_format.
+        """
+        # Direct match
+        if model in STRUCTURED_OUTPUT_MODELS:
+            return True
+
+        # Check if model starts with any supported prefix
+        if any(model.startswith(prefix) for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES):
+            return True
+
+        # Check for version-less model names (e.g., "gpt-4o-2024-08-06" -> "gpt-4o")
+        for suffix in ("-2024", "-2025", "-2026"):
+            if suffix in model:
+                base_model = model.split(suffix)[0]
+                if base_model in STRUCTURED_OUTPUT_MODELS:
+                    return True
+                break
+
+        return False
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""

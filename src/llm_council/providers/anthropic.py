@@ -22,6 +22,32 @@ from llm_council.providers.base import (
 
 DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
 
+# Beta header required for structured outputs
+# See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
+STRUCTURED_OUTPUTS_BETA = "structured-outputs-2025-11-13"
+
+# Model prefixes that support structured output with output_format
+# Requires beta header: anthropic-beta: structured-outputs-2025-11-13
+# Claude 4.x family (December 2025+) supports structured outputs
+# Claude 3.x family does NOT support structured outputs
+STRUCTURED_OUTPUT_MODEL_PREFIXES = (
+    "claude-opus-4",      # Claude Opus 4.x series
+    "claude-sonnet-4",    # Claude Sonnet 4.x series
+    "claude-haiku-4",     # Claude Haiku 4.x series
+    "claude-4",           # Alternative naming pattern
+)
+
+# Explicit model names known to support structured output
+STRUCTURED_OUTPUT_MODELS = frozenset({
+    # Claude Opus 4.x
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    # Claude Sonnet 4.x
+    "claude-sonnet-4-5",
+    # Claude Haiku 4.x
+    "claude-haiku-4-5",
+})
+
 
 class AnthropicProvider(ProviderAdapter):
     """Anthropic API provider adapter.
@@ -114,19 +140,98 @@ class AnthropicProvider(ProviderAdapter):
         if request.tools:
             kwargs["tools"] = list(request.tools)
 
-        if request.stream:
-            return self._generate_stream(client, kwargs)
+        # Handle structured output - requires beta header and output_format
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
+        use_beta = False
+        model = request.model or self._default_model
 
-        response = await client.messages.create(**kwargs)
+        if request.structured_output:
+            if self._model_supports_structured_output(model):
+                use_beta = True
+                kwargs["output_format"] = {
+                    "type": "json_schema",
+                    "schema": dict(request.structured_output.json_schema),
+                }
+            # else: model doesn't support structured output, skip (rely on prompt)
+        elif request.response_format:
+            # Legacy response_format: attempt conversion if model supports structured output
+            # and format looks like OpenAI-style json_schema
+            if (
+                self._model_supports_structured_output(model)
+                and isinstance(request.response_format, dict)
+                and request.response_format.get("type") == "json_schema"
+            ):
+                use_beta = True
+                # Handle both OpenAI format (nested json_schema) and flat format
+                json_schema = request.response_format.get("json_schema", {})
+                schema = json_schema.get("schema") if json_schema else request.response_format.get("schema")
+                if schema:
+                    kwargs["output_format"] = {
+                        "type": "json_schema",
+                        "schema": dict(schema),
+                    }
+            # Note: simple json_object mode is not supported by Anthropic API
+
+        if request.stream:
+            return self._generate_stream(client, kwargs, use_beta=use_beta)
+
+        if use_beta:
+            response = await client.beta.messages.create(
+                betas=[STRUCTURED_OUTPUTS_BETA],
+                **kwargs,
+            )
+        else:
+            response = await client.messages.create(**kwargs)
         return self._parse_response(response)
 
     async def _generate_stream(
-        self, client: Any, kwargs: dict[str, Any]
+        self, client: Any, kwargs: dict[str, Any], *, use_beta: bool = False
     ) -> AsyncIterator[GenerateResponse]:
         """Stream responses from Anthropic API."""
-        async with client.messages.stream(**kwargs) as stream:
-            async for text in stream.text_stream:
-                yield GenerateResponse(text=text, content=text)
+        if use_beta:
+            async with client.beta.messages.stream(
+                betas=[STRUCTURED_OUTPUTS_BETA], **kwargs
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield GenerateResponse(text=text, content=text)
+        else:
+            async with client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    yield GenerateResponse(text=text, content=text)
+
+    def _model_supports_structured_output(self, model: str) -> bool:
+        """Check if a specific model supports structured output.
+
+        Structured outputs are supported on Claude 4.x family models:
+        - Claude Opus 4.x (claude-opus-4-5, claude-opus-4-1, etc.)
+        - Claude Sonnet 4.x (claude-sonnet-4-5, etc.)
+        - Claude Haiku 4.x (claude-haiku-4-5, etc.)
+
+        Claude 3.x models do NOT support structured outputs.
+
+        Args:
+            model: The model identifier to check.
+
+        Returns:
+            True if the model supports output_format with json_schema.
+        """
+        # Direct match against known models
+        if model in STRUCTURED_OUTPUT_MODELS:
+            return True
+
+        # Strip date suffix for comparison (e.g., "claude-sonnet-4-5-20251201" -> "claude-sonnet-4-5")
+        base_model = model
+        for suffix in ("-2024", "-2025", "-2026"):
+            if suffix in model:
+                base_model = model.split(suffix)[0]
+                break
+
+        # Check if base model is in the known set
+        if base_model in STRUCTURED_OUTPUT_MODELS:
+            return True
+
+        # Check if model starts with any supported prefix (Claude 4.x family)
+        return any(model.startswith(prefix) for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES)
 
     def _parse_response(self, response: Any) -> GenerateResponse:
         """Parse Anthropic API response."""

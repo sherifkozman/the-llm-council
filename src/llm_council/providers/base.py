@@ -185,6 +185,29 @@ class Message(BaseModel):
     name: str | None = Field(default=None, description="Optional name for the message author.")
 
 
+class StructuredOutputConfig(BaseModel):
+    """Configuration for structured output (JSON schema) requests.
+
+    This provides a provider-agnostic representation that each provider
+    transforms to their native API format:
+    - OpenAI/OpenRouter: response_format.json_schema wrapper
+    - Anthropic: output_format with beta header
+    - Google: generation_config.responseJsonSchema
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    json_schema: Mapping[str, Any] = Field(..., description="The JSON Schema to enforce.")
+    name: str = Field(
+        default="council_output",
+        description="Schema name (required by OpenAI/OpenRouter, ignored by others).",
+    )
+    strict: bool = Field(
+        default=True,
+        description="Enforce strict schema adherence where supported.",
+    )
+
+
 class GenerateRequest(BaseModel):
     """Input parameters for a text generation request."""
 
@@ -205,7 +228,11 @@ class GenerateRequest(BaseModel):
     )
     tool_choice: Any | None = Field(default=None, description="Tool choice preference.")
     response_format: Mapping[str, Any] | None = Field(
-        default=None, description="Structured output constraints."
+        default=None, description="Legacy structured output constraints (use structured_output instead)."
+    )
+    structured_output: StructuredOutputConfig | None = Field(
+        default=None,
+        description="Structured output configuration. Each provider transforms this to their native format.",
     )
     metadata: Mapping[str, Any] | None = Field(default=None, description="Arbitrary metadata.")
 

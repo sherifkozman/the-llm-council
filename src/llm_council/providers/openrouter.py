@@ -144,7 +144,28 @@ class OpenRouterProvider(ProviderAdapter):
             body["tools"] = list(request.tools)
         if request.tool_choice is not None:
             body["tool_choice"] = request.tool_choice
-        if request.response_format:
+
+        # Handle structured output - transform to OpenRouter's format (OpenAI-compatible)
+        # See: https://openrouter.ai/docs/guides/features/structured-outputs
+        #
+        # Note: OpenRouter internally handles model compatibility. If the underlying
+        # model doesn't support json_schema, OpenRouter may:
+        # - Return an error
+        # - Fall back to prompt-based JSON
+        # - Use its Response Healing feature
+        #
+        # We apply the format for all models and let OpenRouter handle compatibility.
+        if request.structured_output:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": request.structured_output.name,
+                    "strict": request.structured_output.strict,
+                    "schema": dict(request.structured_output.json_schema),
+                },
+            }
+        elif request.response_format:
+            # Legacy pass-through for backwards compatibility
             body["response_format"] = dict(request.response_format)
 
         return body

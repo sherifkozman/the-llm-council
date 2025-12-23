@@ -38,6 +38,7 @@ from llm_council.providers.base import (
     GenerateResponse,
     Message,
     ProviderAdapter,
+    StructuredOutputConfig,
 )
 from llm_council.providers.registry import get_registry
 from llm_council.schemas import load_schema
@@ -464,11 +465,13 @@ class Orchestrator:
             )
 
             if schema and await adapter.supports("structured_output"):
-                request.response_format = {
-                    "type": "json_schema",
-                    "schema": schema,
-                    "name": self._subagent_name or "council_output",
-                }
+                # Use StructuredOutputConfig for provider-agnostic structured output
+                # Each provider transforms this to their native API format
+                request.structured_output = StructuredOutputConfig(
+                    json_schema=schema,
+                    name=self._subagent_name or "council_output",
+                    strict=True,
+                )
 
             response = await self._call_provider(provider_name, adapter, request)
             last_raw = response.text or ""

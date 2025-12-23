@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added security notes to skill docs (API key handling, data sensitivity, skill integrity)
 - Version pinning requirement (`>=0.2.0`) in skill prerequisites
 
+### Documentation
+- **Provider development guide** updated with comprehensive structured output documentation
+  - `StructuredOutputConfig` class usage and examples
+  - Provider-specific API format transformations (OpenAI, Anthropic, Google)
+  - Model capability checking patterns with prefix-based matching
+  - Complete implementation checklist for new providers
+
+### Fixed
+- **Structured output format for all providers** (fixes #8)
+  - OpenAI/OpenRouter: Fixed `response_format` to use correct `json_schema` wrapper format
+  - Anthropic: Added `output_format` support with beta header (`structured-outputs-2025-11-13`)
+  - Google: Added `response_schema` support in `generation_config`
+  - Added `StructuredOutputConfig` for provider-agnostic structured output configuration
+  - Model-specific capability checks for each provider family
+  - OpenAI: Added GPT-5.x family support (gpt-5.1, gpt-5.2, gpt-5.1-codex, gpt-5.2-codex)
+  - Google: Added Gemini 2.x/3.x pro and flash model support, including Gemini 3 preview family
+
 ### Changed
 - Updated ruff config to ignore pre-existing lint patterns (E402, F401, B904, SIM102, SIM105)
 - Configured mypy to ignore optional provider packages (anthropic, openai, google)
