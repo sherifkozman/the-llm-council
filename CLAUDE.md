@@ -79,6 +79,27 @@ export GOOGLE_API_KEY="your-key"
 council doctor
 ```
 
+### Vertex AI (Enterprise GCP)
+
+Access 200+ models (Gemini, Claude, Llama, Mistral) through Google Cloud.
+
+```bash
+# Option 1: Application Default Credentials
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
+
+# Option 2: Service Account
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/sa.json"
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+
+# Verify setup
+council doctor
+
+# Use with council
+council run architect "Design a cache" --providers vertex-ai
+```
+
 ## Troubleshooting
 
 ```bash

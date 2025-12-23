@@ -25,6 +25,9 @@ pip install the-llm-council[openai]
 # For Google (Gemini)
 pip install the-llm-council[google]
 
+# For Vertex AI (Enterprise GCP)
+pip install the-llm-council[vertex]
+
 # For all providers
 pip install the-llm-council[all]
 ```
@@ -216,6 +219,101 @@ Available models:
 - `gemini-1.5-pro` - Most capable (recommended)
 - `gemini-1.5-flash` - Fast and affordable
 - `gemini-pro` - Previous generation
+
+## Vertex AI (Enterprise GCP)
+
+Vertex AI provides enterprise access to 200+ models (Gemini, Claude, Llama, Mistral) through Google Cloud with unified billing and IAM.
+
+### Setup
+
+**Option 1: Application Default Credentials (ADC)**
+
+1. Authenticate with gcloud:
+
+```bash
+gcloud auth application-default login
+```
+
+2. Set environment variables:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"  # optional, defaults to us-central1
+```
+
+**Option 2: Service Account**
+
+1. Create a service account with Vertex AI permissions
+2. Download the JSON key file
+3. Set environment variables:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+```
+
+4. Verify setup:
+
+```bash
+council doctor
+```
+
+### Usage
+
+CLI:
+
+```bash
+council run architect "Design a distributed cache" --providers vertex-ai
+```
+
+Python:
+
+```python
+import asyncio
+from llm_council import Council
+
+async def main():
+    council = Council(providers=["vertex-ai"])
+
+    result = await council.run(
+        task="Perform security analysis of JWT authentication",
+        subagent="red-team"
+    )
+
+    print(result.output)
+
+asyncio.run(main())
+```
+
+### Model Selection
+
+Default model: `gemini-2.0-flash`
+
+Override via config:
+
+```yaml
+providers:
+  - name: vertex-ai
+    project: ${GOOGLE_CLOUD_PROJECT}
+    location: us-central1
+    default_model: gemini-2.5-pro
+```
+
+Available models (via Model Garden):
+- `gemini-2.0-flash` - Fast and capable (default)
+- `gemini-2.5-pro` - Most capable Gemini
+- `gemini-2.5-flash` - Balanced performance
+- Claude, Llama, Mistral via Model Garden
+
+### When to Use Vertex AI vs Google API
+
+| Use Case | Recommended Provider |
+|----------|---------------------|
+| Quick prototyping | Google (API key) |
+| Enterprise/production | Vertex AI (GCP) |
+| Need Claude/Llama via GCP | Vertex AI |
+| Unified GCP billing | Vertex AI |
+| Simple setup | Google (API key) |
 
 ## Using Multiple Providers
 

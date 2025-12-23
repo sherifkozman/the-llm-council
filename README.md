@@ -97,6 +97,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 | OpenAI | `OPENAI_API_KEY` | Direct GPT access |
 | Anthropic | `ANTHROPIC_API_KEY` | Direct Claude access |
 | Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
+| Vertex AI | `GOOGLE_CLOUD_PROJECT` | Enterprise GCP - 200+ models |
 
 ## Installation
 
@@ -112,6 +113,9 @@ pip install the-llm-council
 
 # Direct APIs
 pip install the-llm-council[anthropic,openai,google]
+
+# Vertex AI (Enterprise GCP)
+pip install the-llm-council[vertex]
 
 # All providers
 pip install the-llm-council[all]
@@ -305,6 +309,8 @@ myprovider = "my_package.providers:MyProvider"
 | OpenRouter | HTTP API | `src/llm_council/providers/openrouter.py` |
 | Anthropic | Native SDK | `src/llm_council/providers/anthropic.py` |
 | OpenAI | Native SDK | `src/llm_council/providers/openai.py` |
+| Google | Native SDK | `src/llm_council/providers/google.py` |
+| Vertex AI | Native SDK | `src/llm_council/providers/vertex.py` |
 | Codex CLI | Subprocess | `src/llm_council/providers/cli/codex.py` |
 
 ## Configuration

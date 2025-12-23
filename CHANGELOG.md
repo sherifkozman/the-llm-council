@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8] - 2025-12-23
+
+### Added
+- **Vertex AI provider** - Enterprise access to Google Cloud AI models
+  - Access 200+ models: Gemini, Claude, Llama, Mistral via GCP
+  - Two authentication methods (equally supported):
+    - **ADC**: `gcloud auth application-default login`
+    - **Service Account**: `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`
+  - Environment variables: `GOOGLE_CLOUD_PROJECT` (required), `GOOGLE_CLOUD_LOCATION` (optional)
+  - Reuses `google-genai` SDK for consistent API patterns
+  - Install: `pip install the-llm-council[vertex]`
+  - Usage: `council run architect "Design a cache" --providers vertex-ai`
+  - Live tested: doctor, generation, streaming, structured output, council run
+
 ## [0.4.7] - 2025-12-23
 
 ### Fixed
@@ -218,7 +232,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.4...v0.4.5

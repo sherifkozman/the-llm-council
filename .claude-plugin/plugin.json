@@ -1,6 +1,6 @@
 {
   "name": "llm-council",
-  "version": "0.2.0",
+  "version": "0.4.8",
   "description": "Multi-LLM Council for adversarial debate, cross-validation, and structured decision-making",
   "author": {
     "name": "Sherif Kozman"
