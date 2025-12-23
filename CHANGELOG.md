@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2025-12-23
+
+### Fixed
+- **Complex subagents failing with "Empty synthesis response"** (fixes #17)
+  - **Root cause**: OpenAI structured output returns empty text when JSON is truncated due to token limit
+  - Complex schemas (architect, planner, red-team) need 3000-5000+ tokens, but default was 2000
+  - When `max_tokens` is too low and `finish_reason: length`, OpenAI returns empty content
+  - **Fix**: Increased default token limits:
+    - `max_synthesis_tokens`: 2000 → 8000
+    - `max_draft_tokens`: 2000 → 4000
+    - `max_critique_tokens`: 1200 → 2000
+  - All subagents now work with OpenAI and Google providers
+
 ## [0.4.6] - 2025-12-23
 
 ### Changed
@@ -205,7 +218,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.3...v0.4.4

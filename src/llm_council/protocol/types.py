@@ -57,7 +57,7 @@ class CouncilConfig(BaseModel):
         description="Summarization detail level",
     )
     max_draft_tokens: int = Field(
-        default=2000,
+        default=4000,
         description="Max tokens per draft before summarization",
     )
     enable_artifact_store: bool = Field(

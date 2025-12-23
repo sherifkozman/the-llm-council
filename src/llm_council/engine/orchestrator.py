@@ -60,9 +60,9 @@ class OrchestratorConfig(BaseModel):
     summary_tier: SummaryTier = Field(
         default=SummaryTier.ACTIONS, description="Desired summarization depth."
     )
-    max_draft_tokens: int = Field(default=2000, description="Max tokens per draft call.")
-    max_critique_tokens: int = Field(default=1200, description="Max tokens for critique call.")
-    max_synthesis_tokens: int = Field(default=2000, description="Max tokens for synthesis call.")
+    max_draft_tokens: int = Field(default=4000, description="Max tokens per draft call.")
+    max_critique_tokens: int = Field(default=2000, description="Max tokens for critique call.")
+    max_synthesis_tokens: int = Field(default=8000, description="Max tokens for synthesis call.")
     draft_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     critique_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     synthesis_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
