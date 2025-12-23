@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2025-12-23
+
+### Fixed
+- **Google provider: "title" property incorrectly stripped from schemas** (Issue #18)
+  - `_strip_schema_meta_fields()` was stripping `title` everywhere, including when it's a property name
+  - Fix: Only strip `title` as a schema meta field, preserve it when inside `properties`
+  - Example: `{"properties": {"title": {"type": "string"}}}` now correctly keeps the "title" property
+  - Fixes red-team schema failing with "required[1]: property is not defined" error
+
 ## [0.4.4] - 2025-12-23
 
 ### Changed
@@ -184,7 +193,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.1...v0.4.2

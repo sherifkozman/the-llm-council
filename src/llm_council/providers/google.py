@@ -51,7 +51,9 @@ LEGACY_MODEL_PREFIXES = (
 )
 
 
-def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
+def _strip_schema_meta_fields(
+    schema: dict[str, Any], *, _inside_properties: bool = False
+) -> dict[str, Any]:
     """Strip fields from JSON schema that Google's SDK doesn't accept.
 
     Google's protos.Schema only accepts a limited subset of JSON Schema fields:
@@ -60,19 +62,25 @@ def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
     It rejects standard JSON Schema fields like $schema, title, additionalProperties.
     This function recursively removes unsupported fields.
 
+    IMPORTANT: "title" is only stripped when it's a schema meta field, NOT when it's
+    a property name inside "properties". For example:
+    - {"title": "MySchema", "type": "object"} -> "title" is stripped (meta field)
+    - {"properties": {"title": {"type": "string"}}} -> "title" is kept (property name)
+
     Args:
         schema: The original JSON schema.
+        _inside_properties: Internal flag - True when processing children of "properties".
 
     Returns:
         A new schema with only Google-supported fields.
     """
     # Fields NOT supported by Google's Schema protobuf
+    # Note: "title" is handled specially - only stripped at schema level, not as property name
     unsupported_fields = {
         "$schema",
         "$id",
         "$ref",
         "$comment",
-        "title",
         "additionalProperties",
         "default",
         "examples",
@@ -95,13 +103,28 @@ def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
         if key in unsupported_fields:
             continue
 
-        if isinstance(value, dict):
+        # "title" is only a meta field at the schema level, not inside properties
+        # e.g., {"properties": {"title": {"type": "string"}}} - "title" is a property name
+        if key == "title" and not _inside_properties:
+            continue
+
+        if key == "properties" and isinstance(value, dict):
+            # Process properties - children are property names, not schema fields
+            result[key] = {
+                prop_name: _strip_schema_meta_fields(prop_schema, _inside_properties=True)
+                if isinstance(prop_schema, dict)
+                else prop_schema
+                for prop_name, prop_schema in value.items()
+            }
+        elif isinstance(value, dict):
             # Recursively process nested objects
-            result[key] = _strip_schema_meta_fields(value)
+            result[key] = _strip_schema_meta_fields(value, _inside_properties=False)
         elif isinstance(value, list):
             # Process arrays that might contain schemas
             result[key] = [
-                _strip_schema_meta_fields(item) if isinstance(item, dict) else item
+                _strip_schema_meta_fields(item, _inside_properties=False)
+                if isinstance(item, dict)
+                else item
                 for item in value
             ]
         else:
