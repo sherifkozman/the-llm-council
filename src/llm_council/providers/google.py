@@ -7,6 +7,7 @@ Direct integration with the Google Generative AI API for Gemini models.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import time
 
@@ -107,6 +108,9 @@ def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
             result[key] = value
 
     return result
+
+
+logger = logging.getLogger(__name__)
 
 
 class GoogleProvider(ProviderAdapter):

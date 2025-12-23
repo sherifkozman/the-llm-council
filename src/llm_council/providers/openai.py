@@ -7,6 +7,7 @@ Direct integration with the OpenAI API for GPT models.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import time
 from collections.abc import AsyncIterator
@@ -148,6 +149,9 @@ def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
             result[key] = value
 
     return result
+
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(ProviderAdapter):
