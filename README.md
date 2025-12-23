@@ -89,7 +89,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 | **OS** | macOS, Linux, Windows (native or WSL) |
 | **API Key** | At least one provider key (see below) |
 
-### Supported API Keys
+### Supported Providers
 
 | Provider | Environment Variable | Notes |
 |----------|---------------------|-------|
@@ -97,7 +97,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 | OpenAI | `OPENAI_API_KEY` | Direct GPT access |
 | Anthropic | `ANTHROPIC_API_KEY` | Direct Claude access |
 | Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
-| Vertex AI | `GOOGLE_CLOUD_PROJECT` | Enterprise GCP - 200+ models |
+| Vertex AI | `GOOGLE_CLOUD_PROJECT` + ADC | Enterprise GCP - 200+ models |
 
 ## Installation
 
@@ -318,8 +318,19 @@ myprovider = "my_package.providers:MyProvider"
 ### Environment Variables
 
 ```bash
-# Required: OpenRouter API key
+# OpenRouter (recommended - single key for all models)
 export OPENROUTER_API_KEY="your-key"
+
+# Direct APIs
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+export GOOGLE_API_KEY="..."
+
+# Vertex AI (Enterprise GCP)
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
+# Auth: gcloud auth application-default login OR
+# export GOOGLE_APPLICATION_CREDENTIALS="/path/to/sa.json"
 
 # Multi-model council: comma-separated OpenRouter model IDs
 export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
