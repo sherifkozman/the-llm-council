@@ -77,6 +77,59 @@ JSON_MODE_ONLY_MODELS = frozenset({
 })
 
 
+def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
+    """Transform a JSON schema for OpenAI strict mode compatibility.
+
+    OpenAI's strict mode requires ALL properties to be listed in the `required`
+    array. Optional properties are not allowed in strict mode.
+
+    This function recursively processes the schema to:
+    1. Remove $schema meta field (not needed by OpenAI)
+    2. Add all properties to the required array
+    3. Process nested object schemas recursively
+
+    Args:
+        schema: The original JSON schema.
+
+    Returns:
+        A new schema compatible with OpenAI strict mode.
+    """
+    result = {}
+
+    for key, value in schema.items():
+        # Skip $schema meta field
+        if key == "$schema":
+            continue
+
+        if key == "properties" and isinstance(value, dict):
+            # Recursively process nested object properties
+            result[key] = {
+                prop_name: _make_schema_strict_compatible(prop_schema)
+                if isinstance(prop_schema, dict) and prop_schema.get("type") == "object"
+                else (
+                    {**prop_schema, "items": _make_schema_strict_compatible(prop_schema["items"])}
+                    if isinstance(prop_schema, dict)
+                    and prop_schema.get("type") == "array"
+                    and isinstance(prop_schema.get("items"), dict)
+                    and prop_schema["items"].get("type") == "object"
+                    else prop_schema
+                )
+                for prop_name, prop_schema in value.items()
+            }
+            # Make ALL properties required for strict mode
+            result["required"] = list(value.keys())
+        elif key == "required":
+            # Skip - we'll set this when processing properties
+            continue
+        elif isinstance(value, dict) and value.get("type") == "object":
+            # Recursively process nested object schemas
+            result[key] = _make_schema_strict_compatible(value)
+        else:
+            result[key] = value
+
+    return result
+
+
 class OpenAIProvider(ProviderAdapter):
     """OpenAI API provider adapter.
 
@@ -171,12 +224,17 @@ class OpenAIProvider(ProviderAdapter):
         if request.structured_output:
             model = request.model or self._default_model
             if self._model_supports_structured_output(model):
+                # Transform schema for strict mode compatibility
+                # OpenAI strict mode requires ALL properties in required array
+                transformed_schema = _make_schema_strict_compatible(
+                    dict(request.structured_output.json_schema)
+                )
                 kwargs["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
                         "name": request.structured_output.name,
                         "strict": request.structured_output.strict,
-                        "schema": dict(request.structured_output.json_schema),
+                        "schema": transformed_schema,
                     },
                 }
             elif model in JSON_MODE_ONLY_MODELS:

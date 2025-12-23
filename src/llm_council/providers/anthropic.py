@@ -49,6 +49,40 @@ STRUCTURED_OUTPUT_MODELS = frozenset({
 })
 
 
+def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
+    """Strip meta fields from JSON schema that Anthropic's API doesn't need.
+
+    Removes `$schema` and other JSON Schema meta fields that aren't part
+    of the actual schema definition.
+
+    Args:
+        schema: The original JSON schema.
+
+    Returns:
+        A new schema without meta fields.
+    """
+    result: dict[str, Any] = {}
+
+    for key, value in schema.items():
+        # Skip $schema and other meta fields
+        if key in ("$schema", "$id", "$ref", "$comment"):
+            continue
+
+        if isinstance(value, dict):
+            # Recursively process nested objects
+            result[key] = _strip_schema_meta_fields(value)
+        elif isinstance(value, list):
+            # Process arrays that might contain schemas
+            result[key] = [
+                _strip_schema_meta_fields(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            result[key] = value
+
+    return result
+
+
 class AnthropicProvider(ProviderAdapter):
     """Anthropic API provider adapter.
 
@@ -148,9 +182,12 @@ class AnthropicProvider(ProviderAdapter):
         if request.structured_output:
             if self._model_supports_structured_output(model):
                 use_beta = True
+                # Strip $schema and other meta fields
                 kwargs["output_format"] = {
                     "type": "json_schema",
-                    "schema": dict(request.structured_output.json_schema),
+                    "schema": _strip_schema_meta_fields(
+                        dict(request.structured_output.json_schema)
+                    ),
                 }
             # else: model doesn't support structured output, skip (rely on prompt)
         elif request.response_format:

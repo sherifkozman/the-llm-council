@@ -30,6 +30,59 @@ FAST_MODEL = "anthropic/claude-3-haiku"
 REASONING_MODEL = "anthropic/claude-3-opus"
 
 
+def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
+    """Transform a JSON schema for OpenAI strict mode compatibility.
+
+    OpenRouter uses OpenAI-compatible format, which in strict mode requires
+    ALL properties to be listed in the `required` array.
+
+    This function recursively processes the schema to:
+    1. Remove $schema meta field (not needed)
+    2. Add all properties to the required array
+    3. Process nested object schemas recursively
+
+    Args:
+        schema: The original JSON schema.
+
+    Returns:
+        A new schema compatible with OpenAI strict mode.
+    """
+    result: dict[str, Any] = {}
+
+    for key, value in schema.items():
+        # Skip $schema meta field
+        if key == "$schema":
+            continue
+
+        if key == "properties" and isinstance(value, dict):
+            # Recursively process nested object properties
+            result[key] = {
+                prop_name: _make_schema_strict_compatible(prop_schema)
+                if isinstance(prop_schema, dict) and prop_schema.get("type") == "object"
+                else (
+                    {**prop_schema, "items": _make_schema_strict_compatible(prop_schema["items"])}
+                    if isinstance(prop_schema, dict)
+                    and prop_schema.get("type") == "array"
+                    and isinstance(prop_schema.get("items"), dict)
+                    and prop_schema["items"].get("type") == "object"
+                    else prop_schema
+                )
+                for prop_name, prop_schema in value.items()
+            }
+            # Make ALL properties required for strict mode
+            result["required"] = list(value.keys())
+        elif key == "required":
+            # Skip - we'll set this when processing properties
+            continue
+        elif isinstance(value, dict) and value.get("type") == "object":
+            # Recursively process nested object schemas
+            result[key] = _make_schema_strict_compatible(value)
+        else:
+            result[key] = value
+
+    return result
+
+
 class OpenRouterProvider(ProviderAdapter):
     """OpenRouter API provider adapter.
 
@@ -156,12 +209,17 @@ class OpenRouterProvider(ProviderAdapter):
         #
         # We apply the format for all models and let OpenRouter handle compatibility.
         if request.structured_output:
+            # Transform schema for strict mode compatibility
+            # OpenAI strict mode requires ALL properties in required array
+            transformed_schema = _make_schema_strict_compatible(
+                dict(request.structured_output.json_schema)
+            )
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": request.structured_output.name,
                     "strict": request.structured_output.strict,
-                    "schema": dict(request.structured_output.json_schema),
+                    "schema": transformed_schema,
                 },
             }
         elif request.response_format:

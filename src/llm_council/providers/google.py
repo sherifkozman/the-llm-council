@@ -46,6 +46,40 @@ LEGACY_MODEL_PREFIXES = (
 )
 
 
+def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
+    """Strip meta fields from JSON schema that Google's SDK doesn't accept.
+
+    Google's Generative AI SDK doesn't accept the `$schema` meta field
+    that's standard in JSON Schema. This function recursively removes it.
+
+    Args:
+        schema: The original JSON schema.
+
+    Returns:
+        A new schema without $schema and other meta fields.
+    """
+    result: dict[str, Any] = {}
+
+    for key, value in schema.items():
+        # Skip $schema and other meta fields Google doesn't accept
+        if key in ("$schema", "$id", "$ref", "$comment"):
+            continue
+
+        if isinstance(value, dict):
+            # Recursively process nested objects
+            result[key] = _strip_schema_meta_fields(value)
+        elif isinstance(value, list):
+            # Process arrays that might contain schemas
+            result[key] = [
+                _strip_schema_meta_fields(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            result[key] = value
+
+    return result
+
+
 class GoogleProvider(ProviderAdapter):
     """Google AI API provider adapter.
 
@@ -134,7 +168,10 @@ class GoogleProvider(ProviderAdapter):
         if request.structured_output:
             if self._model_supports_structured_output(model):
                 generation_config["response_mime_type"] = "application/json"
-                generation_config["response_schema"] = dict(request.structured_output.json_schema)
+                # Strip $schema and other meta fields Google doesn't accept
+                generation_config["response_schema"] = _strip_schema_meta_fields(
+                    dict(request.structured_output.json_schema)
+                )
             elif self._is_legacy_model(model):
                 # Fall back to simple JSON mode for older models (no schema enforcement)
                 generation_config["response_mime_type"] = "application/json"
