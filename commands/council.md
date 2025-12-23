@@ -12,6 +12,8 @@ arguments:
 
 Run the LLM Council with the specified subagent and task.
 
+> **Requires:** `pip install the-llm-council` and at least one API key configured.
+
 ## Subagents
 - `implementer` - Feature code, bug fixes
 - `reviewer` - Code review, security audit

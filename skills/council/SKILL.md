@@ -7,6 +7,8 @@ description: Run multi-LLM council for adversarial debate and cross-validation. 
 
 Multi-model council: parallel drafts → adversarial critique → validated synthesis.
 
+> **Prerequisite:** This skill requires the `the-llm-council` Python package to be installed. The skill provides IDE integration but the actual council runs via the installed CLI. If you see `command not found: council`, run `pip install the-llm-council` first.
+
 ## Setup
 
 ### 1. Install
