@@ -56,7 +56,7 @@ dev = [
 anthropic = ["anthropic>=0.18"]
 openai = ["openai>=1.0"]
 google = ["google-genai>=1.0"]
-vertex = ["google-genai>=1.0", "google-auth>=2.0"]
+vertex = ["google-genai>=1.0", "google-auth>=2.0", "anthropic[vertex]>=0.18"]
 all = [
     "the-llm-council[anthropic,openai,google,vertex]"
 ]

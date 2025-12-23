@@ -222,37 +222,46 @@ Available models:
 
 ## Vertex AI (Enterprise GCP)
 
-Vertex AI provides enterprise access to 200+ models (Gemini, Claude, Llama, Mistral) through Google Cloud with unified billing and IAM.
+Vertex AI provides enterprise access to Gemini and Claude models through Google Cloud with unified billing and IAM.
+
+The Vertex AI provider automatically routes to the appropriate SDK based on the model:
+- **Gemini models**: Uses google-genai SDK (region: us-central1)
+- **Claude models**: Uses anthropic[vertex] SDK (region: global)
 
 ### Setup
 
-**Option 1: Application Default Credentials (ADC)**
-
-1. Authenticate with gcloud:
+**Step 1: Authenticate with gcloud**
 
 ```bash
 gcloud auth application-default login
 ```
 
-2. Set environment variables:
-
-```bash
-export GOOGLE_CLOUD_PROJECT="your-project-id"
-export GOOGLE_CLOUD_LOCATION="us-central1"  # optional, defaults to us-central1
-```
-
-**Option 2: Service Account**
-
-1. Create a service account with Vertex AI permissions
-2. Download the JSON key file
-3. Set environment variables:
+Or use a service account:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-export GOOGLE_CLOUD_PROJECT="your-project-id"
 ```
 
-4. Verify setup:
+**Step 2: Configure for your model type**
+
+For Gemini models:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
+export VERTEX_AI_MODEL="gemini-2.5-pro"     # optional, default: gemini-2.0-flash
+```
+
+For Claude models:
+
+```bash
+# pip install the-llm-council[vertex] includes both Gemini and Claude SDKs
+export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
+export CLOUD_ML_REGION="global"              # Claude uses global region
+export ANTHROPIC_MODEL="claude-opus-4-5@20251101"
+```
+
+**Step 3: Verify setup**
 
 ```bash
 council doctor
@@ -287,33 +296,27 @@ asyncio.run(main())
 
 ### Model Selection
 
-Default model: `gemini-2.0-flash`
-
-Override via config:
-
-```yaml
-providers:
-  - name: vertex-ai
-    project: ${GOOGLE_CLOUD_PROJECT}
-    location: us-central1
-    default_model: gemini-2.5-pro
-```
-
-Available models (via Model Garden):
+**Gemini Models** (via `VERTEX_AI_MODEL`):
 - `gemini-2.0-flash` - Fast and capable (default)
 - `gemini-2.5-pro` - Most capable Gemini
 - `gemini-2.5-flash` - Balanced performance
-- Claude, Llama, Mistral via Model Garden
 
-### When to Use Vertex AI vs Google API
+**Claude Models** (via `ANTHROPIC_MODEL`):
+- `claude-opus-4-5@20251101` - Most capable Claude
+- `claude-sonnet-4-5@20250929` - Balanced Claude
+- `claude-haiku-4-5@20250929` - Fast Claude
+
+**Note:** Claude models require version suffix (e.g., `@20251101`).
+
+### When to Use Vertex AI vs Direct APIs
 
 | Use Case | Recommended Provider |
 |----------|---------------------|
-| Quick prototyping | Google (API key) |
-| Enterprise/production | Vertex AI (GCP) |
-| Need Claude/Llama via GCP | Vertex AI |
-| Unified GCP billing | Vertex AI |
-| Simple setup | Google (API key) |
+| Quick prototyping | Google API / Anthropic API |
+| Enterprise/production | Vertex AI (unified GCP billing) |
+| Claude with GCP billing | Vertex AI |
+| Gemini with GCP billing | Vertex AI |
+| Simple setup | Direct APIs |
 
 ## Using Multiple Providers
 

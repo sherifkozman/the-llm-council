@@ -13,7 +13,7 @@ The foundation is complete:
 - **Validated synthesis** - JSON schema validation with retry logic
 - **10 specialized subagents** - router, planner, assessor, researcher, architect, implementer, reviewer, test-designer, shipper, red-team
 - **Graceful degradation** - Continues if some providers fail
-- **Provider flexibility** - OpenRouter, direct APIs (Anthropic, OpenAI, Google), Vertex AI (Enterprise GCP)
+- **Provider flexibility** - OpenRouter, direct APIs (Anthropic, OpenAI, Google), Vertex AI (Gemini + Claude)
 - **CLI tooling** - `council run`, `council doctor`, `council config`
 - **Extended reasoning** - Support for thinking/reasoning modes (Anthropic, Google, OpenAI)
 - **Artifact store** - Content-addressed storage with tiered summarization

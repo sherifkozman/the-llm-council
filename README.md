@@ -97,7 +97,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 | OpenAI | `OPENAI_API_KEY` | Direct GPT access |
 | Anthropic | `ANTHROPIC_API_KEY` | Direct Claude access |
 | Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
-| Vertex AI | `GOOGLE_CLOUD_PROJECT` + ADC | Enterprise GCP - 200+ models |
+| Vertex AI | `GOOGLE_CLOUD_PROJECT` or `ANTHROPIC_VERTEX_PROJECT_ID` + ADC | Enterprise GCP - Gemini + Claude |
 
 ## Installation
 
@@ -326,10 +326,17 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export GOOGLE_API_KEY="..."
 
-# Vertex AI (Enterprise GCP)
+# Vertex AI - Gemini (Enterprise GCP)
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
-# Auth: gcloud auth application-default login OR
+export VERTEX_AI_MODEL="gemini-2.5-pro"     # optional, default: gemini-2.0-flash
+
+# Vertex AI - Claude (Enterprise GCP)
+export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
+export CLOUD_ML_REGION="global"              # Claude uses global region
+export ANTHROPIC_MODEL="claude-opus-4-5@20251101"  # model with version
+
+# Auth for Vertex AI: gcloud auth application-default login OR
 # export GOOGLE_APPLICATION_CREDENTIALS="/path/to/sa.json"
 
 # Multi-model council: comma-separated OpenRouter model IDs

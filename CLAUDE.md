@@ -81,24 +81,31 @@ council doctor
 
 ### Vertex AI (Enterprise GCP)
 
-Access 200+ models (Gemini, Claude, Llama, Mistral) through Google Cloud.
+Access Gemini and Claude models through Google Cloud with enterprise billing and IAM.
 
+**For Gemini models:**
 ```bash
-# Option 1: Application Default Credentials
 gcloud auth application-default login
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
+export VERTEX_AI_MODEL="gemini-2.5-pro"     # optional, default: gemini-2.0-flash
 
-# Option 2: Service Account
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/sa.json"
-export GOOGLE_CLOUD_PROJECT="your-project-id"
-
-# Verify setup
 council doctor
-
-# Use with council
 council run architect "Design a cache" --providers vertex-ai
 ```
+
+**For Claude models:**
+```bash
+gcloud auth application-default login
+export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
+export CLOUD_ML_REGION="global"  # Claude uses global region
+export ANTHROPIC_MODEL="claude-opus-4-5@20251101"
+
+council doctor
+council run architect "Design a cache" --providers vertex-ai
+```
+
+**Note:** `pip install the-llm-council[vertex]` includes both Gemini and Claude SDKs.
 
 ## Troubleshooting
 

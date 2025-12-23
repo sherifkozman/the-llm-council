@@ -10,16 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.8] - 2025-12-23
 
 ### Added
-- **Vertex AI provider** - Enterprise access to Google Cloud AI models
-  - Access 200+ models: Gemini, Claude, Llama, Mistral via GCP
+- **Vertex AI provider** - Enterprise access to Gemini and Claude via Google Cloud
+  - **Gemini support**: Uses `google-genai` SDK (region: us-central1)
+    - Env vars: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `VERTEX_AI_MODEL`
+    - Install: `pip install the-llm-council[vertex]`
+  - **Claude support**: Uses `anthropic[vertex]` SDK (region: global)
+    - Env vars: `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, `ANTHROPIC_MODEL`
+    - Install: `pip install the-llm-council[vertex]` (includes both SDKs)
+  - Automatic model routing based on model prefix (claude-* vs gemini-*)
   - Two authentication methods (equally supported):
     - **ADC**: `gcloud auth application-default login`
     - **Service Account**: `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`
-  - Environment variables: `GOOGLE_CLOUD_PROJECT` (required), `GOOGLE_CLOUD_LOCATION` (optional)
-  - Reuses `google-genai` SDK for consistent API patterns
-  - Install: `pip install the-llm-council[vertex]`
   - Usage: `council run architect "Design a cache" --providers vertex-ai`
-  - Live tested: doctor, generation, streaming, structured output, council run
+  - Live tested: doctor, generation, streaming, structured output for both Gemini and Claude
 
 ## [0.4.7] - 2025-12-23
 
