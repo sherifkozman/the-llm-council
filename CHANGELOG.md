@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2025-12-22
+
+### Fixed
+- **OpenAI provider: GPT-5.x and o-series require max_completion_tokens** (fixes #13)
+  - New models return 400 error with `max_tokens` parameter
+  - Added `MAX_COMPLETION_TOKENS_PREFIXES` to detect affected models
+  - Automatically uses `max_completion_tokens` for gpt-5.x and o-series
+
+- **Google provider: Schema field 'minItems' not supported** (fixes #14)
+  - Added `minItems`, `maxItems`, `uniqueItems` to stripped schema fields
+  - Fixes failures with complex schemas (e.g., red-team) on Google provider
+
+- **Google provider: Suppress ALTS gRPC warnings** (fixes #12)
+  - Set `GRPC_VERBOSITY=ERROR` at module load to suppress noisy warnings
+  - Warnings are harmless but cluttered output when running outside GCP
+
 ## [0.3.0] - 2025-12-22
 
 ### Added
@@ -123,7 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.1...v0.2.2

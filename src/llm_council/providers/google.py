@@ -9,6 +9,10 @@ from __future__ import annotations
 import contextlib
 import os
 import time
+
+# Suppress noisy gRPC ALTS warnings when running outside GCP (Issue #12)
+# These warnings appear multiple times per API call but are harmless
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
@@ -77,6 +81,10 @@ def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
         "maximum",
         "pattern",
         "format",
+        # Array validation fields (Issue #14)
+        "minItems",
+        "maxItems",
+        "uniqueItems",
     }
 
     result: dict[str, Any] = {}

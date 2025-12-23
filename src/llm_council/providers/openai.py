@@ -92,6 +92,10 @@ REASONING_MODELS = frozenset({
 # Prefixes for reasoning model detection
 REASONING_MODEL_PREFIXES = ("o1", "o3", "o4")
 
+# Models that use max_completion_tokens instead of max_tokens
+# GPT-5.x and o-series use the new parameter
+MAX_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
 
 def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
     """Transform a JSON schema for OpenAI strict mode compatibility.
@@ -224,7 +228,12 @@ class OpenAIProvider(ProviderAdapter):
         }
 
         if request.max_tokens is not None:
-            kwargs["max_tokens"] = request.max_tokens
+            model = request.model or self._default_model
+            # GPT-5.x and o-series use max_completion_tokens instead of max_tokens
+            if any(model.startswith(p) for p in MAX_COMPLETION_TOKENS_PREFIXES):
+                kwargs["max_completion_tokens"] = request.max_tokens
+            else:
+                kwargs["max_tokens"] = request.max_tokens
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
         if request.top_p is not None:
