@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-llm-council"
-version = "0.4.3"
+version = "0.4.4"
 description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
 readme = "README.md"
 license = "MIT"

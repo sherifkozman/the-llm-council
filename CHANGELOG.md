@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2025-12-23
+
+### Changed
+- **CI: Bump GitHub Actions to Node 24 versions**
+  - `actions/checkout`: v4 → v6
+  - `actions/setup-python`: v5 → v6
+  - `astral-sh/setup-uv`: v4 → v7
+  - Improved CI performance with Node 24 runtime
+
 ## [0.4.3] - 2025-12-22
 
 ### Fixed
@@ -175,7 +184,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.0...v0.4.1
