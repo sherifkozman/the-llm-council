@@ -10,6 +10,23 @@ description: >
 model_pack: harsh_critic
 calls: 3-5  # Claude + Codex + Gemini drafts, critique, synthesis
 
+# Provider and model preferences (Issue #11)
+providers:
+  preferred: [anthropic, openai]
+  fallback: [openrouter]
+
+models:
+  anthropic: claude-opus-4-5
+  openai: o3-mini              # o-series for deep reasoning
+  google: gemini-3-pro
+
+# Enable extended reasoning for thorough security analysis
+reasoning:
+  enabled: true
+  effort: high                 # OpenAI o-series: maximum reasoning
+  budget_tokens: 32768         # Anthropic: large thinking budget
+  thinking_level: high         # Google: maximum analysis
+
 schema: red-team
 
 prompts:

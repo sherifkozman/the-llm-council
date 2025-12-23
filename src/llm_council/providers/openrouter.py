@@ -24,10 +24,12 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-# Default models for different use cases
-DEFAULT_MODEL = "anthropic/claude-3.5-sonnet"
-FAST_MODEL = "anthropic/claude-3-haiku"
-REASONING_MODEL = "anthropic/claude-3-opus"
+# Default models for different use cases (December 2025)
+DEFAULT_MODEL = "anthropic/claude-opus-4-5"
+FAST_MODEL = "anthropic/claude-3-5-haiku"
+REASONING_MODEL = "anthropic/claude-opus-4-5"
+CODE_MODEL = "openai/gpt-5.1"
+CRITIC_MODEL = "anthropic/claude-sonnet-4-5"
 
 
 def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
@@ -225,6 +227,13 @@ class OpenRouterProvider(ProviderAdapter):
         elif request.response_format:
             # Legacy pass-through for backwards compatibility
             body["response_format"] = dict(request.response_format)
+
+        # Handle reasoning configuration
+        # OpenRouter passes through to underlying models (OpenAI o-series, etc.)
+        if request.reasoning and request.reasoning.enabled:
+            if request.reasoning.effort:
+                # Pass through reasoning_effort for OpenAI o-series models
+                body["reasoning_effort"] = request.reasoning.effort
 
         return body
 

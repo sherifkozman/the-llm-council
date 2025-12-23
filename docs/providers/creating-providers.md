@@ -447,6 +447,89 @@ result = await council.run(
 )
 ```
 
+## Reasoning/Thinking Configuration (v0.3.0+)
+
+LLM Council provides a provider-agnostic `ReasoningConfig` class for extended reasoning/thinking APIs.
+
+### ReasoningConfig
+
+```python
+from llm_council.providers.base import ReasoningConfig
+
+config = ReasoningConfig(
+    enabled=True,              # Enable reasoning mode
+    effort="high",             # OpenAI o-series: low/medium/high/none
+    budget_tokens=32768,       # Anthropic: 1024-128000
+    thinking_level="high",     # Google Gemini 3.x: minimal/low/medium/high
+)
+```
+
+### Provider-Specific Format Transformations
+
+#### OpenAI Format
+
+```python
+# request.reasoning is a ReasoningConfig
+if request.reasoning and request.reasoning.enabled:
+    model = request.model or self._default_model
+    if self._model_supports_reasoning(model):
+        effort = request.reasoning.effort or "medium"
+        kwargs["reasoning_effort"] = effort
+```
+
+**Supported Models:** o1, o1-mini, o3, o3-mini, o3-pro, o4-mini
+
+#### Anthropic Format
+
+Anthropic uses a `thinking` block with budget_tokens. Extended thinking requires the beta API:
+
+```python
+if request.reasoning and request.reasoning.enabled:
+    use_beta = True  # Extended thinking requires beta API
+    budget = request.reasoning.budget_tokens or 8192
+    budget = max(min(budget, 128000), 1024)  # Clamp to valid range
+    kwargs["thinking"] = {
+        "type": "enabled",
+        "budget_tokens": budget,
+    }
+```
+
+**Budget Range:** 1024 - 128000 tokens
+
+#### Google/Gemini Format
+
+Google uses `thinking_config` with either `thinking_level` (Gemini 3.x) or `thinking_budget` (Gemini 2.5):
+
+```python
+if request.reasoning and request.reasoning.enabled:
+    if request.reasoning.thinking_level:
+        # Gemini 3.x style: minimal, low, medium, high
+        generation_config["thinking_config"] = {
+            "thinking_level": request.reasoning.thinking_level.upper(),
+        }
+    elif request.reasoning.budget_tokens:
+        # Gemini 2.5 style: token budget (max 24576)
+        generation_config["thinking_config"] = {
+            "thinking_budget": min(request.reasoning.budget_tokens, 24576),
+        }
+    else:
+        # Default: medium thinking level
+        generation_config["thinking_config"] = {
+            "thinking_level": "MEDIUM",
+        }
+```
+
+**Gemini 3.x Thinking Levels:** MINIMAL, LOW, MEDIUM, HIGH
+**Gemini 2.5 Budget Range:** 0 - 24576 tokens
+
+### Reasoning API Quick Reference
+
+| Provider | Field | Format |
+|----------|-------|--------|
+| OpenAI | `reasoning_effort` | `"low"`, `"medium"`, `"high"` |
+| Anthropic | `thinking` | `{type: "enabled", budget_tokens: N}` + beta API |
+| Google | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: N}` |
+
 ## Provider Implementation Checklist
 
 - [ ] Inherit from `ProviderAdapter`
@@ -456,10 +539,13 @@ result = await council.run(
 - [ ] Implement `supports()` for capability checking
 - [ ] Implement `doctor()` for health checks
 - [ ] Handle `StructuredOutputConfig` → provider-specific format
+- [ ] Handle `ReasoningConfig` → provider-specific format (v0.3.0+)
 - [ ] Define `STRUCTURED_OUTPUT_MODEL_PREFIXES` for model capability checking
+- [ ] Define `REASONING_MODEL_PREFIXES` for reasoning capability checking
 - [ ] Handle legacy `response_format` for backward compatibility
 - [ ] Register via `_register()` function and entry points
 - [ ] Add proper error handling with descriptive messages
+- [ ] Log warnings when configuration is capped or ignored
 - [ ] Include usage tracking in `GenerateResponse`
 
 ## Provider Examples
@@ -472,12 +558,23 @@ See existing implementations:
 
 ## API Format Quick Reference
 
+### Structured Output
+
 | Provider | Field | Format |
 |----------|-------|--------|
 | OpenAI | `response_format` | `{type: "json_schema", json_schema: {name, strict, schema}}` |
 | OpenRouter | `response_format` | Same as OpenAI |
 | Anthropic | `output_format` | `{type: "json_schema", schema}` + beta header |
 | Google | `generation_config` | `{response_mime_type: "application/json", response_schema}` |
+
+### Reasoning/Thinking (v0.3.0+)
+
+| Provider | Field | Format |
+|----------|-------|--------|
+| OpenAI | `reasoning_effort` | `"low"`, `"medium"`, `"high"` (o-series models) |
+| OpenRouter | `reasoning_effort` | Pass-through to underlying provider |
+| Anthropic | `thinking` | `{type: "enabled", budget_tokens: 1024-128000}` + beta API |
+| Google | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: 0-24576}` |
 
 ## Next Steps
 

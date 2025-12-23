@@ -20,7 +20,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-5.1"
 
 # Models that support structured output with json_schema response_format
 # See: https://platform.openai.com/docs/guides/structured-outputs
@@ -75,6 +75,22 @@ JSON_MODE_ONLY_MODELS = frozenset({
     "gpt-3.5-turbo-0125",
     "gpt-3.5-turbo-1106",
 })
+
+# o-series reasoning models that support reasoning_effort parameter
+# See: https://platform.openai.com/docs/guides/reasoning
+REASONING_MODELS = frozenset({
+    "o1",
+    "o1-2024-12-17",
+    "o1-mini",
+    "o1-mini-2024-09-12",
+    "o3",
+    "o3-mini",
+    "o3-pro",
+    "o4-mini",
+})
+
+# Prefixes for reasoning model detection
+REASONING_MODEL_PREFIXES = ("o1", "o3", "o4")
 
 
 def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
@@ -245,6 +261,26 @@ class OpenAIProvider(ProviderAdapter):
             # Legacy pass-through for backwards compatibility
             kwargs["response_format"] = dict(request.response_format)
 
+        # Handle reasoning configuration for o-series models
+        if request.reasoning and request.reasoning.enabled:
+            model = request.model or self._default_model
+            if self._model_supports_reasoning(model):
+                # Default to "medium" if effort not specified
+                effort = request.reasoning.effort or "medium"
+                # Note: "none" is only valid for GPT-5.2+, o-series requires low/medium/high
+                if effort == "none" and model.startswith(REASONING_MODEL_PREFIXES):
+                    logger.warning(
+                        "reasoning_effort='none' not supported for o-series model %s, using 'medium'",
+                        model,
+                    )
+                    effort = "medium"
+                kwargs["reasoning_effort"] = effort
+            else:
+                logger.warning(
+                    "Model %s does not support reasoning_effort parameter; ignored",
+                    model,
+                )
+
         if request.stream:
             kwargs["stream"] = True
             return self._generate_stream(client, kwargs)
@@ -331,6 +367,24 @@ class OpenAIProvider(ProviderAdapter):
                 break
 
         return False
+
+    def _model_supports_reasoning(self, model: str) -> bool:
+        """Check if a model supports the reasoning_effort parameter.
+
+        Only o-series reasoning models (o1, o3, o4-mini) support this parameter.
+
+        Args:
+            model: The model identifier to check.
+
+        Returns:
+            True if the model supports reasoning_effort parameter.
+        """
+        # Direct match
+        if model in REASONING_MODELS:
+            return True
+
+        # Check if model starts with any o-series prefix
+        return any(model.startswith(prefix) for prefix in REASONING_MODEL_PREFIXES)
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""

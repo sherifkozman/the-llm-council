@@ -20,7 +20,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+DEFAULT_MODEL = "claude-opus-4-5"
 
 # Beta header required for structured outputs
 # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
@@ -208,6 +208,24 @@ class AnthropicProvider(ProviderAdapter):
                         "schema": dict(schema),
                     }
             # Note: simple json_object mode is not supported by Anthropic API
+
+        # Handle reasoning/thinking configuration
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+        if request.reasoning and request.reasoning.enabled:
+            use_beta = True  # Extended thinking requires beta API
+            # Anthropic uses budget_tokens with min 1024, max 128000
+            budget = request.reasoning.budget_tokens or 8192
+            budget = max(min(budget, 128000), 1024)  # Clamp to valid range
+            if request.reasoning.budget_tokens and request.reasoning.budget_tokens != budget:
+                logger.warning(
+                    "Anthropic budget_tokens clamped from %d to %d (valid range: 1024-128000)",
+                    request.reasoning.budget_tokens,
+                    budget,
+                )
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": budget,
+            }
 
         if request.stream:
             return self._generate_stream(client, kwargs, use_beta=use_beta)

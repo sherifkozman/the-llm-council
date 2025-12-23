@@ -32,20 +32,20 @@ class ModelPack(str, Enum):
     DEFAULT = "default"  # General purpose
 
 
-# Default models for each pack (OpenRouter format)
+# Default models for each pack (OpenRouter format) - December 2025
 DEFAULT_MODEL_PACKS: dict[ModelPack, str] = {
-    ModelPack.FAST: "anthropic/claude-3-haiku",
-    ModelPack.REASONING: "anthropic/claude-3-opus",
-    ModelPack.CODE: "openai/gpt-4o",
-    ModelPack.CRITIC: "anthropic/claude-3.5-sonnet",
-    ModelPack.DEFAULT: "anthropic/claude-3.5-sonnet",
+    ModelPack.FAST: "anthropic/claude-3-5-haiku",
+    ModelPack.REASONING: "anthropic/claude-opus-4-5",
+    ModelPack.CODE: "openai/gpt-5.1",
+    ModelPack.CRITIC: "anthropic/claude-sonnet-4-5",
+    ModelPack.DEFAULT: "anthropic/claude-opus-4-5",
 }
 
-# Default council models for multi-model runs
+# Default council models for multi-model runs - December 2025
 DEFAULT_COUNCIL_MODELS: list[str] = [
-    "anthropic/claude-3.5-sonnet",
-    "openai/gpt-4o",
-    "google/gemini-pro",
+    "anthropic/claude-opus-4-5",
+    "openai/gpt-5.1",
+    "google/gemini-3-flash-preview",
 ]
 
 # Environment variable names

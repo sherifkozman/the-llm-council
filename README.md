@@ -162,12 +162,12 @@ export OPENROUTER_API_KEY="your-key"
 # Run a council task
 council run implementer "Build a login page with OAuth"
 
-# Multi-model council (Claude + GPT-4 + Gemini debating)
+# Multi-model council (Claude + GPT-5 + Gemini debating)
 council run architect "Design a caching layer" \
-  --models "anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
+  --models "anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
 
 # Or set via environment variable
-export COUNCIL_MODELS="anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
+export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
 council run implementer "Build a login page"
 
 # With health check and verbose output
@@ -316,14 +316,49 @@ myprovider = "my_package.providers:MyProvider"
 export OPENROUTER_API_KEY="your-key"
 
 # Multi-model council: comma-separated OpenRouter model IDs
-export COUNCIL_MODELS="anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
+export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
 
 # Optional: Model pack overrides for specific task types
-export COUNCIL_MODEL_FAST="anthropic/claude-3-haiku"      # Quick tasks
-export COUNCIL_MODEL_REASONING="anthropic/claude-3-opus"  # Deep analysis
-export COUNCIL_MODEL_CODE="openai/gpt-4o"                 # Code generation
-export COUNCIL_MODEL_CRITIC="anthropic/claude-3.5-sonnet" # Adversarial critique
+export COUNCIL_MODEL_FAST="anthropic/claude-3-5-haiku"    # Quick tasks
+export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-5" # Deep analysis
+export COUNCIL_MODEL_CODE="openai/gpt-5.1"                # Code generation
+export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-5" # Adversarial critique
 ```
+
+### Per-Subagent Reasoning Configuration (v0.3.0+)
+
+Subagents can be configured with provider preferences, model overrides, and extended reasoning/thinking budgets in their YAML configs:
+
+```yaml
+# src/llm_council/subagents/red-team.yaml
+name: red-team
+model_pack: harsh_critic
+
+# Provider preferences
+providers:
+  preferred: [anthropic, openai]
+  fallback: [openrouter]
+  exclude: [google]
+
+# Model overrides per provider
+models:
+  anthropic: claude-opus-4-5
+  openai: o3-mini
+  google: gemini-3-pro
+
+# Extended reasoning/thinking configuration
+reasoning:
+  enabled: true
+  effort: high           # OpenAI o-series: low/medium/high
+  budget_tokens: 32768   # Anthropic: 1024-128000
+  thinking_level: high   # Google Gemini 3.x: minimal/low/medium/high
+```
+
+| Provider | Parameter | Values | Description |
+|----------|-----------|--------|-------------|
+| OpenAI | `effort` | low/medium/high | Reasoning effort for o-series models |
+| Anthropic | `budget_tokens` | 1024-128000 | Extended thinking token budget |
+| Google | `thinking_level` | minimal/low/medium/high | Gemini 3.x thinking level |
 
 ### Config File
 
@@ -332,7 +367,7 @@ export COUNCIL_MODEL_CRITIC="anthropic/claude-3.5-sonnet" # Adversarial critique
 providers:
   - name: openrouter
     api_key: ${OPENROUTER_API_KEY}
-    default_model: anthropic/claude-3-opus
+    default_model: anthropic/claude-opus-4-5
 
 defaults:
   timeout: 120

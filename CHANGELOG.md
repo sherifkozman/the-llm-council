@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-12-22
+
+### Added
+- **Per-subagent provider, model, and reasoning budget configuration** (implements #11)
+  - New YAML fields: `providers`, `models`, `reasoning` for fine-grained control
+  - `providers.preferred`, `providers.fallback`, `providers.exclude` for provider selection
+  - `models.<provider>` for per-provider model overrides
+  - `reasoning.enabled`, `reasoning.effort`, `reasoning.budget_tokens`, `reasoning.thinking_level`
+  - `ReasoningConfig` class in `providers/base.py` for provider-agnostic reasoning configuration
+  - Pydantic validation models: `ProviderPreferences`, `ModelOverrides`, `ReasoningBudget`
+  - Helper functions: `get_provider_preferences()`, `get_model_overrides()`, `get_reasoning_budget()`
+
+- **Reasoning/thinking API support for all major providers**
+  - OpenAI: `reasoning_effort` parameter for o-series models (o1, o3, o4-mini)
+  - Anthropic: `thinking` block with `budget_tokens` for extended thinking
+  - Google: `thinking_config` with `thinking_level` (Gemini 3.x) or `thinking_budget` (Gemini 2.5)
+  - OpenRouter: Pass-through support for underlying provider reasoning APIs
+
+### Changed
+- **Updated default models to December 2025 releases**
+  - OpenAI: `gpt-5.1` (was `gpt-4o`)
+  - Anthropic: `claude-opus-4-5` (was `claude-3-5-sonnet-20241022`)
+  - Google: `gemini-3-flash-preview` (was `gemini-2.0-flash-exp`)
+  - OpenRouter model packs updated to match
+
+- **red-team subagent now uses extended reasoning by default**
+  - `reasoning.enabled: true` with `effort: high`, `budget_tokens: 32768`, `thinking_level: high`
+  - Uses o3-mini for OpenAI, claude-opus-4-5 for Anthropic
+
+### Fixed
+- **Token budget validation and warnings** (post-review security fixes)
+  - Added maximum limit on `budget_tokens` (1024-128000) to prevent cost explosion
+  - Anthropic: Use beta API for extended thinking, log warning when budget clamped
+  - Google: Log warning when `thinking_budget` capped at provider maximum (24576)
+  - OpenAI: Default `reasoning_effort` to "medium" when enabled but not specified
+  - OpenAI: Warn and fallback when "none" effort used with o-series models
+  - OpenAI: Warn when reasoning requested for non-reasoning models
+
 ## [0.2.3] - 2025-12-22
 
 ### Fixed
@@ -85,7 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.0...v0.2.1

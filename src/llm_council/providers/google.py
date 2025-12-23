@@ -20,7 +20,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "gemini-2.0-flash-exp"
+DEFAULT_MODEL = "gemini-3-flash-preview"
 
 # Model prefixes that support structured output with response_schema
 # See: https://ai.google.dev/gemini-api/docs/structured-output
@@ -197,6 +197,33 @@ class GoogleProvider(ProviderAdapter):
                 # Fall back to simple JSON mode for older models (no schema enforcement)
                 generation_config["response_mime_type"] = "application/json"
             # else: model doesn't support structured output, skip
+
+        # Handle reasoning/thinking configuration
+        # Gemini 3.x uses thinking_level, Gemini 2.5 uses thinking_budget
+        if request.reasoning and request.reasoning.enabled:
+            if request.reasoning.thinking_level:
+                # Gemini 3.x style: minimal, low, medium, high
+                generation_config["thinking_config"] = {
+                    "thinking_level": request.reasoning.thinking_level.upper(),
+                }
+            elif request.reasoning.budget_tokens:
+                # Gemini 2.5 style: token budget (max 24576)
+                max_budget = 24576
+                budget = min(request.reasoning.budget_tokens, max_budget)
+                if request.reasoning.budget_tokens > max_budget:
+                    logger.warning(
+                        "Google thinking_budget capped from %d to %d (provider maximum)",
+                        request.reasoning.budget_tokens,
+                        max_budget,
+                    )
+                generation_config["thinking_config"] = {
+                    "thinking_budget": budget,
+                }
+            else:
+                # Default: medium thinking level
+                generation_config["thinking_config"] = {
+                    "thinking_level": "MEDIUM",
+                }
 
         if request.stream:
             return self._generate_stream(client, contents, generation_config)

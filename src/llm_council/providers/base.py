@@ -208,6 +208,38 @@ class StructuredOutputConfig(BaseModel):
     )
 
 
+class ReasoningConfig(BaseModel):
+    """Configuration for reasoning/thinking mode.
+
+    This provides a provider-agnostic representation for extended reasoning
+    that each provider transforms to their native API format:
+    - OpenAI: reasoning_effort parameter for o-series models
+    - Anthropic: thinking block with budget_tokens
+    - Google: thinking_config with thinking_level or thinking_budget
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable reasoning/thinking mode for this request.",
+    )
+    effort: Literal["low", "medium", "high", "none"] | None = Field(
+        default=None,
+        description="OpenAI reasoning effort level (low/medium/high, 'none' for GPT-5.2+).",
+    )
+    budget_tokens: int | None = Field(
+        default=None,
+        ge=1024,
+        le=128000,
+        description="Anthropic thinking budget in tokens (1024-128000).",
+    )
+    thinking_level: Literal["minimal", "low", "medium", "high"] | None = Field(
+        default=None,
+        description="Google Gemini 3.x thinking level.",
+    )
+
+
 class GenerateRequest(BaseModel):
     """Input parameters for a text generation request."""
 
@@ -233,6 +265,10 @@ class GenerateRequest(BaseModel):
     structured_output: StructuredOutputConfig | None = Field(
         default=None,
         description="Structured output configuration. Each provider transforms this to their native format.",
+    )
+    reasoning: ReasoningConfig | None = Field(
+        default=None,
+        description="Reasoning/thinking configuration. Each provider transforms this to their native format.",
     )
     metadata: Mapping[str, Any] | None = Field(default=None, description="Arbitrary metadata.")
 
