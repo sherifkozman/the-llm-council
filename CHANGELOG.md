@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2025-12-22
+
 ### Added
 - **Agent Skills plugin** for cross-platform IDE integration (Claude Code, OpenAI Codex, Cursor, VS Code)
   - `.claude-plugin/plugin.json` and `marketplace.json` for Claude Code marketplace
@@ -66,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sherifkozman/the-llm-council/releases/tag/v0.1.0
