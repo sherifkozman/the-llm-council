@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2025-12-22
+
+### Fixed
+- **OpenAI/OpenRouter: Strict mode requires additionalProperties: false** (fixes #17)
+  - OpenAI strict mode requires ALL object schemas to have `additionalProperties: false`
+  - Updated `_make_schema_strict_compatible()` in both providers to:
+    - Strip existing `additionalProperties` field from input schema
+    - Add `additionalProperties: false` to all object types
+    - Recursively process nested objects and arrays of objects
+  - Prevents "additionalProperties is required" validation errors
+
+### Documentation
+- Added **Default Reasoning Tiers** table to README documenting v0.4.0 reasoning defaults per subagent
+
 ## [0.4.2] - 2025-12-22
 
 ### Fixed
@@ -161,7 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.3.1...v0.4.0

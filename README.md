@@ -360,6 +360,16 @@ reasoning:
 | Anthropic | `budget_tokens` | 1024-128000 | Extended thinking token budget |
 | Google | `thinking_level` | minimal/low/medium/high | Gemini 3.x thinking level |
 
+#### Default Reasoning Tiers (v0.4.0+)
+
+All subagents have pre-configured reasoning defaults based on task complexity:
+
+| Tier | Subagents | Config | Use Case |
+|------|-----------|--------|----------|
+| **High** | architect, assessor, planner, reviewer, red-team | `effort: high`, `budget_tokens: 16384` | Deep analysis, critical decisions |
+| **Medium** | implementer, researcher | `effort: medium`, `budget_tokens: 8192` | Balanced code/research tasks |
+| **Disabled** | router, shipper, test-designer | `enabled: false` | Fast tasks, no overhead |
+
 ### Config File
 
 ```yaml

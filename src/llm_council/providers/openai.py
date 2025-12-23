@@ -107,25 +107,32 @@ MAX_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
     """Transform a JSON schema for OpenAI strict mode compatibility.
 
-    OpenAI's strict mode requires ALL properties to be listed in the `required`
-    array. Optional properties are not allowed in strict mode.
+    OpenAI's strict mode requires:
+    1. ALL properties must be listed in the `required` array
+    2. ALL object types must have `additionalProperties: false`
 
     This function recursively processes the schema to:
     1. Remove $schema meta field (not needed by OpenAI)
     2. Add all properties to the required array
-    3. Process nested object schemas recursively
+    3. Add additionalProperties: false to all objects
+    4. Process nested object schemas recursively
 
     Args:
         schema: The original JSON schema.
 
     Returns:
         A new schema compatible with OpenAI strict mode.
+
+    See: https://platform.openai.com/docs/guides/structured-outputs#additionalproperties
     """
     result: dict[str, Any] = {}
 
     for key, value in schema.items():
         # Skip $schema meta field
         if key == "$schema":
+            continue
+        # Skip additionalProperties - we'll set it ourselves
+        if key == "additionalProperties":
             continue
 
         if key == "properties" and isinstance(value, dict):
@@ -134,7 +141,10 @@ def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
                 prop_name: _make_schema_strict_compatible(prop_schema)
                 if isinstance(prop_schema, dict) and prop_schema.get("type") == "object"
                 else (
-                    {**prop_schema, "items": _make_schema_strict_compatible(prop_schema["items"])}
+                    {
+                        **prop_schema,
+                        "items": _make_schema_strict_compatible(prop_schema["items"]),
+                    }
                     if isinstance(prop_schema, dict)
                     and prop_schema.get("type") == "array"
                     and isinstance(prop_schema.get("items"), dict)
@@ -145,6 +155,8 @@ def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
             }
             # Make ALL properties required for strict mode
             result["required"] = list(value.keys())
+            # Strict mode requires additionalProperties: false
+            result["additionalProperties"] = False
         elif key == "required":
             # Skip - we'll set this when processing properties
             continue
@@ -153,6 +165,10 @@ def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
             result[key] = _make_schema_strict_compatible(value)
         else:
             result[key] = value
+
+    # Ensure all object types have additionalProperties: false
+    if schema.get("type") == "object" and "additionalProperties" not in result:
+        result["additionalProperties"] = False
 
     return result
 
