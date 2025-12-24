@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.12] - 2025-12-24
+
+### Fixed
+- **CI lint and type check fixes**
+  - Fixed ruff import sorting in `vertex.py` (I001)
+  - Fixed ruff formatting in `main.py`
+  - Fixed mypy type annotation in `_load_config_defaults()`
+
 ## [0.4.11] - 2025-12-24
 
 ### Changed
@@ -262,7 +270,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.11...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.12...HEAD
+[0.4.12]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.11...v0.4.12
 [0.4.11]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.8...v0.4.9
