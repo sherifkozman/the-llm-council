@@ -28,6 +28,7 @@ app = typer.Typer(
 )
 console = Console()
 
+
 def _get_config_file() -> Path:
     """Get the config file path. Computed at runtime for test compatibility."""
     return Path.home() / ".config" / "llm-council" / "config.yaml"
