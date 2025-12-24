@@ -43,10 +43,12 @@ class TestCLIVersion:
 
     def test_version(self):
         """Test version command output."""
+        from llm_council import __version__
+
         result = runner.invoke(app, ["version"])
         assert result.exit_code == 0
         assert "LLM Council" in result.stdout
-        assert "0.1.0" in result.stdout
+        assert __version__ in result.stdout
 
 
 class TestCLIDoctor:

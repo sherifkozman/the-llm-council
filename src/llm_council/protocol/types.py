@@ -43,8 +43,8 @@ class CouncilConfig(BaseModel):
     timeout: int = Field(
         default=120,
         ge=10,
-        le=600,
-        description="Timeout per provider call in seconds",
+        le=900,
+        description="Timeout per provider call in seconds (max 15 min)",
     )
     max_retries: int = Field(
         default=3,

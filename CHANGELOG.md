@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.11] - 2025-12-24
+
+### Changed
+- **Increased max timeout from 600s to 900s (15 min)**
+  - Complex subagents like `red-team` can now use longer timeouts
+  - Fixes validation error when using `--timeout 660` or higher
+
 ## [0.4.10] - 2025-12-24
 
 ### Fixed
@@ -255,7 +262,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.10...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.11...HEAD
+[0.4.11]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.7...v0.4.8
