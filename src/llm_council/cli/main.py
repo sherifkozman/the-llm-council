@@ -46,7 +46,8 @@ def _load_config_defaults() -> dict[str, Any]:
 
     try:
         config = yaml.safe_load(config_file.read_text()) or {}
-        return config.get("defaults", {})
+        defaults: dict[str, Any] = config.get("defaults", {})
+        return defaults
     except (yaml.YAMLError, OSError):
         return {}
 
