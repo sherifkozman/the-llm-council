@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.10] - 2025-12-24
+
+### Fixed
+- **CLI now reads `defaults.providers` from config file** (fixes #19)
+  - Previously, `council run` always defaulted to `["openrouter"]` when `--providers` flag was not passed
+  - Now reads `defaults.providers` from `~/.config/llm-council/config.yaml`
+  - Fallback chain: CLI flag → config file → `["openrouter"]`
+  - Updated default config template to include `providers` under `defaults` section
+  - Example config:
+    ```yaml
+    defaults:
+      providers:
+        - openai
+        - anthropic
+    ```
+
 ## [0.4.9] - 2025-12-23
 
 ### Added
@@ -239,7 +255,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.9...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.10...HEAD
+[0.4.10]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.6...v0.4.7
