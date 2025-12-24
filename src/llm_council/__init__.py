@@ -15,7 +15,7 @@ from .providers.base import (
 )
 from .providers.registry import ProviderRegistry, get_registry
 
-__version__ = "0.4.12"
+__version__ = "0.4.13"
 
 __all__ = [
     "__version__",

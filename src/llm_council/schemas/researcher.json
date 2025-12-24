@@ -105,8 +105,16 @@
           "items": {"type": "string"}
         },
         "performance_benchmarks": {
-          "type": "object",
-          "additionalProperties": {"type": "string"}
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "metric": {"type": "string", "description": "The benchmark metric name"},
+              "value": {"type": "string", "description": "The benchmark value or result"}
+            },
+            "required": ["metric", "value"]
+          },
+          "description": "Performance benchmark results as metric-value pairs"
         },
         "compatibility": {
           "type": "array",
@@ -127,7 +135,6 @@
           },
           "url": {
             "type": "string",
-            "format": "uri",
             "description": "URL if available"
           },
           "type": {
