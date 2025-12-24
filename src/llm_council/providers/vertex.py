@@ -19,6 +19,20 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
+from llm_council.providers.anthropic import (
+    STRUCTURED_OUTPUT_MODEL_PREFIXES as ANTHROPIC_STRUCTURED_OUTPUT_PREFIXES,
+)
+from llm_council.providers.anthropic import (
+    STRUCTURED_OUTPUT_MODELS as ANTHROPIC_STRUCTURED_OUTPUT_MODELS,
+)
+from llm_council.providers.anthropic import (
+    STRUCTURED_OUTPUTS_BETA,
+)
+
+# Import shared schema stripping from anthropic provider
+from llm_council.providers.anthropic import (
+    _strip_schema_meta_fields as _strip_anthropic_schema_fields,
+)
 from llm_council.providers.base import (
     DoctorResult,
     GenerateRequest,
@@ -32,14 +46,6 @@ from llm_council.providers.google import (
     LEGACY_MODEL_PREFIXES,
     STRUCTURED_OUTPUT_MODEL_PREFIXES,
     _strip_schema_meta_fields,
-)
-
-# Import shared schema stripping from anthropic provider
-from llm_council.providers.anthropic import (
-    _strip_schema_meta_fields as _strip_anthropic_schema_fields,
-    STRUCTURED_OUTPUTS_BETA,
-    STRUCTURED_OUTPUT_MODEL_PREFIXES as ANTHROPIC_STRUCTURED_OUTPUT_PREFIXES,
-    STRUCTURED_OUTPUT_MODELS as ANTHROPIC_STRUCTURED_OUTPUT_MODELS,
 )
 
 DEFAULT_MODEL = "gemini-2.0-flash"
