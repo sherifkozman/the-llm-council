@@ -12,8 +12,11 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from pathlib import Path
+from typing import Any
 
 import typer
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -25,6 +28,27 @@ app = typer.Typer(
 )
 console = Console()
 
+def _get_config_file() -> Path:
+    """Get the config file path. Computed at runtime for test compatibility."""
+    return Path.home() / ".config" / "llm-council" / "config.yaml"
+
+
+def _load_config_defaults() -> dict[str, Any]:
+    """Load defaults from config file if it exists.
+
+    Returns:
+        Dictionary with default values from config file, or empty dict if not found.
+    """
+    config_file = _get_config_file()
+    if not config_file.exists():
+        return {}
+
+    try:
+        config = yaml.safe_load(config_file.read_text()) or {}
+        return config.get("defaults", {})
+    except (yaml.YAMLError, OSError):
+        return {}
+
 
 @app.command()
 def run(
@@ -34,7 +58,7 @@ def run(
         None,
         "--providers",
         "-p",
-        help="Comma-separated provider list (default: openrouter)",
+        help="Comma-separated provider list (default: from config or openrouter)",
     ),
     models: str | None = typer.Option(
         None,
@@ -56,7 +80,15 @@ def run(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """Run a council task with the specified subagent."""
-    provider_list = providers.split(",") if providers else ["openrouter"]
+    # Load defaults from config file
+    config_defaults = _load_config_defaults()
+
+    # Use CLI args if provided, otherwise fall back to config, then hardcoded defaults
+    if providers:
+        provider_list = providers.split(",")
+    else:
+        provider_list = config_defaults.get("providers", ["openrouter"])
+
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
 
     if not output_json:
@@ -167,10 +199,8 @@ def config(
     init: bool = typer.Option(False, "--init", help="Initialize default configuration"),
 ) -> None:
     """Manage LLM Council configuration."""
-    from pathlib import Path
-
-    config_dir = Path.home() / ".config" / "llm-council"
-    config_file = config_dir / "config.yaml"
+    config_file = _get_config_file()
+    config_dir = config_file.parent
 
     if show:
         if config_file.exists():
@@ -185,12 +215,17 @@ def config(
         default_config = """\
 # LLM Council Configuration
 
+# Provider configurations (API keys, models, etc.)
 providers:
   - name: openrouter
     # api_key: ${OPENROUTER_API_KEY}
-    default_model: anthropic/claude-3.5-sonnet
+    default_model: anthropic/claude-opus-4-5
 
+# Default settings for 'council run' command
 defaults:
+  # Providers to use when --providers flag is not specified
+  providers:
+    - openrouter
   timeout: 120
   max_retries: 3
   summary_tier: actions
