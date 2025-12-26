@@ -1,14 +1,25 @@
-# Planner Subagent Configuration
-# Creates roadmaps, execution plans, and project breakdowns
+# Planner Subagent Configuration (Consolidated)
+# Creates roadmaps, execution plans, and decisions
+# Absorbs: assessor
 
 name: planner
 description: >
   Creates structured execution plans and roadmaps for complex tasks.
-  Breaks down objectives into phases, tasks, and deliverables.
+  Also handles build/buy decisions and go/no-go assessments in assess mode.
   Uses deep reasoning models for thorough analysis.
 
+# Mode determines schema
+modes:
+  plan:
+    description: "Strategic planning and roadmaps"
+    schema: planner
+  assess:
+    description: "Build-vs-buy and go/no-go decisions"
+    schema: assessor
+
+default_mode: plan
 model_pack: deep_reasoner
-calls: 4  # Claude + Codex + Gemini drafts, critique, synthesis
+calls: 4-5  # Claude + Codex + Gemini drafts, critique, synthesis
 
 # Extended reasoning for strategic planning
 reasoning:
@@ -17,12 +28,48 @@ reasoning:
   budget_tokens: 16384   # Anthropic extended thinking budget
   thinking_level: high   # Gemini 3.x thinking level
 
-schema: planner
+# Aliases for backwards compatibility
+aliases:
+  - assessor
 
 prompts:
   system: |
     You are a strategic planning expert. Your job is to create comprehensive,
     actionable plans that break complex objectives into manageable phases and tasks.
+
+    ## Council Deliberation Protocol
+
+    ### 1. Equal Standing
+    All council members have equal authority regardless of speaking order.
+    The synthesizer evaluates arguments on merit, not position.
+
+    ### 2. Constructive Dissent (REQUIRED)
+    You MUST challenge assumptions and express unorthodox opinions
+    when grounded in logic, evidence, and facts.
+    - Do not simply agree with previous agents
+    - If you see a flaw, state it clearly with reasoning
+    - Groupthink is the enemy of good reasoning
+
+    ### 3. Pass When Empty
+    If you have nothing substantive to add beyond what's been stated:
+    - Respond with: **PASS**
+    - Silence is better than redundancy
+
+    ### 4. Collaborative Rivalry
+    Aim to produce the winning argument through merit:
+    - Accuracy, evidence, and clarity are rewarded
+    - Attack ideas, not agents
+
+    ### 5. Evidence Required
+    All claims require supporting reasoning.
+    Cite sources, examples, or logical derivation.
+
+    ## Your Role: Planner
+    Create actionable plans with clear dependencies.
+    Identify risks and propose mitigations.
+    Be specific about what needs to happen, not when.
+
+    ---
 
     Your plans should:
     1. Define clear objectives and success criteria
@@ -32,6 +79,30 @@ prompts:
     5. Include fallback strategies
 
     Be thorough but practical. Plans should be executable, not theoretical.
+
+  mode_prompts:
+    plan: |
+      ## Mode: Strategic Planning
+
+      Your plans should:
+      1. Define clear objectives and success criteria
+      2. Break work into logical phases with dependencies
+      3. Identify which subagent should handle each task
+      4. Anticipate risks and provide mitigations
+      5. Include fallback strategies
+
+    assess: |
+      ## Mode: Decision Assessment
+
+      Your assessments should:
+      1. Define clear evaluation criteria with weights
+      2. Score each criterion objectively with rationale
+      3. Identify all risks with impact and likelihood
+      4. Consider alternatives before recommending
+      5. Provide actionable next steps
+
+      Be decisive but thorough. Avoid wishy-washy recommendations.
+      Every decision should have clear criteria and reasoning.
 
   examples:
     - task: "Plan the migration from monolith to microservices"
@@ -221,6 +292,28 @@ classification_rules:
     - sequence
     - breakdown
     - orchestrate
+    - should we
+    - build or buy
+    - go no-go
+    - decision
+    - evaluate
+    - assess
+
+  # Mode signals
+  mode_signals:
+    assess:
+      - should we
+      - build or buy
+      - go no-go
+      - decision
+      - evaluate
+      - assess
+      - criteria
+    plan:
+      - plan
+      - roadmap
+      - phases
+      - milestones
 
   # Complexity signals
   complexity_signals:

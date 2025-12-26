@@ -72,6 +72,10 @@ class CouncilConfig(BaseModel):
         default=True,
         description="Enable graceful degradation on provider failures",
     )
+    mode: str | None = Field(
+        default=None,
+        description="Agent mode for consolidated agents (e.g., 'impl', 'arch', 'review')",
+    )
 
 
 class CouncilRequest(BaseModel):
@@ -83,7 +87,11 @@ class CouncilRequest(BaseModel):
     task: str = Field(..., description="The task to process")
     subagent: str = Field(
         default="router",
-        description="Subagent type (router, planner, implementer, etc.)",
+        description="Subagent type (drafter, critic, planner, etc.)",
+    )
+    mode: str | None = Field(
+        default=None,
+        description="Agent mode for consolidated agents",
     )
     config: CouncilConfig | None = Field(
         default=None,

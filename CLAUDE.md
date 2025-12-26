@@ -15,27 +15,37 @@ council config
 
 ## Subagents
 
-| Subagent | Use For |
-|----------|---------|
-| `router` | Classify and route tasks |
-| `planner` | Create roadmaps and plans |
-| `assessor` | Build vs buy decisions |
-| `researcher` | Technical research |
-| `architect` | System design |
-| `implementer` | Feature implementation |
-| `reviewer` | Code review |
-| `test-designer` | Test suite design |
-| `shipper` | Release notes |
-| `red-team` | Security analysis |
+### Core Agents (v2)
+
+| Subagent | Use For | Modes |
+|----------|---------|-------|
+| `drafter` | Generate solutions | `impl`, `arch`, `test` |
+| `critic` | Evaluate and challenge | `review`, `security` |
+| `synthesizer` | Merge and finalize | - |
+| `researcher` | Technical research | - |
+| `planner` | Plans and decisions | `plan`, `assess` |
+| `router` | Classify and route | - |
+
+### Deprecated Aliases (Backwards Compatible)
+
+| Old Name | Maps To | Removed In |
+|----------|---------|------------|
+| `implementer` | `drafter --mode impl` | v1.0 |
+| `architect` | `drafter --mode arch` | v1.0 |
+| `test-designer` | `drafter --mode test` | v1.0 |
+| `reviewer` | `critic --mode review` | v1.0 |
+| `red-team` | `critic --mode security` | v1.0 |
+| `assessor` | `planner --mode assess` | v1.0 |
+| `shipper` | `synthesizer` | v1.0 |
 
 ## When to Use Council
 
 **Use council for:**
-- Feature implementation (`council run implementer "..."`)
-- Code review (`council run reviewer "..."`)
-- Architecture design (`council run architect "..."`)
-- Security review (`council run red-team "..."`)
-- Build vs buy decisions (`council run assessor "..."`)
+- Feature implementation (`council run drafter --mode impl "..."`)
+- Code review (`council run critic --mode review "..."`)
+- Architecture design (`council run drafter --mode arch "..."`)
+- Security review (`council run critic --mode security "..."`)
+- Build vs buy decisions (`council run planner --mode assess "..."`)
 
 **Skip council for:**
 - Quick file lookups
@@ -45,20 +55,20 @@ council config
 ## CLI Options
 
 ```bash
-# Health check before running
-council run implementer "task" --health-check
+# Use a specific mode
+council run drafter --mode impl "Add login feature"
 
 # Disable artifact storage (faster)
-council run implementer "task" --no-artifacts
-
-# Disable graceful degradation (strict mode)
-council run implementer "task" --no-degradation
+council run drafter "task" --no-artifacts
 
 # Get structured JSON output
 council run planner "Add dark mode" --json
 
 # Verbose output for debugging
-council run implementer "task" --verbose
+council run drafter "task" --verbose
+
+# Specify providers
+council run drafter --providers openrouter,anthropic "task"
 ```
 
 ## Provider Setup
@@ -114,8 +124,8 @@ council run architect "Design a cache" --providers vertex-ai
 council doctor
 
 # Run with verbose output
-council run implementer "task" --verbose
+council run drafter "task" --verbose
 
 # Disable artifact store (faster, less context)
-council run implementer "task" --no-artifacts
+council run drafter "task" --no-artifacts
 ```

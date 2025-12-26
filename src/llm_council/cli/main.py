@@ -28,6 +28,31 @@ app = typer.Typer(
 )
 console = Console()
 
+# Agent aliases for backwards compatibility (deprecated -> new agent, mode)
+AGENT_ALIASES: dict[str, tuple[str, str | None]] = {
+    "implementer": ("drafter", "impl"),
+    "architect": ("drafter", "arch"),
+    "test-designer": ("drafter", "test"),
+    "reviewer": ("critic", "review"),
+    "red-team": ("critic", "security"),
+    "assessor": ("planner", "assess"),
+    "shipper": ("synthesizer", None),
+}
+
+
+def _resolve_agent_alias(subagent: str, mode: str | None = None) -> tuple[str, str | None, bool]:
+    """Resolve deprecated agent names to new consolidated agents.
+
+    Returns:
+        Tuple of (agent_name, mode, was_deprecated)
+    """
+    if subagent in AGENT_ALIASES:
+        new_agent, default_mode = AGENT_ALIASES[subagent]
+        # Only print warning if not in JSON mode (checked by caller)
+        # Use specified mode if provided, otherwise use alias default
+        return new_agent, mode or default_mode, True  # True = was_deprecated
+    return subagent, mode, False  # False = not deprecated
+
 
 def _get_config_file() -> Path:
     """Get the config file path. Computed at runtime for test compatibility."""
@@ -54,8 +79,13 @@ def _load_config_defaults() -> dict[str, Any]:
 
 @app.command()
 def run(
-    subagent: str = typer.Argument(..., help="Subagent type (router, planner, implementer, etc.)"),
+    subagent: str = typer.Argument(..., help="Subagent type (drafter, critic, planner, etc.)"),
     task: str = typer.Argument(..., help="Task description"),
+    mode: str | None = typer.Option(
+        None,
+        "--mode",
+        help="Agent mode (e.g., impl/arch/test for drafter, review/security for critic)",
+    ),
     providers: str | None = typer.Option(
         None,
         "--providers",
@@ -71,13 +101,7 @@ def run(
             "Example: 'anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro'"
         ),
     ),
-    timeout: int = typer.Option(120, "--timeout", "-t", help="Timeout per call in seconds"),
-    max_retries: int = typer.Option(3, "--max-retries", help="Max validation retries"),
     no_artifacts: bool = typer.Option(False, "--no-artifacts", help="Disable artifact storage"),
-    health_check: bool = typer.Option(False, "--health-check", help="Run preflight health check"),
-    no_degradation: bool = typer.Option(
-        False, "--no-degradation", help="Disable graceful degradation"
-    ),
     output_json: bool = typer.Option(False, "--json", help="Output as JSON"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -85,23 +109,40 @@ def run(
     # Load defaults from config file
     config_defaults = _load_config_defaults()
 
+    # Resolve agent aliases (deprecated names -> new consolidated agents)
+    resolved_agent, resolved_mode, was_deprecated = _resolve_agent_alias(subagent, mode)
+
+    # Show deprecation warning (but not in JSON mode to avoid polluting output)
+    if was_deprecated and not output_json:
+        console.print(
+            f"[yellow]Warning:[/yellow] '{subagent}' is deprecated. "
+            f"Use '{resolved_agent}' instead. (Will be removed in v1.0)",
+            style="dim",
+        )
+
     # Use CLI args if provided, otherwise fall back to config, then hardcoded defaults
     if providers:
         provider_list = providers.split(",")
     else:
         provider_list = config_defaults.get("providers", ["openrouter"])
 
+    # Get config-based defaults for removed CLI flags
+    timeout = config_defaults.get("timeout", 120)
+    max_retries = config_defaults.get("max_retries", 3)
+    enable_degradation = config_defaults.get("enable_degradation", True)
+
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
 
     if not output_json:
+        mode_str = f" --mode {resolved_mode}" if resolved_mode else ""
         if model_list and len(model_list) > 1:
             console.print(
-                f"[bold blue]Council[/bold blue] Running {subagent} with "
+                f"[bold blue]Council[/bold blue] Running {resolved_agent}{mode_str} with "
                 f"{len(model_list)} models (multi-model council)..."
             )
         else:
             console.print(
-                f"[bold blue]Council[/bold blue] Running {subagent} with "
+                f"[bold blue]Council[/bold blue] Running {resolved_agent}{mode_str} with "
                 f"{len(provider_list)} provider(s)..."
             )
 
@@ -115,12 +156,13 @@ def run(
             timeout=timeout,
             max_retries=max_retries,
             enable_artifact_store=not no_artifacts,
-            enable_health_check=health_check,
-            enable_graceful_degradation=not no_degradation,
+            enable_health_check=False,  # Lazy failure instead of preflight
+            enable_graceful_degradation=enable_degradation,
+            mode=resolved_mode,  # Pass mode to config
         )
 
         council = Council(config=config)
-        result = asyncio.run(council.run(task=task, subagent=subagent))
+        result = asyncio.run(council.run(task=task, subagent=resolved_agent))
 
         if output_json:
             print(json.dumps(result.model_dump(), indent=2, default=str))

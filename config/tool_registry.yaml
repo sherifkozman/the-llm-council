@@ -1,0 +1,97 @@
+# Tool Registry Configuration
+# Declarative tool definitions for Council agents
+#
+# Each tool specifies:
+#   - name: Tool identifier
+#   - description: What the tool does
+#   - parameters: Input parameters with types and constraints
+#   - roles: Which agent roles can use this tool (empty = all)
+
+tools:
+  # Research tools
+  web_search:
+    name: web_search
+    description: Search the web for current information and documentation
+    parameters:
+      query:
+        type: string
+        required: true
+        description: Search query
+      limit:
+        type: integer
+        default: 5
+        description: Maximum results to return
+    roles: [drafter, researcher]
+
+  context7_lookup:
+    name: context7_lookup
+    description: Look up library documentation from Context7
+    parameters:
+      library:
+        type: string
+        required: true
+        description: Library name (e.g., 'react', 'fastapi')
+      topic:
+        type: string
+        required: false
+        description: Specific topic to focus on
+    roles: [drafter, researcher]
+
+  # Code analysis tools
+  code_analysis:
+    name: code_analysis
+    description: Analyze code for patterns, issues, and quality metrics
+    parameters:
+      file_path:
+        type: string
+        required: true
+        description: Path to file or directory to analyze
+      analysis_type:
+        type: string
+        default: general
+        description: Type of analysis (general, security, performance)
+    roles: [critic, drafter]
+
+  grep_search:
+    name: grep_search
+    description: Search codebase for patterns
+    parameters:
+      pattern:
+        type: string
+        required: true
+        description: Regex pattern to search for
+      path:
+        type: string
+        required: false
+        description: Path to search in (default: current directory)
+    roles: [drafter, critic, researcher]
+
+  # File operations
+  read_file:
+    name: read_file
+    description: Read contents of a file
+    parameters:
+      path:
+        type: string
+        required: true
+        description: File path to read
+      limit:
+        type: integer
+        required: false
+        description: Maximum lines to read
+    roles: [drafter, critic, researcher, planner]
+
+  # Planning tools
+  create_checklist:
+    name: create_checklist
+    description: Create a structured checklist or task list
+    parameters:
+      title:
+        type: string
+        required: true
+        description: Checklist title
+      items:
+        type: array
+        required: true
+        description: List of checklist items
+    roles: [planner, synthesizer]

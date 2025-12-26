@@ -1,6 +1,9 @@
 """
 Codex CLI provider adapter.
 
+DEPRECATED: Use the 'openai' provider with direct API access instead.
+This CLI adapter will be removed in v1.0.
+
 Invokes the OpenAI Codex CLI tool via subprocess.
 This is an experimental provider - prefer API-based providers for reliability.
 

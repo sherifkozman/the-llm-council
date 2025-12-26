@@ -1,6 +1,9 @@
 """
 Gemini CLI provider adapter.
 
+DEPRECATED: Use the 'google' provider with direct API access instead.
+This CLI adapter will be removed in v1.0.
+
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
 """
