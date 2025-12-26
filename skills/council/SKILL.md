@@ -13,7 +13,7 @@ Multi-model council: parallel drafts → adversarial critique → validated synt
 
 ### 1. Install
 ```bash
-pip install the-llm-council>=0.2.0
+pip install the-llm-council>=0.5.0
 
 # With specific provider SDKs
 pip install the-llm-council[anthropic,openai,google]
@@ -48,15 +48,12 @@ council run <subagent> "<task>" [options]
 
 | Option | Description |
 |--------|-------------|
+| `--mode` | Agent mode (e.g., `impl`/`arch`/`test` for drafter) |
 | `--json` | Output structured JSON |
-| `--health-check` | Run preflight provider check |
 | `--verbose, -v` | Verbose output |
 | `--models, -m` | Comma-separated model IDs |
 | `--providers, -p` | Comma-separated provider list |
-| `--timeout, -t` | Timeout in seconds (default: 120) |
-| `--max-retries` | Max retry attempts (default: 3) |
 | `--no-artifacts` | Disable artifact storage (faster) |
-| `--no-degradation` | Disable graceful degradation (strict mode) |
 
 ### Other Commands
 ```bash
@@ -64,20 +61,47 @@ council doctor    # Check provider health
 council config    # Show current configuration
 ```
 
-## Subagents
+## Subagents (v0.5.0)
 
-| Subagent | Use For | Details |
-|----------|---------|---------|
-| `implementer` | Feature code, bug fixes | See `subagents/implementer.md` |
-| `reviewer` | Code review, security audit | See `subagents/reviewer.md` |
-| `architect` | System design, APIs | See `subagents/architect.md` |
-| `researcher` | Technical research | See `subagents/researcher.md` |
-| `planner` | Roadmaps, execution plans | See `subagents/planner.md` |
-| `assessor` | Build vs buy decisions | See `subagents/assessor.md` |
-| `red-team` | Security threat analysis | See `subagents/red-team.md` |
-| `test-designer` | Test suite design | See `subagents/test-designer.md` |
-| `shipper` | Release notes | See `subagents/shipper.md` |
-| `router` | Task classification | See `subagents/router.md` |
+### Core Agents
+
+| Subagent | Modes | Use For | Details |
+|----------|-------|---------|---------|
+| `drafter` | `impl`, `arch`, `test` | Code, architecture, tests | See below |
+| `critic` | `review`, `security` | Code review, security audit | See below |
+| `synthesizer` | - | Merge and finalize outputs | See `subagents/synthesizer.md` |
+| `researcher` | - | Technical research | See `subagents/researcher.md` |
+| `planner` | `plan`, `assess` | Roadmaps, decisions | See `subagents/planner.md` |
+| `router` | - | Task classification | See `subagents/router.md` |
+
+### Agent Modes
+
+**drafter modes:**
+- `--mode impl` - Feature implementation, bug fixes (default)
+- `--mode arch` - System design, API schemas
+- `--mode test` - Test suite design
+
+**critic modes:**
+- `--mode review` - Code review with CWE IDs (default)
+- `--mode security` - Security threat analysis
+
+**planner modes:**
+- `--mode plan` - Execution roadmaps (default)
+- `--mode assess` - Build vs buy decisions
+
+### Deprecated Aliases (Backwards Compatible)
+
+The following legacy agent names still work but will be removed in v1.0:
+
+| Old Name | Use Instead | Removed In |
+|----------|-------------|------------|
+| `implementer` | `drafter --mode impl` | v1.0 |
+| `architect` | `drafter --mode arch` | v1.0 |
+| `test-designer` | `drafter --mode test` | v1.0 |
+| `reviewer` | `critic --mode review` | v1.0 |
+| `red-team` | `critic --mode security` | v1.0 |
+| `assessor` | `planner --mode assess` | v1.0 |
+| `shipper` | `synthesizer` | v1.0 |
 
 ## Multi-Model Configuration
 
@@ -85,7 +109,7 @@ Run multiple models in parallel for adversarial debate:
 
 ```bash
 # Via CLI flag
-council run architect "Design caching layer" \
+council run drafter --mode arch "Design caching layer" \
   --models "anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
 
 # Via environment variable
@@ -115,6 +139,8 @@ providers:
     default_model: anthropic/claude-3-opus
 
 defaults:
+  providers:
+    - openrouter
   timeout: 120
   max_retries: 3
   summary_tier: actions
@@ -124,11 +150,16 @@ defaults:
 
 ```python
 from llm_council import Council
+from llm_council.protocol.types import CouncilConfig
 
-council = Council(providers=["openrouter"])
+config = CouncilConfig(
+    providers=["openrouter"],
+    mode="impl"  # Optional: set agent mode
+)
+council = Council(config=config)
 result = await council.run(
     task="Build a login page with OAuth",
-    subagent="implementer"
+    subagent="drafter"
 )
 print(result.output)
 ```
@@ -151,18 +182,25 @@ print(result.output)
 ## Examples
 
 ```bash
-# Feature implementation
-council run implementer "Add pagination to users API" --json
+# Feature implementation (new v0.5.0 syntax)
+council run drafter --mode impl "Add pagination to users API" --json
 
 # Code review
-council run reviewer "Review the authentication changes" --json
+council run critic --mode review "Review the authentication changes" --json
 
 # Multi-model architecture design
-council run architect "Design caching layer" \
+council run drafter --mode arch "Design caching layer" \
   --models "anthropic/claude-3.5-sonnet,openai/gpt-4o" --json
 
 # Security threat model
-council run red-team "Analyze auth system vulnerabilities" --json
+council run critic --mode security "Analyze auth system vulnerabilities" --json
+
+# Build vs buy decision
+council run planner --mode assess "Should we build or buy a payment system?" --json
+
+# Legacy syntax (still works, shows deprecation warning)
+council run implementer "Add pagination" --json
+council run reviewer "Review changes" --json
 ```
 
 ## Security Notes
@@ -178,8 +216,8 @@ council run red-team "Analyze auth system vulnerabilities" --json
 council doctor
 
 # Verbose output for debugging
-council run implementer "task" --verbose
+council run drafter --mode impl "task" --verbose
 
 # Faster runs (skip artifact storage)
-council run implementer "task" --no-artifacts
+council run drafter "task" --no-artifacts
 ```

@@ -163,36 +163,42 @@ Copy the `skills/council/` directory to your agent's skills folder. The skill fo
 # Set your API key
 export OPENROUTER_API_KEY="your-key"
 
-# Run a council task
-council run implementer "Build a login page with OAuth"
+# Run a council task (v0.5.0 syntax with modes)
+council run drafter --mode impl "Build a login page with OAuth"
 
 # Multi-model council (Claude + GPT-5 + Gemini debating)
-council run architect "Design a caching layer" \
+council run drafter --mode arch "Design a caching layer" \
   --models "anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
 
 # Or set via environment variable
 export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
-council run implementer "Build a login page"
+council run drafter "Build a login page"
 
-# With health check and verbose output
-council run implementer "Build a login page" --health-check --verbose
+# Code review with security analysis
+council run critic --mode review "Review auth changes" --verbose
 
 # Disable artifact storage for faster runs
-council run implementer "Quick fix" --no-artifacts
+council run drafter "Quick fix" --no-artifacts
 
 # Get structured JSON output
 council run planner "Add user authentication" --json
+
+# Legacy syntax still works (shows deprecation warning)
+council run implementer "Build a login page"  # → drafter --mode impl
 ```
 
 ### Python API
 
 ```python
 from llm_council import Council
+from llm_council.protocol.types import CouncilConfig
 
-council = Council(providers=["openrouter"])
+# With mode configuration
+config = CouncilConfig(providers=["openrouter"], mode="impl")
+council = Council(config=config)
 result = await council.run(
     task="Build a login page with OAuth",
-    subagent="implementer"
+    subagent="drafter"
 )
 print(result.output)
 ```
@@ -260,20 +266,49 @@ council doctor
    └── Store drafts and outputs for context management
 ```
 
-## Subagents
+## Subagents (v0.5.0)
 
-| Subagent | Purpose | Example |
-|----------|---------|---------|
-| `router` | Classify and route tasks | "Is this a bug or feature?" |
-| `planner` | Create execution roadmaps | "Plan the auth implementation" |
-| `assessor` | Make build/no-build decisions | "Should we use Redis or Memcached?" |
-| `researcher` | Deep market/technical research | "Research OAuth providers" |
-| `architect` | Design systems and APIs | "Design the caching layer" |
-| `implementer` | Generate production code | "Build the login page" |
-| `reviewer` | Review code for issues | "Review this PR for security" |
-| `test-designer` | Design test suites | "Design tests for auth module" |
-| `shipper` | Create release notes | "Generate changelog for v1.2" |
-| `red-team` | Security threat analysis | "Analyze attack vectors" |
+### Core Agents
+
+| Subagent | Modes | Purpose | Example |
+|----------|-------|---------|---------|
+| `drafter` | `impl`, `arch`, `test` | Generate code, designs, tests | "Build the login page" |
+| `critic` | `review`, `security` | Review and analyze | "Review this PR for security" |
+| `synthesizer` | - | Merge and finalize | "Generate changelog for v1.2" |
+| `researcher` | - | Technical research | "Research OAuth providers" |
+| `planner` | `plan`, `assess` | Roadmaps and decisions | "Plan the auth implementation" |
+| `router` | - | Classify and route tasks | "Is this a bug or feature?" |
+
+### Agent Modes
+
+```bash
+# drafter modes
+council run drafter --mode impl "Build login page"     # Implementation (default)
+council run drafter --mode arch "Design caching layer" # Architecture
+council run drafter --mode test "Design test suite"    # Test design
+
+# critic modes
+council run critic --mode review "Review PR"           # Code review (default)
+council run critic --mode security "Analyze auth"      # Security analysis
+
+# planner modes
+council run planner --mode plan "Plan implementation"  # Planning (default)
+council run planner --mode assess "Redis vs Memcached" # Build vs buy
+```
+
+### Deprecated Aliases (Backwards Compatible)
+
+The following legacy names still work but show a deprecation warning:
+
+| Old Name | Use Instead | Removed In |
+|----------|-------------|------------|
+| `implementer` | `drafter --mode impl` | v1.0 |
+| `architect` | `drafter --mode arch` | v1.0 |
+| `test-designer` | `drafter --mode test` | v1.0 |
+| `reviewer` | `critic --mode review` | v1.0 |
+| `red-team` | `critic --mode security` | v1.0 |
+| `assessor` | `planner --mode assess` | v1.0 |
+| `shipper` | `synthesizer` | v1.0 |
 
 ## Writing a Provider
 
@@ -417,15 +452,18 @@ council doctor                      # Check provider health
 council config                      # Show configuration
 
 # Options
+--mode             Agent mode (impl/arch/test for drafter, review/security for critic, etc.)
 --providers, -p    Comma-separated provider list
 --models, -m       Comma-separated OpenRouter model IDs for multi-model council
---timeout, -t      Timeout in seconds (default: 120)
---max-retries      Max retry attempts (default: 3)
---health-check     Run preflight health check
 --no-artifacts     Disable artifact storage
---no-degradation   Disable graceful degradation
 --json             Output structured JSON
 --verbose, -v      Verbose output
+
+# Config file options (moved from CLI in v0.5.0)
+# Set these in ~/.config/llm-council/config.yaml under 'defaults:'
+#   timeout: 120
+#   max_retries: 3
+#   enable_degradation: true
 ```
 
 ## Development

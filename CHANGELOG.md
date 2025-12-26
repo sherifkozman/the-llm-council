@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2025-12-25
+
+### Changed
+- **Agent Consolidation: 10 → 6 Core Agents** (Council V2)
+  - **drafter**: Unified generation agent with modes (`--mode impl|arch|test`)
+    - Replaces: `implementer`, `architect`, `test-designer`
+  - **critic**: Unified evaluation agent with modes (`--mode review|security`)
+    - Replaces: `reviewer`, `red-team`
+  - **planner**: Decision and planning agent with modes (`--mode plan|assess`)
+    - Replaces: `assessor` (planner already existed)
+  - **synthesizer**: Final output synthesis (replaces `shipper`)
+  - **researcher**: Unchanged - technical research
+  - **router**: Unchanged - task classification
+
+- **CLI Enhancements**
+  - New `--mode` flag for agent mode selection
+  - Backwards-compatible alias resolution (old names still work with deprecation warning)
+  - Simplified CLI by moving `--timeout`, `--max-retries`, `--no-degradation`, `--health-check` to config file
+  - Config-based defaults via `~/.config/llm-council/config.yaml`
+
+- **Enhanced Prompt Protocol**
+  - All subagent YAML files now include "Council Deliberation Protocol" instructions
+  - Promotes cross-model synthesis awareness and critique responsiveness
+  - Improved output quality through multi-perspective reasoning
+
+### Added
+- **Registry Module** (`src/llm_council/registry/`)
+  - `ToolRegistry`: Declarative tool registration for agent tool use
+  - `BaseAgent`: Thin base class for building custom agents
+  - Foundation for future MCP integration and tool orchestration
+
+### Deprecated
+- **Legacy agent names** (will be removed in v1.0):
+  - `implementer` → use `drafter --mode impl`
+  - `architect` → use `drafter --mode arch`
+  - `test-designer` → use `drafter --mode test`
+  - `reviewer` → use `critic --mode review`
+  - `red-team` → use `critic --mode security`
+  - `assessor` → use `planner --mode assess`
+  - `shipper` → use `synthesizer`
+
 ## [0.4.13] - 2025-12-24
 
 ### Fixed
@@ -280,7 +321,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.13...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.13...v0.5.0
 [0.4.13]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.11...v0.4.12
 [0.4.11]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.10...v0.4.11
