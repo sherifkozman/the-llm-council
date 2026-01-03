@@ -23,8 +23,13 @@
     },
     "subagent_to_run": {
       "type": "string",
-      "enum": ["planner", "researcher", "architect", "implementer", "reviewer", "test-designer", "shipper", "red-team"],
-      "description": "The subagent that should handle this task"
+      "enum": ["drafter", "critic", "synthesizer", "researcher", "planner", "router"],
+      "description": "The core subagent that should handle this task (v0.5.0+)"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["impl", "arch", "test", "review", "security", "plan", "assess"],
+      "description": "Mode for the subagent (drafter: impl/arch/test, critic: review/security, planner: plan/assess)"
     },
     "artifact_type": {
       "type": "string",

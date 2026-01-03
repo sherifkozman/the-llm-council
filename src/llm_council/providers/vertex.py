@@ -48,7 +48,7 @@ from llm_council.providers.google import (
     _strip_schema_meta_fields,
 )
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3-pro-preview"
 DEFAULT_LOCATION = "us-central1"
 DEFAULT_CLAUDE_REGION = "global"
 

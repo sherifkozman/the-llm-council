@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-01-02
+
+### Changed
+- **Gemini model upgrade**: Default model updated to `gemini-3-pro-preview` across all providers (Google, Vertex AI)
+- **Router schema updated**: Now returns v0.5.0 agent names (`drafter`, `critic`) with `mode` field
+
+### Added
+- **Model pack expansion**: Added `CODE_COMPLEX` and `GROUNDED` packs to `ModelPack` enum
+- **YAML-to-enum mapping**: New `YAML_TO_MODEL_PACK` dict and `resolve_model_pack()` function
+  - Maps YAML strings (`fast_generator`, `deep_reasoner`, etc.) to `ModelPack` enum values
+- **Subagent model pack resolution**: New functions in `subagents/__init__.py`:
+  - `get_model_pack(config, mode)` - Resolve ModelPack from subagent config
+  - `get_model_for_subagent(config, mode)` - Get OpenRouter model ID for subagent
+  - `get_mode_config(config, mode)` - Get mode-specific configuration
+- **New tests**: 7 new tests for model pack resolution in `test_multi_model.py`
+
+### Deprecated
+- **CLI providers deprecated**: `codex-cli` and `gemini-cli` providers now emit `DeprecationWarning` on instantiation
+  - Use `openai` provider instead of `codex-cli`
+  - Use `google` provider instead of `gemini-cli`
+  - CLI providers will be removed in v1.0
+
 ## [0.5.0] - 2025-12-25
 
 ### Changed

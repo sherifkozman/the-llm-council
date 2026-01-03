@@ -1,14 +1,15 @@
 """
 Subagent configurations.
 
-YAML-based configurations for each subagent role:
-- router, planner, assessor, researcher, architect
-- implementer, reviewer, test-designer, shipper, red-team
+YAML-based configurations for each subagent role (v0.5.0):
+- Core: drafter, critic, synthesizer, researcher, planner, router
+- Legacy (deprecated): implementer, architect, reviewer, etc.
 
 Supports per-subagent configuration for:
 - Provider preferences (preferred, fallback, exclude)
 - Model selection per provider
 - Reasoning/thinking budgets
+- Model packs (maps to specific models)
 """
 
 import re
@@ -17,6 +18,12 @@ from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
+
+from llm_council.config.models import (
+    DEFAULT_MODEL_PACKS,
+    ModelPack,
+    resolve_model_pack,
+)
 
 # ============================================================================
 # Subagent Configuration Models (Issue #11)
@@ -191,6 +198,68 @@ def get_reasoning_budget(config: dict[str, Any]) -> ReasoningBudget | None:
     return None
 
 
+def get_model_pack(config: dict[str, Any], mode: str | None = None) -> ModelPack:
+    """Get the resolved ModelPack from a subagent config.
+
+    Handles mode-specific model packs for consolidated agents (drafter, critic, planner).
+
+    Args:
+        config: Loaded subagent YAML configuration.
+        mode: Optional mode (e.g., 'impl', 'arch', 'review', 'security').
+
+    Returns:
+        Resolved ModelPack enum value.
+
+    Example:
+        >>> config = load_subagent("drafter")
+        >>> pack = get_model_pack(config, mode="arch")
+        >>> pack == ModelPack.REASONING  # deep_reasoner maps to REASONING
+        True
+    """
+    # Check for mode-specific model_pack first
+    if mode and "modes" in config:
+        mode_config = config["modes"].get(mode, {})
+        if "model_pack" in mode_config:
+            return resolve_model_pack(mode_config["model_pack"])
+
+    # Fall back to top-level model_pack
+    if "model_pack" in config:
+        return resolve_model_pack(config["model_pack"])
+
+    # Default to DEFAULT pack
+    return ModelPack.DEFAULT
+
+
+def get_model_for_subagent(
+    config: dict[str, Any],
+    mode: str | None = None,
+) -> str:
+    """Get the default model ID for a subagent based on its model pack.
+
+    Args:
+        config: Loaded subagent YAML configuration.
+        mode: Optional mode for consolidated agents.
+
+    Returns:
+        OpenRouter-format model ID (e.g., 'anthropic/claude-opus-4-5').
+    """
+    pack = get_model_pack(config, mode)
+    return DEFAULT_MODEL_PACKS[pack]
+
+
+def get_mode_config(config: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Get mode-specific configuration for a consolidated agent.
+
+    Args:
+        config: Loaded subagent YAML configuration.
+        mode: Mode name (e.g., 'impl', 'arch', 'review').
+
+    Returns:
+        Mode configuration dict, or empty dict if mode not found.
+    """
+    return config.get("modes", {}).get(mode, {})
+
+
 __all__ = [
     "load_subagent",
     "list_subagents",
@@ -202,4 +271,8 @@ __all__ = [
     "get_provider_preferences",
     "get_model_overrides",
     "get_reasoning_budget",
+    # Model pack resolution (v0.5.1)
+    "get_model_pack",
+    "get_model_for_subagent",
+    "get_mode_config",
 ]

@@ -243,14 +243,90 @@ class TestDefaultCouncilModels:
     """Tests for default council model configuration."""
 
     def test_default_models_defined(self) -> None:
-        """DEFAULT_COUNCIL_MODELS contains expected models (December 2025)."""
+        """DEFAULT_COUNCIL_MODELS contains expected models (January 2026)."""
         assert len(DEFAULT_COUNCIL_MODELS) == 3
         assert "anthropic/claude-opus-4-5" in DEFAULT_COUNCIL_MODELS
         assert "openai/gpt-5.1" in DEFAULT_COUNCIL_MODELS
-        assert "google/gemini-3-flash-preview" in DEFAULT_COUNCIL_MODELS
+        assert "google/gemini-3-pro-preview" in DEFAULT_COUNCIL_MODELS
 
     def test_all_model_packs_defined(self) -> None:
         """All ModelPack variants have default models."""
         for pack in ModelPack:
             assert pack in DEFAULT_MODEL_PACKS
             assert DEFAULT_MODEL_PACKS[pack] is not None
+
+    def test_new_model_packs_added(self) -> None:
+        """v0.5.1 added CODE_COMPLEX and GROUNDED packs."""
+        assert ModelPack.CODE_COMPLEX in DEFAULT_MODEL_PACKS
+        assert ModelPack.GROUNDED in DEFAULT_MODEL_PACKS
+        assert "gemini" in DEFAULT_MODEL_PACKS[ModelPack.GROUNDED].lower()
+
+
+class TestYamlToModelPackMapping:
+    """Tests for YAML model_pack string resolution."""
+
+    def test_yaml_to_model_pack_mapping(self) -> None:
+        """YAML strings map to correct ModelPack enums."""
+        from llm_council.config.models import YAML_TO_MODEL_PACK, resolve_model_pack
+
+        # Test YAML-style names
+        assert resolve_model_pack("fast_generator") == ModelPack.FAST
+        assert resolve_model_pack("deep_reasoner") == ModelPack.REASONING
+        assert resolve_model_pack("code_specialist_normal") == ModelPack.CODE
+        assert resolve_model_pack("code_specialist_complex") == ModelPack.CODE_COMPLEX
+        assert resolve_model_pack("harsh_critic") == ModelPack.CRITIC
+        assert resolve_model_pack("grounded") == ModelPack.GROUNDED
+
+    def test_resolve_model_pack_case_insensitive(self) -> None:
+        """Model pack resolution is case-insensitive."""
+        from llm_council.config.models import resolve_model_pack
+
+        assert resolve_model_pack("FAST_GENERATOR") == ModelPack.FAST
+        assert resolve_model_pack("Deep_Reasoner") == ModelPack.REASONING
+
+    def test_resolve_model_pack_invalid_raises(self) -> None:
+        """Invalid model pack names raise ValueError."""
+        import pytest
+
+        from llm_council.config.models import resolve_model_pack
+
+        with pytest.raises(ValueError, match="Unknown model_pack"):
+            resolve_model_pack("invalid_pack")
+
+
+class TestSubagentModelPack:
+    """Tests for subagent model pack resolution."""
+
+    def test_get_model_pack_from_subagent(self) -> None:
+        """get_model_pack resolves YAML config to ModelPack."""
+        from llm_council.subagents import get_model_pack, load_subagent
+
+        # Router uses fast_generator
+        router_config = load_subagent("router")
+        assert get_model_pack(router_config) == ModelPack.FAST
+
+        # Researcher uses grounded
+        researcher_config = load_subagent("researcher")
+        assert get_model_pack(researcher_config) == ModelPack.GROUNDED
+
+    def test_get_model_pack_with_mode(self) -> None:
+        """get_model_pack handles mode-specific packs."""
+        from llm_council.subagents import get_model_pack, load_subagent
+
+        drafter_config = load_subagent("drafter")
+
+        # impl mode uses code_specialist_normal -> CODE
+        assert get_model_pack(drafter_config, mode="impl") == ModelPack.CODE
+
+        # arch mode uses deep_reasoner -> REASONING
+        assert get_model_pack(drafter_config, mode="arch") == ModelPack.REASONING
+
+    def test_get_model_for_subagent(self) -> None:
+        """get_model_for_subagent returns OpenRouter model ID."""
+        from llm_council.subagents import get_model_for_subagent, load_subagent
+
+        router_config = load_subagent("router")
+        model = get_model_for_subagent(router_config)
+
+        # Should be the FAST pack model (claude-3-5-haiku)
+        assert "haiku" in model.lower()

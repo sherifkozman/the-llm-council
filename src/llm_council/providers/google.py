@@ -22,7 +22,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3-pro-preview"
 
 # Model prefixes that support structured output with response_schema
 # See: https://ai.google.dev/gemini-api/docs/structured-output

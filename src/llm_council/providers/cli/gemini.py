@@ -1,8 +1,17 @@
 """
 Gemini CLI provider adapter.
 
-DEPRECATED: Use the 'google' provider with direct API access instead.
-This CLI adapter will be removed in v1.0.
+.. deprecated:: 0.5.1
+    The CLI providers (codex-cli, gemini-cli) are deprecated and will be
+    removed in v1.0. Use the direct API providers instead:
+    - 'google' provider for Gemini models (gemini-3-pro, etc.)
+    - 'vertex-ai' provider for Vertex AI access (Gemini + Claude)
+
+    CLI providers have limitations:
+    - No streaming support
+    - No structured output
+    - Slower than direct API calls
+    - Requires external CLI binaries installed
 
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
@@ -76,6 +85,13 @@ class GeminiCLIProvider(ProviderAdapter):
         approval_mode: str | None = None,
         timeout: int = 120,
     ) -> None:
+        warnings.warn(
+            "GeminiCLIProvider is deprecated and will be removed in v1.0. "
+            "Use the 'google' provider with direct API access instead. "
+            "See: https://github.com/sherifkozman/llm-council#providers",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._cli_path = cli_path or shutil.which("gemini")
         self._default_model = default_model or DEFAULT_MODEL
         self._approval_mode = approval_mode or DEFAULT_APPROVAL_MODE

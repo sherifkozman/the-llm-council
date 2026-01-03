@@ -1,11 +1,18 @@
 """
 Codex CLI provider adapter.
 
-DEPRECATED: Use the 'openai' provider with direct API access instead.
-This CLI adapter will be removed in v1.0.
+.. deprecated:: 0.5.1
+    The CLI providers (codex-cli, gemini-cli) are deprecated and will be
+    removed in v1.0. Use the direct API providers instead:
+    - 'openai' provider for OpenAI models (gpt-5.x)
+    - 'anthropic' provider for Claude models
+    - 'google' provider for Gemini models
 
-Invokes the OpenAI Codex CLI tool via subprocess.
-This is an experimental provider - prefer API-based providers for reliability.
+    CLI providers have limitations:
+    - No streaming support
+    - No structured output
+    - Slower than direct API calls
+    - Requires external CLI binaries installed
 
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
@@ -80,6 +87,13 @@ class CodexCLIProvider(ProviderAdapter):
         default_flags: str | None = None,
         timeout: int = 120,
     ) -> None:
+        warnings.warn(
+            "CodexCLIProvider is deprecated and will be removed in v1.0. "
+            "Use the 'openai' provider with direct API access instead. "
+            "See: https://github.com/sherifkozman/llm-council#providers",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._cli_path = cli_path or shutil.which("codex")
         self._default_model = default_model or DEFAULT_MODEL
         self._default_flags = default_flags or DEFAULT_FLAGS
