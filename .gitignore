@@ -66,3 +66,6 @@ design/
 *.pem
 *.key
 credentials.json
+
+# Specs (internal planning docs)
+specs/

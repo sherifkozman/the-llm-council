@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-01-02
+
+### Added
+- **CLI Flags Enhancement**: 21 new CLI flags for improved usability and scripting
+
+  **Global flags:**
+  - `--version / -V` - Show version and exit
+  - `--quiet / -q` - Suppress non-essential output
+  - `--debug` - Enable debug logging
+  - `--config / -c` - Custom config file path
+  - `--no-color` - Disable colored output
+
+  **`council run` flags:**
+  - `--timeout / -t` - Request timeout in seconds
+  - `--temperature` - Model temperature (0.0-2.0)
+  - `--max-tokens` - Max output tokens
+  - `--input / -i` - Read task from file (or `-` for stdin)
+  - `--output / -o` - Write output to file
+  - `--dry-run` - Show what would run without executing
+  - `--context / --system` - System prompt injection
+  - `--schema` - Custom output schema file
+
+  **`council doctor` flags:**
+  - `--json` - Output as JSON for scripting
+  - `--provider` - Check specific provider only
+
+  **`council config` flags:**
+  - `--path` - Show config file path
+  - `--validate` - Validate configuration file
+  - `--get KEY` - Get config value by key (dot notation)
+  - `--set KEY VALUE` - Set config value
+  - `--edit` - Open config in $EDITOR
+
+- **CouncilConfig fields**: Added `temperature`, `max_tokens`, `system_context`, `output_schema` fields
+
+### Security
+- Path validation for `--config` flag (prevents path traversal)
+- Task length limit (100KB max) to prevent resource exhaustion
+- Editor command validation for `--edit` flag
+
 ## [0.5.1] - 2026-01-02
 
 ### Changed
