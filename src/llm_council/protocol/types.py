@@ -76,6 +76,25 @@ class CouncilConfig(BaseModel):
         default=None,
         description="Agent mode for consolidated agents (e.g., 'impl', 'arch', 'review')",
     )
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Model temperature for generation (0.0-2.0)",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum output tokens",
+    )
+    system_context: str | None = Field(
+        default=None,
+        description="Additional system context/instructions to prepend",
+    )
+    output_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Custom JSON schema for output validation",
+    )
 
 
 class CouncilRequest(BaseModel):
