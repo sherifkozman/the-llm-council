@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-01-03
+
+### Fixed
+- **Provider Token Handling**: Fixed validation error when LLM APIs return `None` for token counts (#22)
+  - Applied defensive `or 0` fallback to all providers (google, vertex, anthropic, openai, openrouter)
+  - Prevents Pydantic validation errors with `GenerateResponse.usage` field
+
 ## [0.5.2] - 2026-01-02
 
 ### Added
