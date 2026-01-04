@@ -307,9 +307,9 @@ class GoogleProvider(ProviderAdapter):
         if hasattr(response, "usage_metadata") and response.usage_metadata:
             um = response.usage_metadata
             usage = {
-                "prompt_tokens": getattr(um, "prompt_token_count", 0),
-                "completion_tokens": getattr(um, "candidates_token_count", 0),
-                "total_tokens": getattr(um, "total_token_count", 0),
+                "prompt_tokens": getattr(um, "prompt_token_count", 0) or 0,
+                "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
+                "total_tokens": getattr(um, "total_token_count", 0) or 0,
             }
 
         finish_reason = None

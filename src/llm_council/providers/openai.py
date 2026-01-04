@@ -354,10 +354,13 @@ class OpenAIProvider(ProviderAdapter):
 
         usage = None
         if response.usage:
+            prompt_tokens = response.usage.prompt_tokens or 0
+            completion_tokens = response.usage.completion_tokens or 0
+            total_tokens = response.usage.total_tokens or 0
             usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
             }
 
         return GenerateResponse(

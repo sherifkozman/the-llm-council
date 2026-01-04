@@ -318,11 +318,13 @@ class AnthropicProvider(ProviderAdapter):
                 )
 
         usage = None
-        if hasattr(response, "usage"):
+        if hasattr(response, "usage") and response.usage:
+            input_tokens = response.usage.input_tokens or 0
+            output_tokens = response.usage.output_tokens or 0
             usage = {
-                "prompt_tokens": response.usage.input_tokens,
-                "completion_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+                "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
             }
 
         return GenerateResponse(
