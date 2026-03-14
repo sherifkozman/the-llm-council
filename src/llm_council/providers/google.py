@@ -22,7 +22,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "gemini-3-pro-preview"
+DEFAULT_MODEL = "gemini-3.1-pro-preview"
 
 # Model prefixes that support structured output with response_schema
 # See: https://ai.google.dev/gemini-api/docs/structured-output
@@ -374,7 +374,7 @@ class GoogleProvider(ProviderAdapter):
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="google-genai package not installed. Run: pip install the-llm-council[google]",
+                message="google-genai not installed. Run: pip install the-llm-council[google]",
                 details={"error": "missing_package"},
             )
 

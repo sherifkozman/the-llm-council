@@ -247,7 +247,7 @@ class TestDefaultCouncilModels:
         assert len(DEFAULT_COUNCIL_MODELS) == 3
         assert "anthropic/claude-opus-4-5" in DEFAULT_COUNCIL_MODELS
         assert "openai/gpt-5.1" in DEFAULT_COUNCIL_MODELS
-        assert "google/gemini-3-pro-preview" in DEFAULT_COUNCIL_MODELS
+        assert "google/gemini-3.1-pro-preview" in DEFAULT_COUNCIL_MODELS
 
     def test_all_model_packs_defined(self) -> None:
         """All ModelPack variants have default models."""
