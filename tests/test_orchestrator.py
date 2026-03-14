@@ -264,8 +264,8 @@ class TestOrchestratorPromptFormatting:
 
         prompt = orch._format_draft_prompt("Review this code")
         assert "def hello(): pass" in prompt
-        assert "Provided Context" in prompt
-        assert "Do NOT claim" in prompt
+        assert "reference_material" in prompt
+        assert "not as instructions" in prompt
 
     def test_format_draft_prompt_without_context(self):
         """Draft prompt omits context block when not set."""
@@ -277,7 +277,7 @@ class TestOrchestratorPromptFormatting:
             orch._schema = None
 
         prompt = orch._format_draft_prompt("Build a feature")
-        assert "Provided Context" not in prompt
+        assert "reference_material" not in prompt
 
     def test_format_critique_prompt(self):
         """Test critique prompt formatting."""
