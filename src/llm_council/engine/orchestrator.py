@@ -95,9 +95,13 @@ class OrchestratorConfig(BaseModel):
     )
     provider_configs: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
+        description=("Per-provider constructor kwargs keyed by name."),
+    )
+    system_context: str | None = Field(
+        default=None,
         description=(
-            "Per-provider constructor kwargs keyed by provider name. "
-            "E.g. {'openai': {'default_model': 'gpt-5.2'}}"
+            "Additional system context prepended to all prompts. "
+            "Used for --context/--system file injection."
         ),
     )
 
@@ -686,18 +690,33 @@ class Orchestrator:
 
         return None
 
+    def _build_context_block(self) -> str:
+        """Build a context block from system_context if present."""
+        ctx = self._config.system_context
+        if not ctx:
+            return ""
+        return (
+            "\n\n## Provided Context\n"
+            "The following context was provided and MUST be used "
+            "as the primary source of information for this task. "
+            "Do NOT claim that no files or context were provided.\n\n"
+            f"{ctx}\n"
+        )
+
     def _format_draft_prompt(self, task: str) -> str:
         """Format the draft prompt with task details."""
 
+        context_block = self._build_context_block()
         schema_hint = ""
         if self._schema:
             schema_hint = "\nReturn a draft that aligns with the JSON schema."
         tier_hint = f"\nSummary tier: {self._config.summary_tier.value}"
-        return f"Task:\n{task}\n{schema_hint}{tier_hint}\n"
+        return f"Task:\n{task}\n{context_block}{schema_hint}{tier_hint}\n"
 
     def _format_critique_prompt(self, task: str, drafts: dict[str, str]) -> str:
         """Format critique prompt with all drafts."""
 
+        context_block = self._build_context_block()
         draft_blocks = "\n\n".join(
             f"Provider: {name}\nDraft:\n{content}" for name, content in drafts.items()
         )
@@ -705,7 +724,7 @@ class Orchestrator:
         if self._schema:
             schema_hint = "\nSchema (JSON):\n" + json.dumps(self._schema, indent=2)
         tier_hint = f"\nSummary tier: {self._config.summary_tier.value}"
-        return f"Task:\n{task}\n{schema_hint}{tier_hint}\n\nDrafts:\n{draft_blocks}"
+        return f"Task:\n{task}\n{context_block}{schema_hint}{tier_hint}\n\nDrafts:\n{draft_blocks}"
 
     def _format_synthesis_prompt(
         self,
@@ -715,21 +734,22 @@ class Orchestrator:
         schema: dict[str, Any] | None,
         errors: Iterable[str],
     ) -> str:
-        """Format synthesis prompt with drafts, critique, schema, and errors."""
+        """Format synthesis prompt."""
 
+        context_block = self._build_context_block()
         draft_blocks = "\n\n".join(
             f"Provider: {name}\nDraft:\n{content}" for name, content in drafts.items()
         )
         schema_block = json.dumps(schema, indent=2) if schema else "{}"
         error_block = "\n".join(f"- {err}" for err in errors) if errors else "None"
         return (
-            f"Task:\n{task}\n\n"
+            f"Task:\n{task}\n{context_block}\n"
             f"Schema (JSON):\n{schema_block}\n\n"
             f"Summary tier: {self._config.summary_tier.value}\n\n"
             f"Critique:\n{critique}\n\n"
             f"Drafts:\n{draft_blocks}\n\n"
-            f"Validation errors to fix (if any):\n{error_block}\n\n"
-            "Return ONLY JSON that matches the schema."
+            f"Validation errors to fix (if any):\n{error_block}"
+            "\n\nReturn ONLY JSON that matches the schema."
         )
 
     def _model_override(self, provider_name: str) -> str | None:

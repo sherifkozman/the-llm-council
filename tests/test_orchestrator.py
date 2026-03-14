@@ -253,6 +253,32 @@ class TestOrchestratorPromptFormatting:
         assert "Task:" in prompt
         assert "Build a feature" in prompt
 
+    def test_format_draft_prompt_with_context(self):
+        """Draft prompt includes system_context (#31)."""
+        config = OrchestratorConfig(system_context="def hello(): pass")
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["mock"], config=config)
+            orch._schema = None
+
+        prompt = orch._format_draft_prompt("Review this code")
+        assert "def hello(): pass" in prompt
+        assert "Provided Context" in prompt
+        assert "Do NOT claim" in prompt
+
+    def test_format_draft_prompt_without_context(self):
+        """Draft prompt omits context block when not set."""
+        config = OrchestratorConfig()
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["mock"], config=config)
+            orch._schema = None
+
+        prompt = orch._format_draft_prompt("Build a feature")
+        assert "Provided Context" not in prompt
+
     def test_format_critique_prompt(self):
         """Test critique prompt formatting."""
         config = OrchestratorConfig()

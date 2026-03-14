@@ -51,6 +51,7 @@ class Council:
             enable_graceful_degradation=(config.enable_graceful_degradation if config else True),
             models=config.models if config else None,
             provider_configs=(config.provider_configs if config else {}),
+            system_context=(config.system_context if config else None),
         )
 
         self.config = config or CouncilConfig(providers=self._providers)
