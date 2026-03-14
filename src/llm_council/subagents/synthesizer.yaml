@@ -60,19 +60,13 @@ prompts:
 
     ---
 
-    Your release notes should:
-    1. Follow Keep a Changelog format (Added, Changed, Deprecated, Removed, Fixed, Security)
-    2. Use Semantic Versioning (MAJOR.MINOR.PATCH)
-    3. Highlight breaking changes prominently
-    4. Include migration guides for breaking changes
-    5. Provide actionable checklists for release process
-    6. Be written for the audience (developers, users, operators)
-
-    Style guidelines:
-    - Start each item with a verb (Add, Fix, Update, Remove)
-    - Be specific about what changed
-    - Link to PRs and issues where relevant
-    - Keep summaries concise but informative
+    Your output should:
+    1. Integrate the strongest elements from all drafts
+    2. Address all critique points with fixes or justifications
+    3. Resolve contradictions between drafts with clear reasoning
+    4. Match the required output schema exactly
+    5. Be concise — remove redundancy across merged drafts
+    6. When merging code suggestions, prefer the most secure and maintainable approach
 
 classification_rules:
   task_signals:

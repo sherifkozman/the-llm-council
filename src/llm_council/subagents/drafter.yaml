@@ -82,6 +82,11 @@ prompts:
 
     ---
 
+    ## Output Format
+    Your response will be validated against a JSON schema.
+    Structure your recommendations to align with the expected output format.
+    Do not fabricate information — if unsure, say so explicitly.
+
   mode_prompts:
     impl: |
       ## Mode: Implementation
