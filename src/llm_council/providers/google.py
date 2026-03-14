@@ -23,6 +23,7 @@ from llm_council.providers.base import (
 )
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
+ENV_MODEL = "GOOGLE_MODEL"
 
 # Model prefixes that support structured output with response_schema
 # See: https://ai.google.dev/gemini-api/docs/structured-output
@@ -169,7 +170,7 @@ class GoogleProvider(ProviderAdapter):
         self._api_key = (
             api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         )
-        self._default_model = default_model or DEFAULT_MODEL
+        self._default_model = default_model or os.environ.get(ENV_MODEL) or DEFAULT_MODEL
         self._client: Any = None
 
     def _get_client(self) -> Any:

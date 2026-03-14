@@ -22,6 +22,7 @@ from llm_council.providers.base import (
 )
 
 DEFAULT_MODEL = "claude-opus-4-5"
+ENV_MODEL = "ANTHROPIC_MODEL"
 
 # Beta header required for structured outputs
 # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
@@ -122,7 +123,7 @@ class AnthropicProvider(ProviderAdapter):
             default_model: Default model to use if not specified in request.
         """
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        self._default_model = default_model or DEFAULT_MODEL
+        self._default_model = default_model or os.environ.get(ENV_MODEL) or DEFAULT_MODEL
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -284,7 +285,8 @@ class AnthropicProvider(ProviderAdapter):
         if model in STRUCTURED_OUTPUT_MODELS:
             return True
 
-        # Strip date suffix for comparison (e.g., "claude-sonnet-4-5-20251201" -> "claude-sonnet-4-5")
+        # Strip date suffix for comparison
+        # e.g., "claude-sonnet-4-5-20251201" -> "claude-sonnet-4-5"
         base_model = model
         for suffix in ("-2024", "-2025", "-2026"):
             if suffix in model:
@@ -359,7 +361,9 @@ class AnthropicProvider(ProviderAdapter):
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="anthropic package not installed. Run: pip install the-llm-council[anthropic]",
+                message=(
+                    "anthropic package not installed. Run: pip install the-llm-council[anthropic]"
+                ),
                 details={"error": "missing_package"},
             )
 
