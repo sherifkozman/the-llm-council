@@ -64,6 +64,46 @@ class TestCLIDoctor:
             assert result.exit_code == 0
             assert "Provider Status" in result.stdout
 
+    def test_doctor_uses_provider_config(self):
+        """Doctor passes provider config to get_provider (#28)."""
+        with (
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={},
+            ),
+            patch(
+                "llm_council.cli.main._load_provider_configs",
+                return_value={
+                    "openai": {"default_model": "gpt-5.2"},
+                },
+            ),
+            patch("llm_council.providers.registry.get_registry") as mock_reg,
+        ):
+            mock_registry = MagicMock()
+            mock_provider = MagicMock()
+            mock_doctor_result = MagicMock()
+            mock_doctor_result.ok = True
+            mock_doctor_result.message = "OK"
+            mock_doctor_result.latency_ms = 100.0
+
+            mock_registry.list_providers.return_value = ["openai"]
+            mock_registry.get_provider.return_value = mock_provider
+            mock_provider.doctor.return_value = mock_doctor_result
+            mock_reg.return_value = mock_registry
+
+            import asyncio
+
+            with patch(
+                "asyncio.run",
+                side_effect=lambda coro: asyncio.get_event_loop().run_until_complete(coro)
+                if asyncio.iscoroutine(coro)
+                else coro,
+            ):
+                result = runner.invoke(app, ["doctor"])
+
+            # Verify get_provider was called with config kwargs
+            mock_registry.get_provider.assert_called_with("openai", default_model="gpt-5.2")
+
     def test_doctor_with_no_providers(self):
         """Test doctor when no providers registered."""
         with patch("llm_council.providers.registry.get_registry") as mock_reg:

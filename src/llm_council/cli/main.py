@@ -537,10 +537,14 @@ def doctor(
             console.print("Install provider packages: pip install the-llm-council[all]")
         return
 
+    # Load per-provider config so doctor shows configured models
+    provider_cfgs = _load_provider_configs()
+
     results = []
     for name in provider_names:
         try:
-            provider = registry.get_provider(name)
+            kwargs = provider_cfgs.get(name, {})
+            provider = registry.get_provider(name, **kwargs)
             result = asyncio.run(provider.doctor())
             results.append(
                 {
