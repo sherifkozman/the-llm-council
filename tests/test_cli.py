@@ -196,6 +196,65 @@ class TestOutputFormatConfig:
                 assert "{" in result.stdout or "providers" in result.stdout
 
 
+class TestProviderConfigLoading:
+    """Tests for provider config loading from config file (#26)."""
+
+    def test_load_provider_configs_extracts_models(self):
+        """Provider configs extract default_model from config."""
+        from llm_council.cli.main import _load_provider_configs
+
+        config_data = {
+            "providers": [
+                {"name": "openai", "default_model": "gpt-5.2"},
+                {"name": "google", "default_model": "gemini-3.1-pro"},
+            ],
+            "defaults": {},
+        }
+
+        with patch(
+            "llm_council.cli.main._load_config",
+            return_value=config_data,
+        ):
+            result = _load_provider_configs()
+            assert result == {
+                "openai": {"default_model": "gpt-5.2"},
+                "google": {"default_model": "gemini-3.1-pro"},
+            }
+
+    def test_load_provider_configs_ignores_invalid(self):
+        """Provider configs skip invalid entries."""
+        from llm_council.cli.main import _load_provider_configs
+
+        config_data = {
+            "providers": [
+                {"name": "openai", "default_model": "gpt-5.2"},
+                "invalid_string",
+                {"no_name": True},
+                {"name": "anthropic"},  # no default_model
+            ],
+        }
+
+        with patch(
+            "llm_council.cli.main._load_config",
+            return_value=config_data,
+        ):
+            result = _load_provider_configs()
+            assert result == {
+                "openai": {"default_model": "gpt-5.2"},
+            }
+
+    def test_load_provider_configs_empty(self):
+        """Empty config returns empty dict."""
+        from llm_council.cli.main import _load_provider_configs
+
+        with patch(
+            "llm_council.cli.main._load_config",
+            return_value={},
+        ):
+            result = _load_provider_configs()
+            assert result == {}
+
+
 class TestCLIRun:
     """Tests for run command."""
 

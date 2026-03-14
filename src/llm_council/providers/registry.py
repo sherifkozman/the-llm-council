@@ -52,9 +52,14 @@ class ProviderRegistry:
                 )
             self._providers[normalized] = adapter_class
 
-    def get_provider(self, name: str) -> ProviderAdapter:
-        """Instantiate and return the provider adapter for the given name."""
+    def get_provider(self, name: str, **kwargs: Any) -> ProviderAdapter:
+        """Instantiate and return the provider adapter.
 
+        Args:
+            name: Registered provider name.
+            **kwargs: Forwarded to the adapter constructor
+                (e.g. ``default_model``).
+        """
         normalized = name.strip().lower()
         if not normalized:
             raise ValueError("Provider name must be a non-empty string.")
@@ -63,7 +68,7 @@ class ProviderRegistry:
         if adapter_class is None:
             available = ", ".join(self.list_providers())
             raise KeyError(f"Provider '{normalized}' is not registered. Available: [{available}]")
-        return adapter_class()
+        return adapter_class(**kwargs)
 
     def list_providers(self) -> list[str]:
         """Return a sorted list of registered provider names."""

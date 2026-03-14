@@ -179,6 +179,47 @@ def _load_config_defaults() -> dict[str, Any]:
     return config.get("defaults", {})
 
 
+def _load_provider_configs() -> dict[str, dict[str, Any]]:
+    """Extract per-provider configs from config file.
+
+    Reads the ``providers`` list from config.yaml and returns a
+    dict keyed by provider name with constructor kwargs
+    (e.g. ``default_model``).
+
+    Example config.yaml::
+
+        providers:
+          - name: openai
+            default_model: gpt-5.2
+          - name: google
+            default_model: gemini-3.1-pro-preview
+
+    Returns::
+
+        {"openai": {"default_model": "gpt-5.2"},
+         "google": {"default_model": "gemini-3.1-pro-preview"}}
+    """
+    config = _load_config()
+    providers_list = config.get("providers", [])
+    if not isinstance(providers_list, list):
+        return {}
+
+    result: dict[str, dict[str, Any]] = {}
+    for entry in providers_list:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        # Forward known constructor kwargs only
+        kwargs: dict[str, Any] = {}
+        if "default_model" in entry:
+            kwargs["default_model"] = entry["default_model"]
+        if kwargs:
+            result[name] = kwargs
+    return result
+
+
 def _get_nested_value(data: dict[str, Any], key: str) -> Any:
     """Get a nested value using dot notation (e.g., 'defaults.timeout')."""
     parts = key.split(".")
@@ -391,6 +432,7 @@ def run(
             max_tokens=max_tokens,
             system_context=context,
             output_schema=custom_schema,
+            provider_configs=_load_provider_configs(),
         )
 
         council = Council(config=config)

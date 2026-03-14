@@ -90,8 +90,14 @@ class OrchestratorConfig(BaseModel):
         default=None,
         description=(
             "List of OpenRouter model IDs for multi-model council. "
-            "If set, creates virtual providers for each model. "
-            "Example: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o', 'google/gemini-pro']"
+            "If set, creates virtual providers for each model."
+        ),
+    )
+    provider_configs: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-provider constructor kwargs keyed by provider name. "
+            "E.g. {'openai': {'default_model': 'gpt-5.2'}}"
         ),
     )
 
@@ -820,7 +826,8 @@ class Orchestrator:
             # Standard provider initialization
             for name in self._provider_names:
                 try:
-                    self._providers[name] = self._registry.get_provider(name)
+                    kwargs = self._config.provider_configs.get(name, {})
+                    self._providers[name] = self._registry.get_provider(name, **kwargs)
                 except Exception as exc:
                     self._provider_init_errors[name] = str(exc)
 
