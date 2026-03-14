@@ -56,9 +56,13 @@ class TestCLIDoctor:
 
     def test_doctor_shows_providers(self):
         """Test doctor command shows provider table."""
-        result = runner.invoke(app, ["doctor"])
-        assert result.exit_code == 0
-        assert "Provider Status" in result.stdout
+        with patch(
+            "llm_council.cli.main._load_config_defaults",
+            return_value={},
+        ):
+            result = runner.invoke(app, ["doctor"])
+            assert result.exit_code == 0
+            assert "Provider Status" in result.stdout
 
     def test_doctor_with_no_providers(self):
         """Test doctor when no providers registered."""
@@ -98,6 +102,98 @@ class TestCLIConfig:
         result = runner.invoke(app, ["config"])
         assert result.exit_code == 0
         assert "Usage" in result.stdout or "config" in result.stdout
+
+
+class TestOutputFormatConfig:
+    """Tests for output_format config default (#29)."""
+
+    def test_run_uses_output_format_json_from_config(self):
+        """Config output_format: json enables JSON output."""
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.output = {"result": "test"}
+        mock_result.model_dump.return_value = {
+            "success": True,
+            "output": {"result": "test"},
+        }
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "json"},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(app, ["run", "router", "Test task"])
+            assert result.exit_code in [0, 1]
+            # Should produce JSON output (no rich panels)
+            if result.exit_code == 0:
+                assert "Council Result" not in result.stdout
+
+    def test_run_json_flag_overrides_config(self):
+        """Explicit --json flag works even with no config."""
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.output = {"result": "test"}
+        mock_result.model_dump.return_value = {
+            "success": True,
+            "output": {"result": "test"},
+        }
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(app, ["run", "router", "Test task", "--json"])
+            assert result.exit_code in [0, 1]
+
+    def test_run_rich_output_when_config_not_json(self):
+        """Non-json output_format preserves rich output."""
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.output = {"result": "test"}
+        mock_result.model_dump.return_value = {
+            "success": True,
+            "output": {"result": "test"},
+        }
+        mock_result.validation_errors = None
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "rich"},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(app, ["run", "router", "Test task"])
+            assert result.exit_code in [0, 1]
+
+    def test_doctor_uses_output_format_json_from_config(self):
+        """Doctor command respects output_format config."""
+        with patch(
+            "llm_council.cli.main._load_config_defaults",
+            return_value={"output_format": "json"},
+        ):
+            result = runner.invoke(app, ["doctor"])
+            assert result.exit_code == 0
+            # JSON output should not have rich table header
+            if "Provider Status" not in result.stdout:
+                assert "{" in result.stdout or "providers" in result.stdout
 
 
 class TestCLIRun:

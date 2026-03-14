@@ -311,6 +311,10 @@ def run(
     # Load defaults from config file
     config_defaults = _load_config_defaults()
 
+    # Apply output_format default from config (CLI flag takes precedence)
+    if not output_json:
+        output_json = config_defaults.get("output_format") == "json"
+
     # Resolve agent aliases
     resolved_agent, resolved_mode, was_deprecated = _resolve_agent_alias(subagent, mode)
 
@@ -343,7 +347,8 @@ def run(
         _print(f"  Timeout: {effective_timeout}s")
         _print(f"  Temperature: {temperature if temperature is not None else 'default'}")
         _print(f"  Max tokens: {max_tokens if max_tokens is not None else 'default'}")
-        _print(f"  Context: {context[:50] + '...' if context and len(context) > 50 else context or 'none'}")
+        ctx_display = context[:50] + "..." if context and len(context) > 50 else context or "none"
+        _print(f"  Context: {ctx_display}")
         _print(f"  Schema: {schema_file or 'default'}")
         _print(f"  Task: {task_text[:100]}{'...' if len(task_text) > 100 else ''}")
         return
@@ -459,6 +464,11 @@ def doctor(
     """Check provider availability and configuration."""
     console = _get_console()
 
+    # Apply output_format default from config (CLI flag takes precedence)
+    if not output_json:
+        config_defaults = _load_config_defaults()
+        output_json = config_defaults.get("output_format") == "json"
+
     if not output_json:
         _print("[bold blue]Council Doctor[/bold blue] Checking providers...\n")
 
@@ -490,19 +500,23 @@ def doctor(
         try:
             provider = registry.get_provider(name)
             result = asyncio.run(provider.doctor())
-            results.append({
-                "name": name,
-                "ok": result.ok,
-                "message": result.message or "",
-                "latency_ms": result.latency_ms,
-            })
+            results.append(
+                {
+                    "name": name,
+                    "ok": result.ok,
+                    "message": result.message or "",
+                    "latency_ms": result.latency_ms,
+                }
+            )
         except Exception as e:
-            results.append({
-                "name": name,
-                "ok": False,
-                "message": str(e),
-                "latency_ms": None,
-            })
+            results.append(
+                {
+                    "name": name,
+                    "ok": False,
+                    "message": str(e),
+                    "latency_ms": None,
+                }
+            )
 
     if output_json:
         print(json.dumps({"providers": results}, indent=2))
@@ -667,7 +681,12 @@ defaults:
         if not config_file.exists():
             console.print("[yellow]Config file doesn't exist. Creating default...[/yellow]")
             config_dir.mkdir(parents=True, exist_ok=True)
-            config_file.write_text("# LLM Council Configuration\n\ndefaults:\n  providers:\n    - openrouter\n  timeout: 120\n")
+            default_cfg = (
+                "# LLM Council Configuration\n\n"
+                "defaults:\n  providers:\n"
+                "    - openrouter\n  timeout: 120\n"
+            )
+            config_file.write_text(default_cfg)
 
         editor = os.environ.get("EDITOR", "vi")
         # Security: validate editor doesn't contain shell metacharacters
