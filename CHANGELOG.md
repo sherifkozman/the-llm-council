@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-14
+
+### Fixed
+- **Config wiring** (#26): `providers[].default_model` in config.yaml is now forwarded to provider constructors via the registry
+- **Doctor output** (#28): `council doctor` shows configured models instead of hardcoded defaults
+- **Gemini model name** (#30): Updated default from `gemini-3-pro-preview` to `gemini-3.1-pro-preview`
+- **Context injection** (#31): `--context`/`--system` content now reaches all three prompt phases (draft, critique, synthesis)
+
+### Added
+- **Per-provider env var model override** (#27): `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `GOOGLE_MODEL`, `OPENROUTER_MODEL` — consistent fallback across all providers
+- **Config output_format** (#29): Set `output_format: json` in config defaults to avoid passing `--json` on every invocation
+- **Provider configs in CouncilConfig**: New `provider_configs` field for per-provider constructor kwargs via Python API
+
+### Changed
+- **Prompt quality improvements**: Router examples updated to v0.5.0 agent names; synthesizer prompt generalized beyond release notes; planner deduplicated; drafter/critic gain schema awareness and anti-hallucination instructions
+- **Router prompt streamlined**: Removed heavyweight Council Deliberation Protocol from fast classifier
+
+### Security
+- **Context injection hardened**: User-provided `--context` content wrapped in `<reference_material>` XML delimiters and framed as reference data, not instructions — mitigates prompt injection
+
 ## [0.5.3] - 2026-01-03
 
 ### Fixed

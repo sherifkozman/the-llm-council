@@ -364,7 +364,7 @@ export GOOGLE_API_KEY="..."
 # Vertex AI - Gemini (Enterprise GCP)
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
-export VERTEX_AI_MODEL="gemini-2.5-pro"     # optional, default: gemini-2.0-flash
+export VERTEX_AI_MODEL="gemini-3.1-pro-preview"  # optional
 
 # Vertex AI - Claude (Enterprise GCP)
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
@@ -377,11 +377,19 @@ export ANTHROPIC_MODEL="claude-opus-4-5@20251101"  # model with version
 # Multi-model council: comma-separated OpenRouter model IDs
 export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
 
-# Optional: Model pack overrides for specific task types
-export COUNCIL_MODEL_FAST="anthropic/claude-3-5-haiku"    # Quick tasks
-export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-5" # Deep analysis
-export COUNCIL_MODEL_CODE="openai/gpt-5.1"                # Code generation
-export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-5" # Adversarial critique
+# Per-provider model override (v0.6.0+)
+export OPENAI_MODEL="gpt-5.2"               # Override OpenAI default
+export ANTHROPIC_MODEL="claude-opus-4-5"     # Override Anthropic default
+export GOOGLE_MODEL="gemini-3.1-pro-preview" # Override Google default
+export OPENROUTER_MODEL="anthropic/claude-opus-4-5"  # Override OpenRouter default
+
+# Model pack overrides for specific task types
+export COUNCIL_MODEL_FAST="anthropic/claude-3-5-haiku"        # Quick tasks
+export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-5"    # Deep analysis
+export COUNCIL_MODEL_CODE="openai/gpt-5.1"                   # Code generation
+export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-5"     # Adversarial critique
+export COUNCIL_MODEL_GROUNDED="google/gemini-3.1-pro-preview" # Research tasks
+export COUNCIL_MODEL_CODE_COMPLEX="anthropic/claude-opus-4-5" # Complex refactoring
 ```
 
 ### Per-Subagent Reasoning Configuration (v0.3.0+)
@@ -389,8 +397,8 @@ export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-5" # Adversarial critique
 Subagents can be configured with provider preferences, model overrides, and extended reasoning/thinking budgets in their YAML configs:
 
 ```yaml
-# src/llm_council/subagents/red-team.yaml
-name: red-team
+# src/llm_council/subagents/critic.yaml (security mode)
+name: critic
 model_pack: harsh_critic
 
 # Provider preferences
@@ -425,9 +433,9 @@ All subagents have pre-configured reasoning defaults based on task complexity:
 
 | Tier | Subagents | Config | Use Case |
 |------|-----------|--------|----------|
-| **High** | architect, assessor, planner, reviewer, red-team | `effort: high`, `budget_tokens: 16384` | Deep analysis, critical decisions |
-| **Medium** | implementer, researcher | `effort: medium`, `budget_tokens: 8192` | Balanced code/research tasks |
-| **Disabled** | router, shipper, test-designer | `enabled: false` | Fast tasks, no overhead |
+| **High** | drafter (arch), critic, planner | `effort: high`, `budget_tokens: 16384` | Deep analysis, critical decisions |
+| **Medium** | drafter (impl), researcher | `effort: medium`, `budget_tokens: 8192` | Balanced code/research tasks |
+| **Disabled** | router, synthesizer, drafter (test) | `enabled: false` | Fast tasks, no overhead |
 
 ### Config File
 
@@ -435,14 +443,22 @@ All subagents have pre-configured reasoning defaults based on task complexity:
 # ~/.config/llm-council/config.yaml
 providers:
   - name: openrouter
-    api_key: ${OPENROUTER_API_KEY}
     default_model: anthropic/claude-opus-4-5
+  - name: openai
+    default_model: gpt-5.2
+  - name: google
+    default_model: gemini-3.1-pro-preview
 
 defaults:
+  providers:
+    - openrouter
   timeout: 120
   max_retries: 3
   summary_tier: actions
+  output_format: json  # or "rich" (default) — useful for non-interactive clients
 ```
+
+Provider `default_model` is forwarded to each provider's constructor, overriding the hardcoded default. Per-provider env vars (e.g. `OPENAI_MODEL`) take precedence over the config file, and the `--models` CLI flag overrides both.
 
 ## CLI Reference
 
