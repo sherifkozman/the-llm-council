@@ -4,12 +4,36 @@ from __future__ import annotations
 
 import pytest
 
+from llm_council.providers.anthropic import (
+    DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL,
+)
+from llm_council.providers.anthropic import (
+    AnthropicProvider,
+)
 from llm_council.providers.base import (
     DoctorResult,
     GenerateRequest,
     GenerateResponse,
     Message,
     ProviderCapabilities,
+)
+from llm_council.providers.google import (
+    DEFAULT_MODEL as GOOGLE_DEFAULT_MODEL,
+)
+from llm_council.providers.google import (
+    GoogleProvider,
+)
+from llm_council.providers.openai import (
+    DEFAULT_MODEL as OPENAI_DEFAULT_MODEL,
+)
+from llm_council.providers.openai import (
+    OpenAIProvider,
+)
+from llm_council.providers.openrouter import (
+    DEFAULT_MODEL as OPENROUTER_DEFAULT_MODEL,
+)
+from llm_council.providers.openrouter import (
+    OpenRouterProvider,
 )
 from llm_council.providers.registry import ProviderRegistry, get_registry
 
@@ -224,3 +248,91 @@ class TestMockProvider:
         """Test doctor for unhealthy provider."""
         result = await failing_provider.doctor()
         assert result.ok is False
+
+
+class TestOpenAIProviderEnvModel:
+    """Tests for OPENAI_MODEL env var fallback in OpenAIProvider."""
+
+    def test_default_model_used_when_no_arg_no_env(self, monkeypatch):
+        """DEFAULT_MODEL is used when neither arg nor env var is set."""
+        monkeypatch.delenv("OPENAI_MODEL", raising=False)
+        provider = OpenAIProvider()
+        assert provider._default_model == OPENAI_DEFAULT_MODEL
+
+    def test_env_var_used_when_no_arg(self, monkeypatch):
+        """OPENAI_MODEL env var is used when no default_model arg is passed."""
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
+        provider = OpenAIProvider()
+        assert provider._default_model == "gpt-4o"
+
+    def test_arg_takes_precedence_over_env_var(self, monkeypatch):
+        """default_model arg overrides OPENAI_MODEL env var."""
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
+        provider = OpenAIProvider(default_model="gpt-5.1-mini")
+        assert provider._default_model == "gpt-5.1-mini"
+
+
+class TestAnthropicProviderEnvModel:
+    """Tests for ANTHROPIC_MODEL env var fallback in AnthropicProvider."""
+
+    def test_default_model_used_when_no_arg_no_env(self, monkeypatch):
+        """DEFAULT_MODEL is used when neither arg nor env var is set."""
+        monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+        provider = AnthropicProvider()
+        assert provider._default_model == ANTHROPIC_DEFAULT_MODEL
+
+    def test_env_var_used_when_no_arg(self, monkeypatch):
+        """ANTHROPIC_MODEL env var is used when no default_model arg is passed."""
+        monkeypatch.setenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
+        provider = AnthropicProvider()
+        assert provider._default_model == "claude-haiku-4-5"
+
+    def test_arg_takes_precedence_over_env_var(self, monkeypatch):
+        """default_model arg overrides ANTHROPIC_MODEL env var."""
+        monkeypatch.setenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
+        provider = AnthropicProvider(default_model="claude-sonnet-4-5")
+        assert provider._default_model == "claude-sonnet-4-5"
+
+
+class TestGoogleProviderEnvModel:
+    """Tests for GOOGLE_MODEL env var fallback in GoogleProvider."""
+
+    def test_default_model_used_when_no_arg_no_env(self, monkeypatch):
+        """DEFAULT_MODEL is used when neither arg nor env var is set."""
+        monkeypatch.delenv("GOOGLE_MODEL", raising=False)
+        provider = GoogleProvider()
+        assert provider._default_model == GOOGLE_DEFAULT_MODEL
+
+    def test_env_var_used_when_no_arg(self, monkeypatch):
+        """GOOGLE_MODEL env var is used when no default_model arg is passed."""
+        monkeypatch.setenv("GOOGLE_MODEL", "gemini-2.0-flash")
+        provider = GoogleProvider()
+        assert provider._default_model == "gemini-2.0-flash"
+
+    def test_arg_takes_precedence_over_env_var(self, monkeypatch):
+        """default_model arg overrides GOOGLE_MODEL env var."""
+        monkeypatch.setenv("GOOGLE_MODEL", "gemini-2.0-flash")
+        provider = GoogleProvider(default_model="gemini-3.1-pro-preview")
+        assert provider._default_model == "gemini-3.1-pro-preview"
+
+
+class TestOpenRouterProviderEnvModel:
+    """Tests for OPENROUTER_MODEL env var fallback in OpenRouterProvider."""
+
+    def test_default_model_used_when_no_arg_no_env(self, monkeypatch):
+        """DEFAULT_MODEL is used when neither arg nor env var is set."""
+        monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+        provider = OpenRouterProvider()
+        assert provider._default_model == OPENROUTER_DEFAULT_MODEL
+
+    def test_env_var_used_when_no_arg(self, monkeypatch):
+        """OPENROUTER_MODEL env var is used when no default_model arg is passed."""
+        monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o")
+        provider = OpenRouterProvider()
+        assert provider._default_model == "openai/gpt-4o"
+
+    def test_arg_takes_precedence_over_env_var(self, monkeypatch):
+        """default_model arg overrides OPENROUTER_MODEL env var."""
+        monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o")
+        provider = OpenRouterProvider(default_model="anthropic/claude-opus-4-5")
+        assert provider._default_model == "anthropic/claude-opus-4-5"

@@ -46,10 +46,12 @@ class Council:
         orch_config = OrchestratorConfig(
             timeout=config.timeout if config else 120,
             max_retries=config.max_retries if config else 3,
-            enable_artifacts=config.enable_artifact_store if config else True,
-            enable_health_check=config.enable_health_check if config else False,
-            enable_graceful_degradation=config.enable_graceful_degradation if config else True,
+            enable_artifacts=(config.enable_artifact_store if config else True),
+            enable_health_check=(config.enable_health_check if config else False),
+            enable_graceful_degradation=(config.enable_graceful_degradation if config else True),
             models=config.models if config else None,
+            provider_configs=(config.provider_configs if config else {}),
+            system_context=(config.system_context if config else None),
         )
 
         self.config = config or CouncilConfig(providers=self._providers)

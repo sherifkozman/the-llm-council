@@ -48,7 +48,7 @@ from llm_council.providers.google import (
     _strip_schema_meta_fields,
 )
 
-DEFAULT_MODEL = "gemini-3-pro-preview"
+DEFAULT_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_LOCATION = "us-central1"
 DEFAULT_CLAUDE_REGION = "global"
 
@@ -139,7 +139,7 @@ class VertexAIProvider(ProviderAdapter):
         self._claude_project = os.environ.get(ENV_ANTHROPIC_PROJECT)
         self._claude_region = os.environ.get(ENV_CLAUDE_REGION, DEFAULT_CLAUDE_REGION)
 
-        # Determine default model - check ANTHROPIC_MODEL first for Claude, then VERTEX_AI_MODEL for Gemini
+        # Check ANTHROPIC_MODEL for Claude, then VERTEX_AI_MODEL for Gemini
         anthropic_model = os.environ.get(ENV_ANTHROPIC_MODEL)
         vertex_model = os.environ.get(ENV_VERTEX_MODEL)
 
@@ -504,7 +504,7 @@ class VertexAIProvider(ProviderAdapter):
 
     def _claude_model_supports_structured_output(self, model: str) -> bool:
         """Check if a Claude model supports structured output."""
-        # Strip version suffix for comparison (e.g., "claude-opus-4-5@20251101" -> "claude-opus-4-5")
+        # Strip version suffix (e.g., "claude-opus-4-5@20251101" -> "claude-opus-4-5")
         base_model = model.split("@")[0] if "@" in model else model
         if base_model in ANTHROPIC_STRUCTURED_OUTPUT_MODELS:
             return True
@@ -553,7 +553,7 @@ class VertexAIProvider(ProviderAdapter):
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="google-genai package not installed. Run: pip install the-llm-council[vertex]",
+                message=("google-genai not installed. Run: pip install the-llm-council[vertex]"),
                 details={"error": "missing_package"},
             )
 
@@ -563,9 +563,15 @@ class VertexAIProvider(ProviderAdapter):
             list(client.models.list())
             latency_ms = (time.time() - start_time) * 1000
 
+            msg = (
+                f"Vertex AI Gemini is accessible "
+                f"(project: {self._project}, "
+                f"location: {self._location}, "
+                f"model: {self._default_model})"
+            )
             return DoctorResult(
                 ok=True,
-                message=f"Vertex AI Gemini is accessible (project: {self._project}, location: {self._location}, model: {self._default_model})",
+                message=msg,
                 latency_ms=latency_ms,
             )
         except Exception as e:
@@ -576,10 +582,13 @@ class VertexAIProvider(ProviderAdapter):
                 help_msg = (
                     "Authentication failed. Either:\n"
                     "  1. Run 'gcloud auth application-default login', or\n"
-                    "  2. Set GOOGLE_APPLICATION_CREDENTIALS to a service account JSON file"
+                    "  2. Set GOOGLE_APPLICATION_CREDENTIALS"
                 )
             elif "permission" in error_msg.lower():
-                help_msg = f"Permission denied. Ensure the credentials have Vertex AI access in project '{self._project}'"
+                help_msg = (
+                    "Permission denied. Ensure credentials have "
+                    f"Vertex AI access in project '{self._project}'"
+                )
             else:
                 help_msg = error_msg
 
@@ -595,7 +604,7 @@ class VertexAIProvider(ProviderAdapter):
         if not self._claude_project:
             return DoctorResult(
                 ok=False,
-                message="ANTHROPIC_VERTEX_PROJECT_ID environment variable not set",
+                message=("ANTHROPIC_VERTEX_PROJECT_ID environment variable not set"),
                 details={"error": "missing_project"},
             )
 
@@ -604,7 +613,7 @@ class VertexAIProvider(ProviderAdapter):
         except ImportError:
             return DoctorResult(
                 ok=False,
-                message="anthropic[vertex] package not installed. Run: pip install anthropic[vertex]",
+                message=("anthropic[vertex] not installed. Run: pip install anthropic[vertex]"),
                 details={"error": "missing_package"},
             )
 
@@ -618,9 +627,15 @@ class VertexAIProvider(ProviderAdapter):
             )
             latency_ms = (time.time() - start_time) * 1000
 
+            msg = (
+                f"Vertex AI Claude is accessible "
+                f"(project: {self._claude_project}, "
+                f"region: {self._claude_region}, "
+                f"model: {self._default_model})"
+            )
             return DoctorResult(
                 ok=True,
-                message=f"Vertex AI Claude is accessible (project: {self._claude_project}, region: {self._claude_region}, model: {self._default_model})",
+                message=msg,
                 latency_ms=latency_ms,
             )
         except Exception as e:
@@ -631,10 +646,14 @@ class VertexAIProvider(ProviderAdapter):
                 help_msg = (
                     "Authentication failed. Either:\n"
                     "  1. Run 'gcloud auth application-default login', or\n"
-                    "  2. Set GOOGLE_APPLICATION_CREDENTIALS to a service account JSON file"
+                    "  2. Set GOOGLE_APPLICATION_CREDENTIALS"
                 )
             elif "permission" in error_msg.lower():
-                help_msg = f"Permission denied. Ensure the credentials have Vertex AI access in project '{self._claude_project}'"
+                help_msg = (
+                    "Permission denied. Ensure credentials have "
+                    "Vertex AI access in project "
+                    f"'{self._claude_project}'"
+                )
             else:
                 help_msg = error_msg
 

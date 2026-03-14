@@ -179,6 +179,47 @@ def _load_config_defaults() -> dict[str, Any]:
     return config.get("defaults", {})
 
 
+def _load_provider_configs() -> dict[str, dict[str, Any]]:
+    """Extract per-provider configs from config file.
+
+    Reads the ``providers`` list from config.yaml and returns a
+    dict keyed by provider name with constructor kwargs
+    (e.g. ``default_model``).
+
+    Example config.yaml::
+
+        providers:
+          - name: openai
+            default_model: gpt-5.2
+          - name: google
+            default_model: gemini-3.1-pro-preview
+
+    Returns::
+
+        {"openai": {"default_model": "gpt-5.2"},
+         "google": {"default_model": "gemini-3.1-pro-preview"}}
+    """
+    config = _load_config()
+    providers_list = config.get("providers", [])
+    if not isinstance(providers_list, list):
+        return {}
+
+    result: dict[str, dict[str, Any]] = {}
+    for entry in providers_list:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        # Forward known constructor kwargs only
+        kwargs: dict[str, Any] = {}
+        if "default_model" in entry:
+            kwargs["default_model"] = entry["default_model"]
+        if kwargs:
+            result[name] = kwargs
+    return result
+
+
 def _get_nested_value(data: dict[str, Any], key: str) -> Any:
     """Get a nested value using dot notation (e.g., 'defaults.timeout')."""
     parts = key.split(".")
@@ -311,6 +352,10 @@ def run(
     # Load defaults from config file
     config_defaults = _load_config_defaults()
 
+    # Apply output_format default from config (CLI flag takes precedence)
+    if not output_json:
+        output_json = config_defaults.get("output_format") == "json"
+
     # Resolve agent aliases
     resolved_agent, resolved_mode, was_deprecated = _resolve_agent_alias(subagent, mode)
 
@@ -343,7 +388,8 @@ def run(
         _print(f"  Timeout: {effective_timeout}s")
         _print(f"  Temperature: {temperature if temperature is not None else 'default'}")
         _print(f"  Max tokens: {max_tokens if max_tokens is not None else 'default'}")
-        _print(f"  Context: {context[:50] + '...' if context and len(context) > 50 else context or 'none'}")
+        ctx_display = context[:50] + "..." if context and len(context) > 50 else context or "none"
+        _print(f"  Context: {ctx_display}")
         _print(f"  Schema: {schema_file or 'default'}")
         _print(f"  Task: {task_text[:100]}{'...' if len(task_text) > 100 else ''}")
         return
@@ -386,6 +432,7 @@ def run(
             max_tokens=max_tokens,
             system_context=context,
             output_schema=custom_schema,
+            provider_configs=_load_provider_configs(),
         )
 
         council = Council(config=config)
@@ -459,6 +506,11 @@ def doctor(
     """Check provider availability and configuration."""
     console = _get_console()
 
+    # Apply output_format default from config (CLI flag takes precedence)
+    if not output_json:
+        config_defaults = _load_config_defaults()
+        output_json = config_defaults.get("output_format") == "json"
+
     if not output_json:
         _print("[bold blue]Council Doctor[/bold blue] Checking providers...\n")
 
@@ -485,24 +537,32 @@ def doctor(
             console.print("Install provider packages: pip install the-llm-council[all]")
         return
 
+    # Load per-provider config so doctor shows configured models
+    provider_cfgs = _load_provider_configs()
+
     results = []
     for name in provider_names:
         try:
-            provider = registry.get_provider(name)
+            kwargs = provider_cfgs.get(name, {})
+            provider = registry.get_provider(name, **kwargs)
             result = asyncio.run(provider.doctor())
-            results.append({
-                "name": name,
-                "ok": result.ok,
-                "message": result.message or "",
-                "latency_ms": result.latency_ms,
-            })
+            results.append(
+                {
+                    "name": name,
+                    "ok": result.ok,
+                    "message": result.message or "",
+                    "latency_ms": result.latency_ms,
+                }
+            )
         except Exception as e:
-            results.append({
-                "name": name,
-                "ok": False,
-                "message": str(e),
-                "latency_ms": None,
-            })
+            results.append(
+                {
+                    "name": name,
+                    "ok": False,
+                    "message": str(e),
+                    "latency_ms": None,
+                }
+            )
 
     if output_json:
         print(json.dumps({"providers": results}, indent=2))
@@ -667,7 +727,12 @@ defaults:
         if not config_file.exists():
             console.print("[yellow]Config file doesn't exist. Creating default...[/yellow]")
             config_dir.mkdir(parents=True, exist_ok=True)
-            config_file.write_text("# LLM Council Configuration\n\ndefaults:\n  providers:\n    - openrouter\n  timeout: 120\n")
+            default_cfg = (
+                "# LLM Council Configuration\n\n"
+                "defaults:\n  providers:\n"
+                "    - openrouter\n  timeout: 120\n"
+            )
+            config_file.write_text(default_cfg)
 
         editor = os.environ.get("EDITOR", "vi")
         # Security: validate editor doesn't contain shell metacharacters

@@ -26,6 +26,7 @@ from llm_council.providers.base import (
 
 # Default models for different use cases (December 2025)
 DEFAULT_MODEL = "anthropic/claude-opus-4-5"
+ENV_MODEL = "OPENROUTER_MODEL"
 FAST_MODEL = "anthropic/claude-3-5-haiku"
 REASONING_MODEL = "anthropic/claude-opus-4-5"
 CODE_MODEL = "openai/gpt-5.1"
@@ -145,7 +146,7 @@ class OpenRouterProvider(ProviderAdapter):
         """
         self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self._base_url = base_url or os.environ.get("OPENROUTER_BASE_URL", self.BASE_URL)
-        self._default_model = default_model or DEFAULT_MODEL
+        self._default_model = default_model or os.environ.get(ENV_MODEL) or DEFAULT_MODEL
         self._http_client = http_client
         self._owns_client = http_client is None
 

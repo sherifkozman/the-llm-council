@@ -95,6 +95,13 @@ class CouncilConfig(BaseModel):
         default=None,
         description="Custom JSON schema for output validation",
     )
+    provider_configs: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-provider constructor kwargs keyed by provider name. "
+            "E.g. {'openai': {'default_model': 'gpt-5.2'}}"
+        ),
+    )
 
 
 class CouncilRequest(BaseModel):

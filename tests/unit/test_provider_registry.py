@@ -81,6 +81,47 @@ class _FakeEntryPoints:
         return list(self._items)
 
 
+class DummyProviderWithModel(ProviderAdapter):
+    """Provider that accepts default_model kwarg."""
+
+    name = "dummy_model"
+    capabilities = ProviderCapabilities()
+
+    def __init__(self, default_model: str | None = None) -> None:
+        self.default_model = default_model
+
+    async def generate(self, request: GenerateRequest) -> GenerateResponse:
+        return GenerateResponse(text="ok")
+
+    async def supports(self, capability: str) -> bool:
+        return False
+
+    async def doctor(self) -> DoctorResult:
+        return DoctorResult(ok=True)
+
+
+def test_get_provider_forwards_kwargs() -> None:
+    """get_provider passes kwargs to adapter constructor (#26)."""
+    _reset_registry_singleton()
+    registry = ProviderRegistry()
+
+    registry.register_provider("model_test", DummyProviderWithModel)
+    provider = registry.get_provider("model_test", default_model="custom-model-v2")
+    assert isinstance(provider, DummyProviderWithModel)
+    assert provider.default_model == "custom-model-v2"
+
+
+def test_get_provider_no_kwargs_uses_defaults() -> None:
+    """get_provider without kwargs uses adapter defaults (#26)."""
+    _reset_registry_singleton()
+    registry = ProviderRegistry()
+
+    registry.register_provider("model_test", DummyProviderWithModel)
+    provider = registry.get_provider("model_test")
+    assert isinstance(provider, DummyProviderWithModel)
+    assert provider.default_model is None
+
+
 def test_entry_point_auto_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     _reset_registry_singleton()
 

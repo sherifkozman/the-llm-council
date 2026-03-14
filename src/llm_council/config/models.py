@@ -13,7 +13,7 @@ Environment Variables:
         COUNCIL_MODEL_REASONING: Deep reasoning model (default: claude-opus-4-5)
         COUNCIL_MODEL_CODE: Code specialist model (default: gpt-5.1)
         COUNCIL_MODEL_CRITIC: Adversarial critic model (default: claude-sonnet-4-5)
-        COUNCIL_MODEL_GROUNDED: Grounded/RAG model (default: gemini-3-pro-preview)
+        COUNCIL_MODEL_GROUNDED: Grounded/RAG model (default: gemini-3.1-pro-preview)
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ DEFAULT_MODEL_PACKS: dict[ModelPack, str] = {
     ModelPack.CODE: "openai/gpt-5.1",
     ModelPack.CODE_COMPLEX: "anthropic/claude-opus-4-5",  # Use Opus for complex refactors
     ModelPack.CRITIC: "anthropic/claude-sonnet-4-5",
-    ModelPack.GROUNDED: "google/gemini-3-pro-preview",  # Gemini for grounded/search tasks
+    ModelPack.GROUNDED: "google/gemini-3.1-pro-preview",  # Gemini for grounded/search tasks
     ModelPack.DEFAULT: "anthropic/claude-opus-4-5",
 }
 
@@ -93,7 +93,7 @@ DEFAULT_MODEL_PACKS: dict[ModelPack, str] = {
 DEFAULT_COUNCIL_MODELS: list[str] = [
     "anthropic/claude-opus-4-5",
     "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
+    "google/gemini-3.1-pro-preview",
 ]
 
 # Environment variable names

@@ -83,6 +83,12 @@ prompts:
 
     ---
 
+    ## Output Format
+    Your response will be validated against a JSON schema.
+    Structure your findings to align with the expected output format.
+    Base all findings on evidence from the provided code/context.
+    Do not fabricate vulnerabilities or issues — every finding must be verifiable.
+
   mode_prompts:
     review: |
       ## Mode: Code Review

@@ -22,6 +22,7 @@ from llm_council.providers.base import (
 )
 
 DEFAULT_MODEL = "gpt-5.1"
+ENV_MODEL = "OPENAI_MODEL"
 
 # Models that support structured output with json_schema response_format
 # See: https://platform.openai.com/docs/guides/structured-outputs
@@ -209,7 +210,7 @@ class OpenAIProvider(ProviderAdapter):
             default_model: Default model to use if not specified in request.
         """
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        self._default_model = default_model or DEFAULT_MODEL
+        self._default_model = default_model or os.environ.get(ENV_MODEL) or DEFAULT_MODEL
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -305,7 +306,8 @@ class OpenAIProvider(ProviderAdapter):
                 # Note: "none" is only valid for GPT-5.2+, o-series requires low/medium/high
                 if effort == "none" and model.startswith(REASONING_MODEL_PREFIXES):
                     logger.warning(
-                        "reasoning_effort='none' not supported for o-series model %s, using 'medium'",
+                        "reasoning_effort='none' not supported for o-series model %s,"
+                        " using 'medium'",
                         model,
                     )
                     effort = "medium"
