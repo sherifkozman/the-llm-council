@@ -15,7 +15,12 @@ from .providers.base import (
 )
 from .providers.registry import ProviderRegistry, get_registry
 
-__version__ = "0.6.0"
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("the-llm-council")
+except Exception:
+    __version__ = "0.6.1"  # fallback
 
 __all__ = [
     "__version__",

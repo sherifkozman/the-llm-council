@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-03-17
+
+### Fixed
+- `council version` now reads from `importlib.metadata` instead of a hardcoded string (#35)
+
 ## [0.6.1] - 2026-03-17
 
 ### Changed
