@@ -645,7 +645,7 @@ def config(
 providers:
   - name: openrouter
     # api_key: ${OPENROUTER_API_KEY}
-    default_model: anthropic/claude-opus-4-5
+    default_model: anthropic/claude-opus-4-6
 
 # Default settings for 'council run' command
 defaults:

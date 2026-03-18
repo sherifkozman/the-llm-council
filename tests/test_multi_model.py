@@ -71,11 +71,14 @@ class TestModelConfig:
         assert len(models) == 1
 
     def test_model_pack_defaults(self) -> None:
-        """Model packs have correct defaults (December 2025)."""
-        assert get_model_for_pack(ModelPack.FAST) == "anthropic/claude-3-5-haiku"
-        assert get_model_for_pack(ModelPack.REASONING) == "anthropic/claude-opus-4-5"
-        assert get_model_for_pack(ModelPack.CODE) == "openai/gpt-5.1"
-        assert get_model_for_pack(ModelPack.CRITIC) == "anthropic/claude-sonnet-4-5"
+        """Model packs have correct defaults (March 2026)."""
+        assert get_model_for_pack(ModelPack.FAST) == "anthropic/claude-haiku-4-5"
+        assert get_model_for_pack(ModelPack.REASONING) == "anthropic/claude-opus-4-6"
+        assert get_model_for_pack(ModelPack.CODE) == "openai/gpt-5.4"
+        assert get_model_for_pack(ModelPack.CODE_COMPLEX) == "anthropic/claude-opus-4-6"
+        assert get_model_for_pack(ModelPack.CRITIC) == "anthropic/claude-sonnet-4-6"
+        assert get_model_for_pack(ModelPack.GROUNDED) == "google/gemini-3.1-pro-preview"
+        assert get_model_for_pack(ModelPack.DEFAULT) == "anthropic/claude-opus-4-6"
 
     def test_model_pack_overrides(self) -> None:
         """Model pack env vars override defaults."""
@@ -85,8 +88,8 @@ class TestModelConfig:
 
         assert get_model_for_pack(ModelPack.FAST) == "custom/fast-model"
         assert get_model_for_pack(ModelPack.CODE) == "custom/code-model"
-        # Non-overridden packs still use defaults (December 2025)
-        assert get_model_for_pack(ModelPack.REASONING) == "anthropic/claude-opus-4-5"
+        # Non-overridden packs still use defaults (March 2026)
+        assert get_model_for_pack(ModelPack.REASONING) == "anthropic/claude-opus-4-6"
 
     def test_parse_models_string(self) -> None:
         """parse_models_string correctly parses comma-separated models."""
@@ -243,10 +246,10 @@ class TestDefaultCouncilModels:
     """Tests for default council model configuration."""
 
     def test_default_models_defined(self) -> None:
-        """DEFAULT_COUNCIL_MODELS contains expected models (January 2026)."""
+        """DEFAULT_COUNCIL_MODELS contains expected models (March 2026)."""
         assert len(DEFAULT_COUNCIL_MODELS) == 3
-        assert "anthropic/claude-opus-4-5" in DEFAULT_COUNCIL_MODELS
-        assert "openai/gpt-5.1" in DEFAULT_COUNCIL_MODELS
+        assert "anthropic/claude-opus-4-6" in DEFAULT_COUNCIL_MODELS
+        assert "openai/gpt-5.4" in DEFAULT_COUNCIL_MODELS
         assert "google/gemini-3.1-pro-preview" in DEFAULT_COUNCIL_MODELS
 
     def test_all_model_packs_defined(self) -> None:
@@ -328,5 +331,5 @@ class TestSubagentModelPack:
         router_config = load_subagent("router")
         model = get_model_for_subagent(router_config)
 
-        # Should be the FAST pack model (claude-3-5-haiku)
+        # Should be the FAST pack model (claude-haiku-4-5)
         assert "haiku" in model.lower()

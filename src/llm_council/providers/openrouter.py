@@ -24,13 +24,13 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-# Default models for different use cases (December 2025)
-DEFAULT_MODEL = "anthropic/claude-opus-4-5"
+# Default models for different use cases (March 2026)
+DEFAULT_MODEL = "anthropic/claude-opus-4-6"
 ENV_MODEL = "OPENROUTER_MODEL"
-FAST_MODEL = "anthropic/claude-3-5-haiku"
-REASONING_MODEL = "anthropic/claude-opus-4-5"
-CODE_MODEL = "openai/gpt-5.1"
-CRITIC_MODEL = "anthropic/claude-sonnet-4-5"
+FAST_MODEL = "anthropic/claude-haiku-4-5"
+REASONING_MODEL = "anthropic/claude-opus-4-6"
+CODE_MODEL = "openai/gpt-5.4"
+CRITIC_MODEL = "anthropic/claude-sonnet-4-6"
 
 
 def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:

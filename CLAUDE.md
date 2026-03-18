@@ -194,22 +194,22 @@ Run multiple models in parallel via OpenRouter:
 
 ```bash
 # Via CLI flag
-council run drafter --models "anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview" "task"
+council run drafter --models "anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview" "task"
 
 # Via environment variable
-export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
+export COUNCIL_MODELS="anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
 council run drafter "task"
 ```
 
 ### Model Pack Overrides
 
 ```bash
-export COUNCIL_MODEL_FAST="anthropic/claude-3-5-haiku"        # Quick tasks (router, synthesizer)
-export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-5"    # Deep analysis (architect, planner)
-export COUNCIL_MODEL_CODE="openai/gpt-5.1"                   # Code generation (implementer)
-export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-5"     # Adversarial critique
-export COUNCIL_MODEL_GROUNDED="google/gemini-3-pro-preview"   # Research tasks
-export COUNCIL_MODEL_CODE_COMPLEX="anthropic/claude-opus-4-5" # Complex refactoring
+export COUNCIL_MODEL_FAST="anthropic/claude-haiku-4-5"        # Quick tasks (router, synthesizer)
+export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-6"    # Deep analysis (architect, planner)
+export COUNCIL_MODEL_CODE="openai/gpt-5.4"                   # Code generation (implementer)
+export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-6"     # Adversarial critique
+export COUNCIL_MODEL_GROUNDED="google/gemini-3.1-pro-preview" # Research tasks
+export COUNCIL_MODEL_CODE_COMPLEX="anthropic/claude-opus-4-6" # Complex refactoring
 ```
 
 ### Vertex AI (Enterprise GCP)
@@ -226,7 +226,7 @@ council run drafter --providers vertex-ai "task"
 gcloud auth application-default login
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 export CLOUD_ML_REGION="global"
-export ANTHROPIC_MODEL="claude-opus-4-5@20251101"
+export ANTHROPIC_MODEL="claude-opus-4-6@20260301"
 council run drafter --providers vertex-ai "task"
 ```
 
@@ -238,7 +238,7 @@ from llm_council.protocol.types import CouncilConfig
 
 config = CouncilConfig(
     providers=["openrouter"],
-    models=["anthropic/claude-opus-4-5", "openai/gpt-5.1"],
+    models=["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
     mode="impl",
     timeout=120,
     max_retries=3,
@@ -263,7 +263,7 @@ print(result.cost_estimate.estimated_cost_usd)
 # ~/.config/llm-council/config.yaml
 providers:
   - name: openrouter
-    default_model: anthropic/claude-opus-4-5
+    default_model: anthropic/claude-opus-4-6
 
 defaults:
   providers:

@@ -70,7 +70,7 @@ pip install the-llm-council[all]
 export OPENROUTER_API_KEY="your-key"
 
 # Run a council task
-council run implementer "Build a REST API for user authentication"
+council run drafter --mode impl "Build a REST API for user authentication"
 
 # Check provider status
 council doctor
@@ -90,7 +90,7 @@ council = Council(providers=["openrouter"])
 # Run a task
 result = await council.run(
     task="Build a login page with OAuth",
-    subagent="implementer"
+    subagent="drafter"
 )
 
 # Access structured output
@@ -169,11 +169,11 @@ Example config file:
 providers:
   - name: openrouter
     api_key: ${OPENROUTER_API_KEY}
-    default_model: anthropic/claude-3.5-sonnet
+    default_model: anthropic/claude-sonnet-4-6
 
   - name: anthropic
     api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-3-opus-20240229
+    default_model: claude-sonnet-4-6
 
 defaults:
   timeout: 120              # Timeout per API call (seconds)

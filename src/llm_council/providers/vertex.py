@@ -85,7 +85,7 @@ class VertexAIProvider(ProviderAdapter):
     Environment variables for Claude:
         ANTHROPIC_VERTEX_PROJECT_ID: Required for Claude. Your GCP project ID.
         CLOUD_ML_REGION: Optional. Region for Claude (default: global).
-        ANTHROPIC_MODEL: Optional. Default Claude model ID (e.g., claude-opus-4-5@20251101).
+        ANTHROPIC_MODEL: Optional. Default Claude model ID (e.g., claude-opus-4-6@20260301).
 
     Requires the 'vertex' extra for Gemini:
         pip install the-llm-council[vertex]
@@ -101,7 +101,7 @@ class VertexAIProvider(ProviderAdapter):
 
         # Claude models
         export ANTHROPIC_VERTEX_PROJECT_ID=my-project
-        export ANTHROPIC_MODEL=claude-opus-4-5@20251101
+        export ANTHROPIC_MODEL=claude-opus-4-6@20260301
         council run architect "Design a cache" --providers vertex-ai
     """
 

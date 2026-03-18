@@ -54,7 +54,7 @@ council doctor
 CLI:
 
 ```bash
-council run implementer "Build a user authentication system" --providers anthropic
+council run drafter --mode impl "Build a user authentication system" --providers anthropic
 ```
 
 Python:
@@ -68,7 +68,7 @@ async def main():
 
     result = await council.run(
         task="Design a REST API for a blog platform",
-        subagent="architect"
+        subagent="drafter"  # --mode arch
     )
 
     print(result.output)
@@ -78,7 +78,7 @@ asyncio.run(main())
 
 ### Model Selection
 
-Default model: `claude-3-5-sonnet-20241022`
+Default model: `claude-sonnet-4-6`
 
 Override via config:
 
@@ -87,13 +87,13 @@ Override via config:
 providers:
   - name: anthropic
     api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-3-opus-20240229
+    default_model: claude-opus-4-6
 ```
 
 Available models:
-- `claude-3-5-sonnet-20241022` - Latest Sonnet (recommended)
-- `claude-3-opus-20240229` - Most capable, expensive
-- `claude-3-haiku-20240307` - Fast and affordable
+- `claude-sonnet-4-6` - Latest Sonnet (recommended)
+- `claude-opus-4-6` - Most capable, expensive
+- `claude-haiku-4-5` - Fast and affordable
 
 ## OpenAI (GPT)
 
@@ -117,7 +117,7 @@ council doctor
 CLI:
 
 ```bash
-council run researcher "Latest best practices for React 2024" --providers openai
+council run researcher "Latest best practices for React 2026" --providers openai
 ```
 
 Python:
@@ -131,7 +131,7 @@ async def main():
 
     result = await council.run(
         task="Review this authentication code for security issues",
-        subagent="reviewer"
+        subagent="critic"  # --mode review
     )
 
     print(result.output)
@@ -141,7 +141,7 @@ asyncio.run(main())
 
 ### Model Selection
 
-Default model: `gpt-4-turbo`
+Default model: `gpt-5.4`
 
 Override via config:
 
@@ -149,14 +149,13 @@ Override via config:
 providers:
   - name: openai
     api_key: ${OPENAI_API_KEY}
-    default_model: gpt-4o
+    default_model: gpt-5.4
 ```
 
 Available models:
-- `gpt-4-turbo` - Latest GPT-4 (recommended)
-- `gpt-4o` - Multimodal GPT-4
-- `gpt-4` - Original GPT-4
-- `gpt-3.5-turbo` - Fast and affordable
+- `gpt-5.4` - Latest GPT (recommended)
+- `gpt-5.4-codex` - Code-optimized
+- `gpt-5.4-mini` - Fast and affordable
 
 ## Google (Gemini)
 
@@ -194,7 +193,7 @@ async def main():
 
     result = await council.run(
         task="Create a test plan for an e-commerce checkout flow",
-        subagent="test-designer"
+        subagent="drafter"  # --mode test
     )
 
     print(result.output)
@@ -204,7 +203,7 @@ asyncio.run(main())
 
 ### Model Selection
 
-Default model: `gemini-1.5-pro`
+Default model: `gemini-3.1-pro-preview`
 
 Override via config:
 
@@ -212,13 +211,13 @@ Override via config:
 providers:
   - name: google
     api_key: ${GOOGLE_API_KEY}
-    default_model: gemini-1.5-flash
+    default_model: gemini-3.1-pro-preview
 ```
 
 Available models:
-- `gemini-1.5-pro` - Most capable (recommended)
-- `gemini-1.5-flash` - Fast and affordable
-- `gemini-pro` - Previous generation
+- `gemini-3.1-pro-preview` - Most capable (recommended)
+- `gemini-2.5-flash` - Fast and affordable
+- `gemini-2.0-flash` - Previous generation
 
 ## Vertex AI (Enterprise GCP)
 
@@ -258,7 +257,7 @@ For Claude models:
 # pip install the-llm-council[vertex] includes both Gemini and Claude SDKs
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 export CLOUD_ML_REGION="global"              # Claude uses global region
-export ANTHROPIC_MODEL="claude-opus-4-5@20251101"
+export ANTHROPIC_MODEL="claude-opus-4-6@20260301"
 ```
 
 **Step 3: Verify setup**
@@ -272,7 +271,7 @@ council doctor
 CLI:
 
 ```bash
-council run architect "Design a distributed cache" --providers vertex-ai
+council run drafter --mode arch "Design a distributed cache" --providers vertex-ai
 ```
 
 Python:
@@ -286,7 +285,7 @@ async def main():
 
     result = await council.run(
         task="Perform security analysis of JWT authentication",
-        subagent="red-team"
+        subagent="critic"  # --mode security
     )
 
     print(result.output)
@@ -302,8 +301,8 @@ asyncio.run(main())
 - `gemini-2.5-flash` - Balanced performance
 
 **Claude Models** (via `ANTHROPIC_MODEL`):
-- `claude-opus-4-5@20251101` - Most capable Claude
-- `claude-sonnet-4-5@20250929` - Balanced Claude
+- `claude-opus-4-6@20260301` - Most capable Claude
+- `claude-sonnet-4-6@20260301` - Balanced Claude
 - `claude-haiku-4-5@20250929` - Fast Claude
 
 **Note:** Claude models require version suffix (e.g., `@20251101`).
@@ -334,7 +333,7 @@ async def main():
 
     result = await council.run(
         task="Design a distributed caching system",
-        subagent="architect"
+        subagent="drafter"  # --mode arch
     )
 
     # Result contains:
@@ -408,15 +407,15 @@ Create `~/.config/llm-council/config.yaml`:
 providers:
   - name: anthropic
     api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-3-5-sonnet-20241022
+    default_model: claude-sonnet-4-6
 
   - name: openai
     api_key: ${OPENAI_API_KEY}
-    default_model: gpt-4-turbo
+    default_model: gpt-5.4
 
   - name: google
     api_key: ${GOOGLE_API_KEY}
-    default_model: gemini-1.5-pro
+    default_model: gemini-3.1-pro-preview
 
 defaults:
   timeout: 120
@@ -435,8 +434,8 @@ config = CouncilConfig(
     timeout=180,
     max_retries=5,
     model_overrides={
-        "anthropic": "claude-3-opus-20240229",
-        "openai": "gpt-4o"
+        "anthropic": "claude-opus-4-6",
+        "openai": "gpt-5.4"
     }
 )
 
@@ -469,7 +468,7 @@ async def stream_example():
 
 ```bash
 # CLI
-council run implementer "Complex task" --timeout 300 --providers anthropic
+council run drafter --mode impl "Complex task" --timeout 300 --providers anthropic
 
 # Python
 config = CouncilConfig(
@@ -549,23 +548,22 @@ This checks:
 
 ## Cost Comparison
 
-Approximate costs per 1M tokens (as of 2024):
+Approximate costs per 1M tokens (as of 2026):
 
 | Provider | Model | Input | Output |
 |----------|-------|-------|--------|
-| Anthropic | Claude 3.5 Sonnet | $3 | $15 |
-| Anthropic | Claude 3 Opus | $15 | $75 |
-| Anthropic | Claude 3 Haiku | $0.25 | $1.25 |
-| OpenAI | GPT-4 Turbo | $10 | $30 |
-| OpenAI | GPT-4o | $5 | $15 |
-| OpenAI | GPT-3.5 Turbo | $0.50 | $1.50 |
-| Google | Gemini 1.5 Pro | $3.50 | $10.50 |
-| Google | Gemini 1.5 Flash | $0.35 | $1.05 |
+| Anthropic | Claude Sonnet 4.6 | $3 | $15 |
+| Anthropic | Claude Opus 4.6 | $15 | $75 |
+| Anthropic | Claude Haiku 4.5 | $0.25 | $1.25 |
+| OpenAI | GPT-5.4 | $5 | $15 |
+| OpenAI | GPT-5.4 Mini | $0.50 | $1.50 |
+| Google | Gemini 3.1 Pro | $3.50 | $10.50 |
+| Google | Gemini 2.5 Flash | $0.35 | $1.05 |
 
 Track your costs:
 
 ```python
-result = await council.run(task="...", subagent="implementer")
+result = await council.run(task="...", subagent="drafter")
 
 if result.cost_estimate:
     print(f"Cost: ${result.cost_estimate.estimated_cost_usd:.4f}")
@@ -581,7 +579,7 @@ For local or offline use, LLM Council supports CLI-based providers:
 
 ```bash
 # Requires codex CLI to be installed
-council run implementer "Build a parser" --providers codex-cli
+council run drafter --mode impl "Build a parser" --providers codex-cli
 ```
 
 ### Gemini CLI

@@ -51,11 +51,13 @@ async def single_provider_example():
 
             result = await council.run(
                 task="Create a Python function to parse JSON with error handling",
-                subagent="implementer"
+                subagent="implementer",
             )
 
             if result.success:
-                print(f"✓ Implementation complete: {result.output.get('implementation_title', 'N/A')}")
+                print(
+                    f"✓ Implementation complete: {result.output.get('implementation_title', 'N/A')}"
+                )
                 print(f"  Duration: {result.duration_ms}ms")
                 print(f"  Files: {len(result.output.get('files', []))}")
 
@@ -80,8 +82,7 @@ async def single_provider_example():
             print("✓ OpenAI API connected")
 
             result = await council.run(
-                task="Design a caching strategy for a high-traffic API",
-                subagent="architect"
+                task="Design a caching strategy for a high-traffic API", subagent="architect"
             )
 
             if result.success:
@@ -105,8 +106,7 @@ async def single_provider_example():
             print("✓ Google API connected")
 
             result = await council.run(
-                task="Research best practices for API rate limiting",
-                subagent="researcher"
+                task="Research best practices for API rate limiting", subagent="researcher"
             )
 
             if result.success:
@@ -158,7 +158,7 @@ async def multi_provider_example():
 
     result = await council.run(
         task="Implement a rate limiter with Redis, handling edge cases and errors",
-        subagent="implementer"
+        subagent="implementer",
     )
 
     if result.success:
@@ -212,8 +212,8 @@ async def model_override_example():
         model_overrides={
             "anthropic": "claude-3-opus-20240229",  # Use Opus instead of Sonnet
             "openai": "gpt-4-turbo-preview",
-            "google": "gemini-pro",
-        }
+            "google": "gemini-3.1-pro-preview",
+        },
     )
 
     council = Council(providers=["anthropic"], config=config)
@@ -221,15 +221,16 @@ async def model_override_example():
     print("\nModel overrides configured:")
     print(f"  Anthropic: claude-3-opus-20240229 (highest quality)")
     print(f"  OpenAI: gpt-4-turbo-preview")
-    print(f"  Google: gemini-pro")
+    print(f"  Google: gemini-3.1-pro-preview")
 
     result = await council.run(
         task="Write a complex authentication system with JWT and refresh tokens",
-        subagent="implementer"
+        subagent="implementer",
     )
 
     if result.success:
-        print(f"\n✓ Implementation with custom model: {result.output.get('implementation_title', 'N/A')}")
+        title = result.output.get("implementation_title", "N/A")
+        print(f"\n✓ Implementation with custom model: {title}")
         print(f"  Duration: {result.duration_ms}ms")
     else:
         print(f"✗ Failed: {result.error}")
@@ -253,14 +254,14 @@ async def cost_optimization_example():
     config = OrchestratorConfig(
         cost_per_1k_input={
             "anthropic": 0.015,  # Claude Opus input
-            "openai": 0.01,      # GPT-4 Turbo input
-            "google": 0.001,     # Gemini Pro input
+            "openai": 0.01,  # GPT-4 Turbo input
+            "google": 0.001,  # Gemini Pro input
         },
         cost_per_1k_output={
             "anthropic": 0.075,  # Claude Opus output
-            "openai": 0.03,      # GPT-4 Turbo output
-            "google": 0.002,     # Gemini Pro output
-        }
+            "openai": 0.03,  # GPT-4 Turbo output
+            "google": 0.002,  # Gemini Pro output
+        },
     )
 
     council = Council(providers=["anthropic"], config=config)
@@ -271,8 +272,7 @@ async def cost_optimization_example():
     print("  Google:    $0.001 / 1K input, $0.002 / 1K output")
 
     result = await council.run(
-        task="Create a simple TODO list API with CRUD operations",
-        subagent="implementer"
+        task="Create a simple TODO list API with CRUD operations", subagent="implementer"
     )
 
     if result.success and result.cost_estimate:

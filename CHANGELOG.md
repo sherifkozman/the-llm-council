@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-03-17
+
+### Changed
+- Updated default models to March 2026 generation:
+  - Anthropic: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5
+  - OpenAI: gpt-5.4, gpt-5.4-codex, gpt-5.4-mini
+  - Vertex AI: claude-opus-4-6@20260301, claude-sonnet-4-6@20260301
+- Updated skills/council/SKILL.md to v0.6.0 subagent names and modes
+- Refreshed all documentation examples with current model names
+
 ## [0.6.0] - 2026-03-14
 
 ### Fixed
@@ -410,7 +420,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.3...v0.6.0
+[0.5.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.13...v0.5.0
 [0.4.13]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/sherifkozman/the-llm-council/compare/v0.4.11...v0.4.12

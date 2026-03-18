@@ -21,7 +21,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "claude-opus-4-5"
+DEFAULT_MODEL = "claude-opus-4-6"
 ENV_MODEL = "ANTHROPIC_MODEL"
 
 # Beta header required for structured outputs
@@ -43,9 +43,11 @@ STRUCTURED_OUTPUT_MODEL_PREFIXES = (
 STRUCTURED_OUTPUT_MODELS = frozenset(
     {
         # Claude Opus 4.x
+        "claude-opus-4-6",
         "claude-opus-4-5",
         "claude-opus-4-1",
         # Claude Sonnet 4.x
+        "claude-sonnet-4-6",
         "claude-sonnet-4-5",
         # Claude Haiku 4.x
         "claude-haiku-4-5",
@@ -269,8 +271,8 @@ class AnthropicProvider(ProviderAdapter):
         """Check if a specific model supports structured output.
 
         Structured outputs are supported on Claude 4.x family models:
-        - Claude Opus 4.x (claude-opus-4-5, claude-opus-4-1, etc.)
-        - Claude Sonnet 4.x (claude-sonnet-4-5, etc.)
+        - Claude Opus 4.x (claude-opus-4-6, claude-opus-4-5, claude-opus-4-1, etc.)
+        - Claude Sonnet 4.x (claude-sonnet-4-6, claude-sonnet-4-5, etc.)
         - Claude Haiku 4.x (claude-haiku-4-5, etc.)
 
         Claude 3.x models do NOT support structured outputs.

@@ -52,11 +52,11 @@ class ModelOverrides(BaseModel):
 
     openai: str | None = Field(
         default=None,
-        description="OpenAI model to use (e.g., 'gpt-5.1', 'o3-mini').",
+        description="OpenAI model to use (e.g., 'gpt-5.4', 'o3-mini').",
     )
     anthropic: str | None = Field(
         default=None,
-        description="Anthropic model to use (e.g., 'claude-opus-4-5').",
+        description="Anthropic model to use (e.g., 'claude-opus-4-6').",
     )
     google: str | None = Field(
         default=None,
@@ -64,7 +64,7 @@ class ModelOverrides(BaseModel):
     )
     openrouter: str | None = Field(
         default=None,
-        description="OpenRouter model ID (e.g., 'openai/gpt-5.1').",
+        description="OpenRouter model ID (e.g., 'openai/gpt-5.4').",
     )
 
     def get_for_provider(self, provider_name: str) -> str | None:
@@ -241,7 +241,7 @@ def get_model_for_subagent(
         mode: Optional mode for consolidated agents.
 
     Returns:
-        OpenRouter-format model ID (e.g., 'anthropic/claude-opus-4-5').
+        OpenRouter-format model ID (e.g., 'anthropic/claude-opus-4-6').
     """
     pack = get_model_pack(config, mode)
     return DEFAULT_MODEL_PACKS[pack]

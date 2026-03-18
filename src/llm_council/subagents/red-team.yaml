@@ -18,7 +18,7 @@ providers:
   fallback: [openrouter]
 
 models:
-  anthropic: claude-opus-4-5
+  anthropic: claude-opus-4-6
   openai: o3-mini              # o-series for deep reasoning
   google: gemini-3-pro
 

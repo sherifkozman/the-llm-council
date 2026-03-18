@@ -106,7 +106,7 @@ class BaseAgent(ABC):
         Initialize the base agent.
 
         Args:
-            model: Model identifier (e.g., 'gpt-4o', 'claude-opus-4-5')
+            model: Model identifier (e.g., 'gpt-5.4', 'claude-opus-4-6')
             system_prompt: Role-specific system prompt
             tools: List of tools available to this agent
             max_iterations: Maximum tool-call loop iterations

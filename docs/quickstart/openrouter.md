@@ -57,16 +57,16 @@ Provider Status
 council run planner "Add user authentication to my app"
 
 # Generate code with the implementer
-council run implementer "Create a Python function to validate email addresses"
+council run drafter --mode impl "Create a Python function to validate email addresses"
 
 # Get structured JSON output
-council run architect "Design a REST API for a blog platform" --json
+council run drafter --mode arch "Design a REST API for a blog platform" --json
 
 # Review code
-council run reviewer "Check the auth.py file for security issues"
+council run critic --mode review "Check the auth.py file for security issues"
 
 # Research a topic
-council run researcher "What are the best practices for GraphQL API design in 2024?"
+council run researcher "What are the best practices for GraphQL API design in 2026?"
 ```
 
 ### Python API Examples
@@ -82,7 +82,7 @@ async def main():
 
     result = await council.run(
         task="Build a REST API endpoint for user registration",
-        subagent="implementer"
+        subagent="drafter"
     )
 
     if result.success:
@@ -118,7 +118,7 @@ async def build_feature():
     # Step 2: Design architecture
     arch_result = await council.run(
         task="Design OAuth2 architecture with token refresh",
-        subagent="architect"
+        subagent="drafter"  # --mode arch
     )
 
     print("Architecture:", arch_result.output)
@@ -126,7 +126,7 @@ async def build_feature():
     # Step 3: Implement code
     impl_result = await council.run(
         task="Implement OAuth2 login based on the architecture",
-        subagent="implementer"
+        subagent="drafter"  # --mode impl
     )
 
     print("Implementation:", impl_result.output)
@@ -134,7 +134,7 @@ async def build_feature():
     # Step 4: Review the code
     review_result = await council.run(
         task="Review OAuth2 implementation for security issues",
-        subagent="reviewer"
+        subagent="critic"  # --mode review
     )
 
     print("Review findings:", review_result.output)
@@ -149,9 +149,9 @@ OpenRouter provides access to many models. You can specify which model to use in
 ### Default Models
 
 LLM Council uses sensible defaults:
-- **General tasks**: `anthropic/claude-3.5-sonnet`
-- **Fast/cheap tasks**: `anthropic/claude-3-haiku`
-- **Complex reasoning**: `anthropic/claude-3-opus`
+- **General tasks**: `anthropic/claude-sonnet-4-6`
+- **Fast/cheap tasks**: `anthropic/claude-haiku-4-5`
+- **Complex reasoning**: `anthropic/claude-opus-4-6`
 
 ### Overriding Models
 
@@ -161,7 +161,7 @@ Via config file (`~/.config/llm-council/config.yaml`):
 providers:
   - name: openrouter
     api_key: ${OPENROUTER_API_KEY}
-    default_model: openai/gpt-4-turbo
+    default_model: openai/gpt-5.4
 
 defaults:
   timeout: 120
@@ -171,21 +171,19 @@ defaults:
 Via environment variable:
 
 ```bash
-export OPENROUTER_DEFAULT_MODEL="google/gemini-pro"
+export OPENROUTER_DEFAULT_MODEL="google/gemini-3.1-pro-preview"
 ```
 
 ### Popular Models on OpenRouter
 
 | Provider | Model ID | Use Case |
 |----------|----------|----------|
-| Anthropic | `anthropic/claude-3.5-sonnet` | Balanced performance/cost |
-| Anthropic | `anthropic/claude-3-opus` | Complex reasoning |
-| Anthropic | `anthropic/claude-3-haiku` | Fast, cheap tasks |
-| OpenAI | `openai/gpt-4-turbo` | Latest GPT-4 |
-| OpenAI | `openai/gpt-4o` | Multimodal GPT-4 |
-| OpenAI | `openai/gpt-3.5-turbo` | Fast, affordable |
-| Google | `google/gemini-pro` | Google's flagship |
-| Google | `google/gemini-pro-vision` | Multimodal Gemini |
+| Anthropic | `anthropic/claude-sonnet-4-6` | Balanced performance/cost |
+| Anthropic | `anthropic/claude-opus-4-6` | Complex reasoning |
+| Anthropic | `anthropic/claude-haiku-4-5` | Fast, cheap tasks |
+| OpenAI | `openai/gpt-5.4` | Latest GPT |
+| OpenAI | `openai/gpt-5.4-mini` | Fast, affordable |
+| Google | `google/gemini-3.1-pro-preview` | Google's flagship |
 | Meta | `meta-llama/llama-3-70b` | Open source, powerful |
 
 Full model list: [openrouter.ai/models](https://openrouter.ai/models)
@@ -228,7 +226,7 @@ council = Council(providers=[
 ### Verbose Output
 
 ```bash
-council run implementer "Build a user service" --verbose
+council run drafter --mode impl "Build a user service" --verbose
 ```
 
 This shows:
@@ -268,7 +266,7 @@ council doctor
 **Solution**: Some models may be temporarily unavailable. OpenRouter provides automatic failover, but you can also specify a different model:
 
 ```bash
-council run implementer "task" --providers openrouter
+council run drafter --mode impl "task" --providers openrouter
 ```
 
 Check model status at [openrouter.ai/models](https://openrouter.ai/models)
@@ -276,7 +274,7 @@ Check model status at [openrouter.ai/models](https://openrouter.ai/models)
 ### Issue: Slow responses
 
 **Solution**: For faster results:
-1. Use a faster model like `claude-3-haiku` or `gpt-3.5-turbo`
+1. Use a faster model like `claude-haiku-4-5` or `gpt-5.4-mini`
 2. Reduce timeout: `--timeout 60`
 3. Use fewer providers for parallel drafts
 
@@ -285,7 +283,7 @@ Check model status at [openrouter.ai/models](https://openrouter.ai/models)
 ### Track Costs
 
 ```python
-result = await council.run(task="...", subagent="implementer")
+result = await council.run(task="...", subagent="drafter")
 
 if result.cost_estimate:
     print(f"Estimated cost: ${result.cost_estimate.estimated_cost_usd:.4f}")
@@ -294,7 +292,7 @@ if result.cost_estimate:
 
 ### Reduce Costs
 
-1. **Use cheaper models** - `claude-3-haiku` instead of `claude-3-opus`
+1. **Use cheaper models** - `claude-haiku-4-5` instead of `claude-opus-4-6`
 2. **Reduce token limits** - Lower `max_tokens` in config
 3. **Disable parallel drafts** - Use single provider mode
 4. **Use caching** - OpenRouter supports prompt caching for repeated requests
@@ -305,7 +303,7 @@ if result.cost_estimate:
 providers:
   - name: openrouter
     api_key: ${OPENROUTER_API_KEY}
-    default_model: anthropic/claude-3-haiku  # Cheapest Claude model
+    default_model: anthropic/claude-haiku-4-5  # Cheapest Claude model
 
 defaults:
   timeout: 60

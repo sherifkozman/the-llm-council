@@ -9,10 +9,10 @@ Environment Variables:
         Example: "anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
 
     Model pack overrides (optional):
-        COUNCIL_MODEL_FAST: Fast model for quick tasks (default: claude-3-haiku)
-        COUNCIL_MODEL_REASONING: Deep reasoning model (default: claude-opus-4-5)
-        COUNCIL_MODEL_CODE: Code specialist model (default: gpt-5.1)
-        COUNCIL_MODEL_CRITIC: Adversarial critic model (default: claude-sonnet-4-5)
+        COUNCIL_MODEL_FAST: Fast model for quick tasks (default: claude-haiku-4-5)
+        COUNCIL_MODEL_REASONING: Deep reasoning model (default: claude-opus-4-6)
+        COUNCIL_MODEL_CODE: Code specialist model (default: gpt-5.4)
+        COUNCIL_MODEL_CRITIC: Adversarial critic model (default: claude-sonnet-4-6)
         COUNCIL_MODEL_GROUNDED: Grounded/RAG model (default: gemini-3.1-pro-preview)
 """
 
@@ -78,21 +78,21 @@ def resolve_model_pack(yaml_value: str) -> ModelPack:
     return pack
 
 
-# Default models for each pack (OpenRouter format) - January 2026
+# Default models for each pack (OpenRouter format) - March 2026
 DEFAULT_MODEL_PACKS: dict[ModelPack, str] = {
-    ModelPack.FAST: "anthropic/claude-3-5-haiku",
-    ModelPack.REASONING: "anthropic/claude-opus-4-5",
-    ModelPack.CODE: "openai/gpt-5.1",
-    ModelPack.CODE_COMPLEX: "anthropic/claude-opus-4-5",  # Use Opus for complex refactors
-    ModelPack.CRITIC: "anthropic/claude-sonnet-4-5",
+    ModelPack.FAST: "anthropic/claude-haiku-4-5",
+    ModelPack.REASONING: "anthropic/claude-opus-4-6",
+    ModelPack.CODE: "openai/gpt-5.4",
+    ModelPack.CODE_COMPLEX: "anthropic/claude-opus-4-6",  # Use Opus for complex refactors
+    ModelPack.CRITIC: "anthropic/claude-sonnet-4-6",
     ModelPack.GROUNDED: "google/gemini-3.1-pro-preview",  # Gemini for grounded/search tasks
-    ModelPack.DEFAULT: "anthropic/claude-opus-4-5",
+    ModelPack.DEFAULT: "anthropic/claude-opus-4-6",
 }
 
-# Default council models for multi-model runs - January 2026
+# Default council models for multi-model runs - March 2026
 DEFAULT_COUNCIL_MODELS: list[str] = [
-    "anthropic/claude-opus-4-5",
-    "openai/gpt-5.1",
+    "anthropic/claude-opus-4-6",
+    "openai/gpt-5.4",
     "google/gemini-3.1-pro-preview",
 ]
 

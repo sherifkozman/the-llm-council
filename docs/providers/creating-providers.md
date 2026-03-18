@@ -86,7 +86,7 @@ if request.structured_output:
 ```
 
 **Supported Models:**
-- GPT-5.x family (gpt-5.1, gpt-5.2, gpt-5.1-codex, gpt-5.2-codex)
+- GPT-5.x family (gpt-5.4, gpt-5.4-codex, gpt-5.4-mini)
 - GPT-4o family (gpt-4o, gpt-4o-mini)
 - GPT-4.1 family (gpt-4.1, gpt-4.1-mini, gpt-4.1-nano)
 - o-series reasoning models (o1, o3-mini, o4-mini)
@@ -117,8 +117,8 @@ else:
 ```
 
 **Supported Models:**
-- Claude Opus 4.x (claude-opus-4-5, claude-opus-4-1)
-- Claude Sonnet 4.x (claude-sonnet-4-5)
+- Claude Opus 4.x (claude-opus-4-6, claude-opus-4-5, claude-opus-4-1)
+- Claude Sonnet 4.x (claude-sonnet-4-6, claude-sonnet-4-5)
 - Claude Haiku 4.x (claude-haiku-4-5)
 
 **Note:** Claude 3.x models do NOT support structured outputs.
@@ -164,10 +164,9 @@ STRUCTURED_OUTPUT_MODEL_PREFIXES = (
 
 # Explicit model names (with dated versions)
 STRUCTURED_OUTPUT_MODELS = frozenset({
-    "gpt-5.1",
-    "gpt-5.1-codex",
-    "gpt-5.2",
-    "gpt-5.2-codex",
+    "gpt-5.4",
+    "gpt-5.4-codex",
+    "gpt-5.4-mini",
     "gpt-4o-2024-08-06",
     "gpt-4o-2024-11-20",
     # ... etc
@@ -443,7 +442,7 @@ from llm_council import Council
 council = Council(providers=["myprovider"])
 result = await council.run(
     task="Generate code",
-    subagent="implementer"
+    subagent="drafter"
 )
 ```
 
@@ -552,7 +551,7 @@ if request.reasoning and request.reasoning.enabled:
 
 See existing implementations:
 - `src/llm_council/providers/openrouter.py` - HTTP API with streaming, OpenAI-compatible format
-- `src/llm_council/providers/openai.py` - OpenAI native SDK with GPT-5.x support
+- `src/llm_council/providers/openai.py` - OpenAI native SDK with GPT-5.4 support
 - `src/llm_council/providers/anthropic.py` - Anthropic SDK with beta header for Claude 4.x
 - `src/llm_council/providers/google.py` - Google Generative AI with Gemini 2.x/3.x support
 

@@ -21,13 +21,18 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_MODEL = "gpt-5.4"
 ENV_MODEL = "OPENAI_MODEL"
 
 # Models that support structured output with json_schema response_format
 # See: https://platform.openai.com/docs/guides/structured-outputs
 STRUCTURED_OUTPUT_MODELS = frozenset(
     {
+        # GPT-5.4 family (March 2026)
+        "gpt-5.4",
+        "gpt-5.4-codex",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
         # GPT-5.2 family (December 2025)
         "gpt-5.2",
         "gpt-5.2-codex",

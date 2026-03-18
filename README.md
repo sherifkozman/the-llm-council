@@ -141,7 +141,7 @@ The LLM Council is available as an **Agent Skill** following the open [Agent Ski
 Once installed, the `council` skill is auto-invoked when relevant, or use the `/council` command:
 
 ```
-/council implementer "Build a login page with OAuth"
+/council drafter --mode impl "Build a login page with OAuth"
 ```
 
 ### OpenAI Codex
@@ -168,10 +168,10 @@ council run drafter --mode impl "Build a login page with OAuth"
 
 # Multi-model council (Claude + GPT-5 + Gemini debating)
 council run drafter --mode arch "Design a caching layer" \
-  --models "anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
+  --models "anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
 
 # Or set via environment variable
-export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
+export COUNCIL_MODELS="anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
 council run drafter "Build a login page"
 
 # Code review with security analysis
@@ -369,27 +369,27 @@ export VERTEX_AI_MODEL="gemini-3.1-pro-preview"  # optional
 # Vertex AI - Claude (Enterprise GCP)
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 export CLOUD_ML_REGION="global"              # Claude uses global region
-export ANTHROPIC_MODEL="claude-opus-4-5@20251101"  # model with version
+export ANTHROPIC_MODEL="claude-opus-4-6@20260301"  # model with version
 
 # Auth for Vertex AI: gcloud auth application-default login OR
 # export GOOGLE_APPLICATION_CREDENTIALS="/path/to/sa.json"
 
 # Multi-model council: comma-separated OpenRouter model IDs
-export COUNCIL_MODELS="anthropic/claude-opus-4-5,openai/gpt-5.1,google/gemini-3-flash-preview"
+export COUNCIL_MODELS="anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
 
 # Per-provider model override (v0.6.0+)
-export OPENAI_MODEL="gpt-5.2"               # Override OpenAI default
-export ANTHROPIC_MODEL="claude-opus-4-5"     # Override Anthropic default
+export OPENAI_MODEL="gpt-5.4"               # Override OpenAI default
+export ANTHROPIC_MODEL="claude-opus-4-6"     # Override Anthropic default
 export GOOGLE_MODEL="gemini-3.1-pro-preview" # Override Google default
-export OPENROUTER_MODEL="anthropic/claude-opus-4-5"  # Override OpenRouter default
+export OPENROUTER_MODEL="anthropic/claude-opus-4-6"  # Override OpenRouter default
 
 # Model pack overrides for specific task types
-export COUNCIL_MODEL_FAST="anthropic/claude-3-5-haiku"        # Quick tasks
-export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-5"    # Deep analysis
-export COUNCIL_MODEL_CODE="openai/gpt-5.1"                   # Code generation
-export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-5"     # Adversarial critique
+export COUNCIL_MODEL_FAST="anthropic/claude-haiku-4-5"        # Quick tasks
+export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-6"    # Deep analysis
+export COUNCIL_MODEL_CODE="openai/gpt-5.4"                   # Code generation
+export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-6"     # Adversarial critique
 export COUNCIL_MODEL_GROUNDED="google/gemini-3.1-pro-preview" # Research tasks
-export COUNCIL_MODEL_CODE_COMPLEX="anthropic/claude-opus-4-5" # Complex refactoring
+export COUNCIL_MODEL_CODE_COMPLEX="anthropic/claude-opus-4-6" # Complex refactoring
 ```
 
 ### Per-Subagent Reasoning Configuration (v0.3.0+)
@@ -409,7 +409,7 @@ providers:
 
 # Model overrides per provider
 models:
-  anthropic: claude-opus-4-5
+  anthropic: claude-opus-4-6
   openai: o3-mini
   google: gemini-3-pro
 
@@ -443,9 +443,9 @@ All subagents have pre-configured reasoning defaults based on task complexity:
 # ~/.config/llm-council/config.yaml
 providers:
   - name: openrouter
-    default_model: anthropic/claude-opus-4-5
+    default_model: anthropic/claude-opus-4-6
   - name: openai
-    default_model: gpt-5.2
+    default_model: gpt-5.4
   - name: google
     default_model: gemini-3.1-pro-preview
 
