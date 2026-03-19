@@ -16,6 +16,7 @@ shape enforcement to JSON Schema + Pydantic models.
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 import logging
 import time
@@ -44,6 +45,7 @@ from llm_council.providers.registry import get_registry
 from llm_council.schemas import load_schema
 from llm_council.storage.artifacts import ArtifactStore, ArtifactType, get_store
 from llm_council.subagents import load_subagent
+from llm_council.engine.adaptive_protocol import AdaptiveProtocolRunner
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +203,14 @@ class Orchestrator:
         start_time = time.monotonic()
 
         try:
+
+                   # Check if adaptive protocol is enabled
+        use_adaptive = os.environ.get("USE_ADAPTIVE_PROTOCOL", "false").lower() == "true"
+        
+        if use_adaptive:
+            logger.info("Using adaptive protocol for task classification")
+            adaptive_runner = AdaptiveProtocolRunner(self)
+            return await adaptive_runner.run(task, subagent)
             self._subagent_config = load_subagent(subagent)
             schema_name = self._subagent_config.get("schema")
             self._schema = load_schema(schema_name) if schema_name else None

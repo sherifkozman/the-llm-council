@@ -394,6 +394,9 @@ export COUNCIL_MODEL_CODE_COMPLEX="anthropic/claude-opus-4-6" # Complex refactor
 
 ### Per-Subagent Reasoning Configuration (v0.3.0+)
 
+
+# Task-adaptive protocol selection
+export USE_ADAPTIVE_PROTOCOL="true"  # Enable task-based protocol selection (default: false)
 Subagents can be configured with provider preferences, model overrides, and extended reasoning/thinking budgets in their YAML configs:
 
 ```yaml
