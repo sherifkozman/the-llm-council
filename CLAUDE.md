@@ -114,7 +114,7 @@ council run <subagent> "<task>" [OPTIONS]
 | `--timeout, -t` | Request timeout in seconds |
 | `--temperature` | Model temperature (0.0-2.0) |
 | `--max-tokens` | Max output tokens |
-| `--files, -f` | Comma-separated file paths to include as context (20KB/file, 60KB total) |
+| `--files, -f` | File paths as context (repeatable or comma-separated; 50KB/file, 200KB total) |
 | `--input, -i` | Read task from file (use `-` for stdin) |
 | `--output, -o` | Write output to file |
 | `--context, --system` | Additional system context/instructions |

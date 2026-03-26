@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-03-26
+
+### Added
+- `--files/-f` is now repeatable: `-f file1.py -f file2.py` works alongside comma-separated `--files a.py,b.py`
+- `vertex` accepted as alias for `vertex-ai` in provider registry (#38)
+
+### Changed
+- File context limits increased: 50KB per file (was 20KB), 200KB total (was 60KB)
+
 ## [0.6.2] - 2026-03-18
 
 ### Added

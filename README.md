@@ -472,7 +472,7 @@ council version                     # Show installed version
 --mode             Agent mode (impl/arch/test for drafter, review/security for critic, etc.)
 --providers, -p    Comma-separated provider list
 --models, -m       Comma-separated OpenRouter model IDs for multi-model council
---files, -f        Comma-separated file paths to include as context (20KB/file, 60KB total)
+--files, -f        File paths as context (repeatable or comma-separated; 50KB/file, 200KB total)
 --context, --system  Additional system context/instructions
 --timeout, -t      Request timeout in seconds
 --temperature      Model temperature (0.0-2.0)
@@ -491,17 +491,21 @@ council version                     # Show installed version
 Pass source files directly to council for review, implementation, or analysis:
 
 ```bash
-# Code review with file context
+# Comma-separated
 council run critic --mode review --files src/auth.py,src/middleware.py "Review these files"
 
-# Architecture analysis
-council run drafter --mode arch --files src/api/ "Suggest improvements" --json
+# Repeatable -f (cleaner for many files)
+council run critic --mode review \
+  -f src/auth.py \
+  -f src/middleware.py \
+  -f src/handler.py \
+  "Review these files"
 
 # Security audit
-council run critic --mode security --files src/payment.py "Audit payment handler"
+council run critic --mode security -f src/payment.py "Audit payment handler"
 ```
 
-Limits: 20KB per file, 60KB total. Files exceeding limits are truncated with a warning.
+Limits: 50KB per file, 200KB total. Files exceeding limits are truncated with a warning.
 
 ## Development
 
