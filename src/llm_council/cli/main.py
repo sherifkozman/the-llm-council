@@ -190,13 +190,13 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
 
         providers:
           - name: openai
-            default_model: gpt-5.2
+            default_model: gpt-5.4
           - name: google
             default_model: gemini-3.1-pro-preview
 
     Returns::
 
-        {"openai": {"default_model": "gpt-5.2"},
+        {"openai": {"default_model": "gpt-5.4"},
          "google": {"default_model": "gemini-3.1-pro-preview"}}
     """
     config = _load_config()

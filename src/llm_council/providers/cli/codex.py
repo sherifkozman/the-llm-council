@@ -44,7 +44,7 @@ from llm_council.providers.base import (
     get_billing_help_url,
 )
 
-DEFAULT_MODEL = "gpt-5.2-codex"
+DEFAULT_MODEL = "gpt-5.4-codex"
 # SECURITY: Least-privilege defaults - read-only sandbox, no auto-approve
 # Override via CODEX_CLI_FLAGS env var or default_flags param for agentic mode
 DEFAULT_FLAGS = "--sandbox read-only --skip-git-repo-check"

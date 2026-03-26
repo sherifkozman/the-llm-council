@@ -99,7 +99,7 @@ class CouncilConfig(BaseModel):
         default_factory=dict,
         description=(
             "Per-provider constructor kwargs keyed by provider name. "
-            "E.g. {'openai': {'default_model': 'gpt-5.2'}}"
+            "E.g. {'openai': {'default_model': 'gpt-5.4'}}"
         ),
     )
 
