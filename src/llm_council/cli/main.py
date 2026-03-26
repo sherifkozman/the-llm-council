@@ -317,8 +317,12 @@ def run(
         typer.Option("--context", "--system", help="Additional system context/instructions"),
     ] = None,
     files: Annotated[
-        str | None,
-        typer.Option("--files", "-f", help="Comma-separated file paths to include as context"),
+        list[str] | None,
+        typer.Option(
+            "--files",
+            "-f",
+            help="File paths to include as context (repeatable, or comma-separated)",
+        ),
     ] = None,
     schema_file: Annotated[
         Path | None,
@@ -356,11 +360,12 @@ def run(
     # Read --files and merge into context
     if files:
         file_context_parts: list[str] = []
-        max_total_bytes = 60_000  # 60KB total cap
-        max_per_file = 20_000  # 20KB per file
+        max_total_bytes = 200_000  # 200KB total cap
+        max_per_file = 50_000  # 50KB per file
         total_bytes = 0
-        for fpath in files.split(","):
-            fpath = fpath.strip()
+        # Flatten: each entry can be comma-separated or a single path
+        all_paths = [p.strip() for entry in files for p in entry.split(",")]
+        for fpath in all_paths:
             if not fpath:
                 continue
             p = Path(fpath)
@@ -371,7 +376,7 @@ def run(
             if len(content) > max_per_file:
                 content = content[:max_per_file] + f"\n... [truncated at {max_per_file // 1000}KB]"
             if total_bytes + len(content) > max_total_bytes:
-                _print(f"[yellow]Warning:[/yellow] Skipping {fpath} (60KB limit)")
+                _print(f"[yellow]Warning:[/yellow] Skipping {fpath} (200KB total limit)")
                 continue
             total_bytes += len(content)
             file_context_parts.append(f"=== FILE: {fpath} ===\n{content}\n=== END: {fpath} ===")
