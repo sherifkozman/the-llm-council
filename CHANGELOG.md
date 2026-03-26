@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.2] - 2026-03-17
+## [0.6.2] - 2026-03-18
+
+### Added
+- `--files/-f` flag on `council run` — comma-separated file paths injected as context (20KB/file, 60KB total)
+- Documented all v0.6.0+ CLI flags in README (--timeout, --temperature, --files, --context, etc.)
 
 ### Fixed
 - `council version` now reads from `importlib.metadata` instead of a hardcoded string (#35)
+- `council doctor` no longer emits `RuntimeError: Event loop is closed` — health checks run in parallel via `asyncio.gather`
+- Remaining stale `gpt-5.2` references updated to `gpt-5.4` in docstrings and codex CLI provider
+- ASCII art banner in README updated from GPT5.2 to GPT5.4
 
 ## [0.6.1] - 2026-03-17
 

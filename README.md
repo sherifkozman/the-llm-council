@@ -10,7 +10,7 @@ $ council run architect "Design a mass hallucination prevention system"
       ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
       │  ┌───────────┐  │      │  ┌───────────┐  │      │  ┌───────────┐  │
       │  │ ╭───────╮ │  │      │  │ ╭───────╮ │  │      │  │ ╭───────╮ │  │
-      │  │ │GPT5.2│ │  │      │  │ │ CLAUDE│ │  │      │  │ │GEMINI │ │  │
+      │  │ │GPT5.4│ │  │      │  │ │ CLAUDE│ │  │      │  │ │GEMINI │ │  │
       │  │ ╰───────╯ │  │      │  │ ╰───────╯ │  │      │  │ ╰───────╯ │  │
       │  │   ◉ ◉     │  │      │  │   ◉ ◉     │  │      │  │   ◉ ◉     │  │
       │  │    ⌣      │  │      │  │    ▽      │  │      │  │    ○      │  │
@@ -26,7 +26,7 @@ $ council run architect "Design a mass hallucination prevention system"
                          ┌──────────────────────────────┐
                          │     🔥 ADVERSARIAL DEBATE 🔥   │
                          │                              │
-                         │  GPT5.2: "Your approach has  │
+                         │  GPT5.4: "Your approach has  │
                          │          a cold start issue" │
                          │                              │
                          │  CLAUDE: "Fair, but yours    │
@@ -466,21 +466,42 @@ Provider `default_model` is forwarded to each provider's constructor, overriding
 council run <subagent> "<task>"    # Run a council task
 council doctor                      # Check provider health
 council config                      # Show configuration
+council version                     # Show installed version
 
 # Options
 --mode             Agent mode (impl/arch/test for drafter, review/security for critic, etc.)
 --providers, -p    Comma-separated provider list
 --models, -m       Comma-separated OpenRouter model IDs for multi-model council
+--files, -f        Comma-separated file paths to include as context (20KB/file, 60KB total)
+--context, --system  Additional system context/instructions
+--timeout, -t      Request timeout in seconds
+--temperature      Model temperature (0.0-2.0)
+--max-tokens       Max output tokens
+--input, -i        Read task from file (use '-' for stdin)
+--output, -o       Write output to file
+--schema           Custom output schema JSON file
+--dry-run          Show what would run without executing
 --no-artifacts     Disable artifact storage
 --json             Output structured JSON
 --verbose, -v      Verbose output
-
-# Config file options (moved from CLI in v0.5.0)
-# Set these in ~/.config/llm-council/config.yaml under 'defaults:'
-#   timeout: 120
-#   max_retries: 3
-#   enable_degradation: true
 ```
+
+### File Context
+
+Pass source files directly to council for review, implementation, or analysis:
+
+```bash
+# Code review with file context
+council run critic --mode review --files src/auth.py,src/middleware.py "Review these files"
+
+# Architecture analysis
+council run drafter --mode arch --files src/api/ "Suggest improvements" --json
+
+# Security audit
+council run critic --mode security --files src/payment.py "Audit payment handler"
+```
+
+Limits: 20KB per file, 60KB total. Files exceeding limits are truncated with a warning.
 
 ## Development
 

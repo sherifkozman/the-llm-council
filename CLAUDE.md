@@ -114,6 +114,7 @@ council run <subagent> "<task>" [OPTIONS]
 | `--timeout, -t` | Request timeout in seconds |
 | `--temperature` | Model temperature (0.0-2.0) |
 | `--max-tokens` | Max output tokens |
+| `--files, -f` | Comma-separated file paths to include as context (20KB/file, 60KB total) |
 | `--input, -i` | Read task from file (use `-` for stdin) |
 | `--output, -o` | Write output to file |
 | `--context, --system` | Additional system context/instructions |
@@ -294,11 +295,14 @@ pip install -e ".[all]"
 ## Known Issues
 
 See `gh issue list` for current open issues. Key themes:
-- Config wiring: `providers[].default_model` not passed to provider constructors (#26, #28)
-- Model defaults: hardcoded Gemini model name outdated (#30)
 - Provider consistency: env var fallback only works for vertex-ai (#27)
-- File injection: `--files` via wrapper not reaching models (#31)
-- Config defaults: no `output_format` config option (#29)
+
+### Resolved in v0.6.2
+- ~~Config wiring: `providers[].default_model` not passed to provider constructors (#26, #28)~~ — Fixed in v0.6.0
+- ~~Model defaults: hardcoded Gemini model name outdated (#30)~~ — Fixed in v0.6.0
+- ~~File injection: `--files` via wrapper not reaching models (#31)~~ — Native `--files` flag added in v0.6.2
+- ~~Config defaults: no `output_format` config option (#29)~~ — Fixed in v0.6.0
+- ~~`council version` shows stale version (#35)~~ — Fixed in v0.6.2
 
 ## Troubleshooting
 
