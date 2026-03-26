@@ -13,6 +13,11 @@ from .base import ProviderAdapter
 _ENTRY_POINT_GROUP = "llm_council.providers"
 _log = logging.getLogger(__name__)
 
+# Backwards-compatible provider name aliases
+_PROVIDER_ALIASES: dict[str, str] = {
+    "vertex": "vertex-ai",
+}
+
 
 class ProviderRegistry:
     """Singleton registry of provider adapter classes."""
@@ -63,6 +68,8 @@ class ProviderRegistry:
         normalized = name.strip().lower()
         if not normalized:
             raise ValueError("Provider name must be a non-empty string.")
+        # Resolve backwards-compatible aliases
+        normalized = _PROVIDER_ALIASES.get(normalized, normalized)
         with self._lock:
             adapter_class = self._providers.get(normalized)
         if adapter_class is None:
