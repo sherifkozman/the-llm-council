@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
@@ -88,18 +88,11 @@ class TestCLIDoctor:
 
             mock_registry.list_providers.return_value = ["openai"]
             mock_registry.get_provider.return_value = mock_provider
-            mock_provider.doctor.return_value = mock_doctor_result
+            # doctor() is now awaited inside an async function
+            mock_provider.doctor = AsyncMock(return_value=mock_doctor_result)
             mock_reg.return_value = mock_registry
 
-            import asyncio
-
-            with patch(
-                "asyncio.run",
-                side_effect=lambda coro: asyncio.get_event_loop().run_until_complete(coro)
-                if asyncio.iscoroutine(coro)
-                else coro,
-            ):
-                result = runner.invoke(app, ["doctor"])
+            result = runner.invoke(app, ["doctor"])
 
             # Verify get_provider was called with config kwargs
             mock_registry.get_provider.assert_called_with("openai", default_model="gpt-5.2")

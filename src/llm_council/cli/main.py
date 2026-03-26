@@ -540,29 +540,29 @@ def doctor(
     # Load per-provider config so doctor shows configured models
     provider_cfgs = _load_provider_configs()
 
-    results = []
-    for name in provider_names:
+    async def _check_provider(name: str) -> dict[str, Any]:
         try:
             kwargs = provider_cfgs.get(name, {})
             provider = registry.get_provider(name, **kwargs)
-            result = asyncio.run(provider.doctor())
-            results.append(
-                {
-                    "name": name,
-                    "ok": result.ok,
-                    "message": result.message or "",
-                    "latency_ms": result.latency_ms,
-                }
-            )
+            result = await provider.doctor()
+            return {
+                "name": name,
+                "ok": result.ok,
+                "message": result.message or "",
+                "latency_ms": result.latency_ms,
+            }
         except Exception as e:
-            results.append(
-                {
-                    "name": name,
-                    "ok": False,
-                    "message": str(e),
-                    "latency_ms": None,
-                }
-            )
+            return {
+                "name": name,
+                "ok": False,
+                "message": str(e),
+                "latency_ms": None,
+            }
+
+    async def _run_all_checks() -> list[dict[str, Any]]:
+        return await asyncio.gather(*[_check_provider(n) for n in provider_names])
+
+    results = asyncio.run(_run_all_checks())
 
     if output_json:
         print(json.dumps({"providers": results}, indent=2))
