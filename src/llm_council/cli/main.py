@@ -316,6 +316,10 @@ def run(
         str | None,
         typer.Option("--context", "--system", help="Additional system context/instructions"),
     ] = None,
+    files: Annotated[
+        str | None,
+        typer.Option("--files", "-f", help="Comma-separated file paths to include as context"),
+    ] = None,
     schema_file: Annotated[
         Path | None,
         typer.Option("--schema", help="Custom output schema JSON file"),
@@ -348,6 +352,32 @@ def run(
             f"Maximum is {max_task_length:,} characters."
         )
         raise typer.Exit(1)
+
+    # Read --files and merge into context
+    if files:
+        file_context_parts: list[str] = []
+        max_total_bytes = 60_000  # 60KB total cap
+        max_per_file = 20_000  # 20KB per file
+        total_bytes = 0
+        for fpath in files.split(","):
+            fpath = fpath.strip()
+            if not fpath:
+                continue
+            p = Path(fpath)
+            if not p.exists():
+                _print(f"[yellow]Warning:[/yellow] File not found: {fpath}")
+                continue
+            content = p.read_text(encoding="utf-8", errors="replace")
+            if len(content) > max_per_file:
+                content = content[:max_per_file] + f"\n... [truncated at {max_per_file // 1000}KB]"
+            if total_bytes + len(content) > max_total_bytes:
+                _print(f"[yellow]Warning:[/yellow] Skipping {fpath} (60KB limit)")
+                continue
+            total_bytes += len(content)
+            file_context_parts.append(f"=== FILE: {fpath} ===\n{content}\n=== END: {fpath} ===")
+        if file_context_parts:
+            file_block = "\n\n".join(file_context_parts)
+            context = f"{context}\n\n{file_block}" if context else file_block
 
     # Load defaults from config file
     config_defaults = _load_config_defaults()
