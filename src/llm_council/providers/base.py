@@ -146,6 +146,7 @@ def get_billing_help_url(provider: str) -> str:
         "codex-cli": "https://platform.openai.com/account/billing",
         "anthropic": "https://console.anthropic.com/settings/billing",
         "claude": "https://console.anthropic.com/settings/billing",
+        "claude-code": "https://console.anthropic.com/settings/billing",
         "google": "https://console.cloud.google.com/billing",
         "gemini": "https://console.cloud.google.com/billing",
         "gemini-cli": "https://console.cloud.google.com/billing",

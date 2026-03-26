@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-llm-council"
-version = "0.6.3"
+version = "0.6.4"
 description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
 readme = "README.md"
 license = "MIT"
@@ -70,6 +70,7 @@ openai = "llm_council.providers.openai:OpenAIProvider"
 anthropic = "llm_council.providers.anthropic:AnthropicProvider"
 google = "llm_council.providers.google:GoogleProvider"
 vertex-ai = "llm_council.providers.vertex:VertexAIProvider"
+claude-code = "llm_council.providers.cli.claude_code:ClaudeCodeCLIProvider"
 codex-cli = "llm_council.providers.cli.codex:CodexCLIProvider"
 gemini-cli = "llm_council.providers.cli.gemini:GeminiCLIProvider"
 

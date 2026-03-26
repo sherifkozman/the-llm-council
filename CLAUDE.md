@@ -179,8 +179,9 @@ council --no-color      # Disable colored output
 | `anthropic` | Native SDK | `ANTHROPIC_API_KEY` |
 | `google` | Native SDK | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
 | `vertex-ai` | Native SDK | `GOOGLE_CLOUD_PROJECT` / `ANTHROPIC_VERTEX_PROJECT_ID` |
-| `codex-cli` | Subprocess | Codex CLI binary |
-| `gemini-cli` | Subprocess | Gemini CLI binary |
+| `claude-code` | CLI subprocess | Claude Code CLI (`claude`) |
+| `codex-cli` | CLI subprocess | Codex CLI (`codex`) |
+| `gemini-cli` | CLI subprocess | Gemini CLI (`gemini`) |
 
 ### OpenRouter (Recommended)
 

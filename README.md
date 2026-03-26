@@ -346,7 +346,9 @@ myprovider = "my_package.providers:MyProvider"
 | OpenAI | Native SDK | `src/llm_council/providers/openai.py` |
 | Google | Native SDK | `src/llm_council/providers/google.py` |
 | Vertex AI | Native SDK | `src/llm_council/providers/vertex.py` |
-| Codex CLI | Subprocess | `src/llm_council/providers/cli/codex.py` |
+| Claude Code | CLI subprocess | `src/llm_council/providers/cli/claude_code.py` |
+| Codex CLI | CLI subprocess | `src/llm_council/providers/cli/codex.py` |
+| Gemini CLI | CLI subprocess | `src/llm_council/providers/cli/gemini.py` |
 
 ## Configuration
 

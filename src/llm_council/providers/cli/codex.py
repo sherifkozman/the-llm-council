@@ -1,18 +1,9 @@
 """
 Codex CLI provider adapter.
 
-.. deprecated:: 0.5.1
-    The CLI providers (codex-cli, gemini-cli) are deprecated and will be
-    removed in v1.0. Use the direct API providers instead:
-    - 'openai' provider for OpenAI models (gpt-5.x)
-    - 'anthropic' provider for Claude models
-    - 'google' provider for Gemini models
-
-    CLI providers have limitations:
-    - No streaming support
-    - No structured output
-    - Slower than direct API calls
-    - Requires external CLI binaries installed
+Wraps the ``codex`` CLI for non-interactive generation via ``codex exec``.
+Useful for agent-to-agent delegation and environments where CLI auth
+is available but API keys may not be.
 
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
@@ -21,6 +12,7 @@ which is safe from shell injection (equivalent to execFile in Node.js).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shlex
@@ -28,10 +20,6 @@ import shutil
 import warnings
 from collections.abc import AsyncIterator
 from typing import ClassVar
-
-logger = logging.getLogger(__name__)
-
-import contextlib
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -43,6 +31,8 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-5.4-codex"
 # SECURITY: Least-privilege defaults - read-only sandbox, no auto-approve
@@ -87,13 +77,6 @@ class CodexCLIProvider(ProviderAdapter):
         default_flags: str | None = None,
         timeout: int = 120,
     ) -> None:
-        warnings.warn(
-            "CodexCLIProvider is deprecated and will be removed in v1.0. "
-            "Use the 'openai' provider with direct API access instead. "
-            "See: https://github.com/sherifkozman/llm-council#providers",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         self._cli_path = cli_path or shutil.which("codex")
         self._default_model = default_model or DEFAULT_MODEL
         self._default_flags = default_flags or DEFAULT_FLAGS

@@ -16,6 +16,7 @@ _log = logging.getLogger(__name__)
 # Backwards-compatible provider name aliases
 _PROVIDER_ALIASES: dict[str, str] = {
     "vertex": "vertex-ai",
+    "claude": "claude-code",
 }
 
 

@@ -1,15 +1,10 @@
 """
 CLI-based provider adapters.
 
-.. deprecated:: 0.5.1
-    CLI providers are deprecated and will be removed in v1.0.
-    Use direct API providers instead:
-    - 'openai' for GPT models
-    - 'anthropic' for Claude models
-    - 'google' for Gemini models
-    - 'vertex-ai' for Google Cloud (Gemini + Claude)
-    - 'openrouter' for multi-provider routing
+These adapters invoke external CLI tools (claude, codex, gemini) via subprocess.
+Useful for agent-to-agent delegation, environments where CLI auth is available
+but API keys may not be, or when leveraging CLI-specific features.
 
-These adapters invoke external CLI tools (codex, gemini) via subprocess.
-Use with caution in CI environments - prefer API-based providers for reliability.
+For direct API access with full feature support (streaming, structured output),
+use the API-based providers: 'openai', 'anthropic', 'google', 'vertex-ai', 'openrouter'.
 """

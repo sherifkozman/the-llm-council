@@ -1,17 +1,9 @@
 """
 Gemini CLI provider adapter.
 
-.. deprecated:: 0.5.1
-    The CLI providers (codex-cli, gemini-cli) are deprecated and will be
-    removed in v1.0. Use the direct API providers instead:
-    - 'google' provider for Gemini models (gemini-3-pro, etc.)
-    - 'vertex-ai' provider for Vertex AI access (Gemini + Claude)
-
-    CLI providers have limitations:
-    - No streaming support
-    - No structured output
-    - Slower than direct API calls
-    - Requires external CLI binaries installed
+Wraps the ``gemini`` CLI for non-interactive generation.
+Useful for agent-to-agent delegation and environments where CLI auth
+is available but API keys may not be.
 
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
@@ -20,16 +12,13 @@ which is safe from shell injection (equivalent to execFile in Node.js).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
 import warnings
 from collections.abc import AsyncIterator
 from typing import ClassVar
-
-logger = logging.getLogger(__name__)
-
-import contextlib
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -41,6 +30,8 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gemini-2.0-flash-exp"
 # SECURITY: Least-privilege defaults - require approval for actions
@@ -85,13 +76,6 @@ class GeminiCLIProvider(ProviderAdapter):
         approval_mode: str | None = None,
         timeout: int = 120,
     ) -> None:
-        warnings.warn(
-            "GeminiCLIProvider is deprecated and will be removed in v1.0. "
-            "Use the 'google' provider with direct API access instead. "
-            "See: https://github.com/sherifkozman/llm-council#providers",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         self._cli_path = cli_path or shutil.which("gemini")
         self._default_model = default_model or DEFAULT_MODEL
         self._approval_mode = approval_mode or DEFAULT_APPROVAL_MODE

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-03-26
+
+### Added
+- `claude-code` provider — wraps Claude Code CLI for agent-to-agent delegation (#37)
+  - Uses `--bare` mode to prevent recursion when council runs inside Claude Code
+  - Parses structured JSON output from `--output-format json`
+  - `claude` alias resolves to `claude-code` in provider registry
+- CLI providers are no longer deprecated — useful for agent delegation workflows
+
+### Fixed
+- Import order (E402) in `codex.py` and `gemini.py` CLI providers
+- Removed deprecation warnings from `codex-cli` and `gemini-cli` providers
+
 ## [0.6.3] - 2026-03-26
 
 ### Added
