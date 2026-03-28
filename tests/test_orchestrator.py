@@ -297,7 +297,9 @@ class TestOrchestratorValidation:
             try:
                 raise TimeoutError("upstream request timed out")
             except TimeoutError as exc:
-                raise RuntimeError("Provider call aborted: Below minimum required providers (1)") from exc
+                raise RuntimeError(
+                    "Provider call aborted: Below minimum required providers (1)"
+                ) from exc
         except RuntimeError as exc:
             text = orch._format_exception_chain(exc)
 
@@ -715,7 +717,9 @@ class TestOrchestratorRuntimeTruthfulness:
         orch._schema = None
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result, attempts = await orch._run_synthesis({"vertex-ai": '{"draft": "ok"}'}, "critique")
+            result, attempts = await orch._run_synthesis(
+                {"vertex-ai": '{"draft": "ok"}'}, "critique"
+            )
 
         assert result.ok is True
         assert attempts == 2
@@ -759,7 +763,10 @@ class TestOrchestratorRuntimeTruthfulness:
                 orch,
                 "_run_synthesis",
                 AsyncMock(
-                    return_value=(ValidationResult(ok=True, data={"ok": True}, raw='{"ok": true}'), 1)
+                    return_value=(
+                        ValidationResult(ok=True, data={"ok": True}, raw='{"ok": true}'),
+                        1,
+                    )
                 ),
             ) as mock_synthesis,
         ):

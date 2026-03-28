@@ -95,7 +95,9 @@ class GeminiCLIProvider(ProviderAdapter):
         mode = _APPROVAL_MODE_ALIASES.get(mode, mode)
         if mode not in _VALID_APPROVAL_MODES:
             valid = ", ".join(sorted(_VALID_APPROVAL_MODES))
-            raise ValueError(f"Unsupported Gemini approval mode '{approval_mode}'. Use one of: {valid}")
+            raise ValueError(
+                f"Unsupported Gemini approval mode '{approval_mode}'. Use one of: {valid}"
+            )
         return mode
 
     def _check_unsafe_mode(self) -> None:
@@ -110,7 +112,9 @@ class GeminiCLIProvider(ProviderAdapter):
     def _request_timeout(self, request: GenerateRequest) -> float:
         """Return the effective timeout for this request."""
 
-        return float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
+        return (
+            float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
+        )
 
     def _build_command(self, request: GenerateRequest) -> list[str]:
         """Build CLI command as argument list (safe from injection)."""

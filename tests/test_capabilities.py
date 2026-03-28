@@ -79,7 +79,9 @@ class TestCapabilitySelection:
         ]
         assert "web_search" in plan.tool_names
         assert "context7_lookup" in plan.tool_names
-        assert any("Prefer authoritative" in requirement for requirement in plan.evidence_requirements)
+        assert any(
+            "Prefer authoritative" in requirement for requirement in plan.evidence_requirements
+        )
 
     def test_runtime_overrides_do_not_weaken_plan(self):
         """Lower execution-profile or budget hints should not downgrade the base plan."""

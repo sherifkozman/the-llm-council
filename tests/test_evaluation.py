@@ -106,7 +106,9 @@ class TestRunEvalDataset:
             success=True,
             output={
                 "objective": "Ship the first scoped milestone safely.",
-                "phases": [{"phase_number": 1, "name": "Phase 1", "tasks": [{}], "deliverables": ["spec"]}],
+                "phases": [
+                    {"phase_number": 1, "name": "Phase 1", "tasks": [{}], "deliverables": ["spec"]}
+                ],
                 "risks": [{"risk": "scope creep", "severity": "medium", "mitigation": "timebox"}],
                 "success_criteria": ["Milestone shipped"],
             },
@@ -194,7 +196,9 @@ class TestRunEvalDataset:
         failed_result = CouncilResult(
             success=False,
             error="Council run failed.",
-            provider_errors={"openai": "Provider call aborted: Below minimum required providers (1)"},
+            provider_errors={
+                "openai": "Provider call aborted: Below minimum required providers (1)"
+            },
             validation_errors=["Empty synthesis response."],
             duration_ms=20,
             execution_plan={},
@@ -236,7 +240,9 @@ cases:
 """
         )
         dataset = load_eval_dataset(dataset_path)
-        council_result = CouncilResult(success=True, output={"review_summary": "ok"}, duration_ms=10)
+        council_result = CouncilResult(
+            success=True, output={"review_summary": "ok"}, duration_ms=10
+        )
 
         with patch("llm_council.evaluation.Council") as mock_council_class:
             council = MagicMock()
@@ -338,7 +344,9 @@ cases:
             case_results=[],
         )
 
-        with patch("llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock) as mock_run_eval:
+        with patch(
+            "llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock
+        ) as mock_run_eval:
             mock_run_eval.side_effect = [weak_report, strong_report]
 
             report = await run_eval_comparison(dataset, variants)
@@ -377,7 +385,9 @@ cases:
             case_results=[],
         )
 
-        with patch("llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock) as mock_run_eval:
+        with patch(
+            "llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock
+        ) as mock_run_eval:
             mock_run_eval.side_effect = [passing_report, passing_report]
 
             report = await run_eval_comparison(
@@ -417,7 +427,9 @@ cases:
             case_results=[],
         )
 
-        with patch("llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock) as mock_run_eval:
+        with patch(
+            "llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock
+        ) as mock_run_eval:
             mock_run_eval.return_value = passing_report
 
             await run_eval_comparison(dataset, variants)
@@ -434,7 +446,11 @@ cases:
                 "version": 1,
                 "name": "providers",
                 "variants": [
-                    {"name": "bounded-openai", "providers": ["openai"], "runtime_profile": "bounded"},
+                    {
+                        "name": "bounded-openai",
+                        "providers": ["openai"],
+                        "runtime_profile": "bounded",
+                    },
                 ],
             }
         )
@@ -452,7 +468,9 @@ cases:
             case_results=[],
         )
 
-        with patch("llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock) as mock_run_eval:
+        with patch(
+            "llm_council.evaluation.run_eval_dataset", new_callable=AsyncMock
+        ) as mock_run_eval:
             mock_run_eval.return_value = passing_report
 
             await run_eval_comparison(dataset, variants)

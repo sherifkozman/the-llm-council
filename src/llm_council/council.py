@@ -120,16 +120,34 @@ class Council:
         routed_subagent = router_result.output.get("subagent_to_run")
         routed_mode = router_result.output.get("mode")
 
-        if routed_subagent in (None, "", "router"):
+        if not isinstance(routed_subagent, str) or routed_subagent in ("", "router"):
             return router_result
+
+        routed_mode_value = routed_mode if isinstance(routed_mode, str) else None
+        routing_model_pack = router_result.output.get("model_pack")
+        routing_execution_profile = router_result.output.get("execution_profile")
+        routing_budget_class = router_result.output.get("budget_class")
+        routing_required_capabilities = router_result.output.get("required_capabilities")
 
         routed_config = self.config.model_copy(
             update={
-                "mode": routed_mode,
-                "model_pack": router_result.output.get("model_pack"),
-                "execution_profile": router_result.output.get("execution_profile"),
-                "budget_class": router_result.output.get("budget_class"),
-                "required_capabilities": list(router_result.output.get("required_capabilities") or []),
+                "mode": routed_mode_value,
+                "model_pack": routing_model_pack if isinstance(routing_model_pack, str) else None,
+                "execution_profile": (
+                    routing_execution_profile
+                    if isinstance(routing_execution_profile, str)
+                    else None
+                ),
+                "budget_class": routing_budget_class
+                if isinstance(routing_budget_class, str)
+                else None,
+                "required_capabilities": [
+                    capability
+                    for capability in routing_required_capabilities
+                    if isinstance(capability, str)
+                ]
+                if isinstance(routing_required_capabilities, list)
+                else [],
             }
         )
         routed_orchestrator = self._build_orchestrator(routed_config)
@@ -139,16 +157,12 @@ class Council:
             routed_result.execution_plan = {}
         routed_result.execution_plan["routed_via_router"] = True
         routed_result.execution_plan["routing_subagent"] = routed_subagent
-        routed_result.execution_plan["routing_mode"] = routed_mode
-        routed_result.execution_plan["routing_model_pack"] = router_result.output.get("model_pack")
-        routed_result.execution_plan["routing_execution_profile"] = router_result.output.get(
-            "execution_profile"
-        )
-        routed_result.execution_plan["routing_budget_class"] = router_result.output.get(
-            "budget_class"
-        )
-        routed_result.execution_plan["routing_required_capabilities"] = router_result.output.get(
-            "required_capabilities"
+        routed_result.execution_plan["routing_mode"] = routed_mode_value
+        routed_result.execution_plan["routing_model_pack"] = routing_model_pack
+        routed_result.execution_plan["routing_execution_profile"] = routing_execution_profile
+        routed_result.execution_plan["routing_budget_class"] = routing_budget_class
+        routed_result.execution_plan["routing_required_capabilities"] = (
+            routing_required_capabilities
         )
 
         routed_result.routed = True

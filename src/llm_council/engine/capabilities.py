@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -159,11 +159,13 @@ def select_capability_plan(
     registry.ensure_loaded()
 
     plan.tool_names = [
-        tool.name for tool in registry.resolve_capability_tools(plan.required_capabilities, role=subagent)
+        tool.name
+        for tool in registry.resolve_capability_tools(plan.required_capabilities, role=subagent)
     ]
 
     if isinstance(subagent_config, dict):
-        for suggested_tool in subagent_config.get("suggested_tools", []):
+        suggested_tools = subagent_config.get("suggested_tools")
+        for suggested_tool in suggested_tools if isinstance(suggested_tools, list) else []:
             if isinstance(suggested_tool, str) and suggested_tool not in plan.tool_names:
                 plan.tool_names.append(suggested_tool)
 
@@ -194,15 +196,26 @@ def _apply_capability_overrides(
     default policy for a subagent/mode combination.
     """
 
-    if requested_execution_profile in _EXECUTION_PROFILE_ORDER:
-        if _EXECUTION_PROFILE_ORDER[requested_execution_profile] > _EXECUTION_PROFILE_ORDER[
-            plan.execution_profile
-        ]:
-            plan.execution_profile = requested_execution_profile
+    normalized_execution_profile = (
+        cast(ExecutionProfile, requested_execution_profile)
+        if requested_execution_profile in _EXECUTION_PROFILE_ORDER
+        else None
+    )
+    if normalized_execution_profile is not None:
+        if (
+            _EXECUTION_PROFILE_ORDER[normalized_execution_profile]
+            > _EXECUTION_PROFILE_ORDER[plan.execution_profile]
+        ):
+            plan.execution_profile = normalized_execution_profile
 
-    if requested_budget_class in _BUDGET_CLASS_ORDER:
-        if _BUDGET_CLASS_ORDER[requested_budget_class] > _BUDGET_CLASS_ORDER[plan.budget_class]:
-            plan.budget_class = requested_budget_class
+    normalized_budget_class = (
+        cast(BudgetClass, requested_budget_class)
+        if requested_budget_class in _BUDGET_CLASS_ORDER
+        else None
+    )
+    if normalized_budget_class is not None:
+        if _BUDGET_CLASS_ORDER[normalized_budget_class] > _BUDGET_CLASS_ORDER[plan.budget_class]:
+            plan.budget_class = normalized_budget_class
 
     resolved_capability_names: list[str] = []
     for capability_name in requested_capabilities:

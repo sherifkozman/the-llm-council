@@ -372,7 +372,7 @@ class TestCLIEvaluate:
             result = runner.invoke(app, ["eval", str(dataset_path), "--json"])
 
         assert result.exit_code == 0
-        assert "\"dataset_name\": \"smoke\"" in result.stdout
+        assert '"dataset_name": "smoke"' in result.stdout
 
     def test_evaluate_fails_when_report_has_failed_cases(self, tmp_path):
         """Eval should return a non-zero exit code when any case fails."""
@@ -429,7 +429,9 @@ class TestCLIEvaluate:
         with (
             patch("llm_council.cli.main.load_eval_dataset") as mock_load_dataset,
             patch("llm_council.cli.main.load_eval_variants") as mock_load_variants,
-            patch("llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock) as mock_compare,
+            patch(
+                "llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock
+            ) as mock_compare,
             patch("llm_council.cli.main._load_config_defaults", return_value={}),
             patch("llm_council.cli.main._load_provider_configs", return_value={}),
         ):
@@ -443,7 +445,7 @@ class TestCLIEvaluate:
             )
 
         assert result.exit_code == 0
-        assert "\"dataset_name\": \"smoke\"" in result.stdout
+        assert '"dataset_name": "smoke"' in result.stdout
 
     def test_evaluate_compare_passes_variant_filters(self, tmp_path):
         """Eval-compare should forward selected variant names to the runner."""
@@ -464,7 +466,9 @@ class TestCLIEvaluate:
         with (
             patch("llm_council.cli.main.load_eval_dataset") as mock_load_dataset,
             patch("llm_council.cli.main.load_eval_variants") as mock_load_variants,
-            patch("llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock) as mock_compare,
+            patch(
+                "llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock
+            ) as mock_compare,
             patch("llm_council.cli.main._load_config_defaults", return_value={}),
             patch("llm_council.cli.main._load_provider_configs", return_value={}),
         ):
@@ -511,7 +515,9 @@ class TestCLIEvaluate:
         with (
             patch("llm_council.cli.main.load_eval_dataset") as mock_load_dataset,
             patch("llm_council.cli.main.load_eval_variants") as mock_load_variants,
-            patch("llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock) as mock_compare,
+            patch(
+                "llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock
+            ) as mock_compare,
             patch("llm_council.cli.main._load_config_defaults", return_value={}),
             patch("llm_council.cli.main._load_provider_configs", return_value={}),
         ):
@@ -559,7 +565,9 @@ class TestCLIEvaluate:
         with (
             patch("llm_council.cli.main.load_eval_dataset") as mock_load_dataset,
             patch("llm_council.cli.main.load_eval_variants") as mock_load_variants,
-            patch("llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock) as mock_compare,
+            patch(
+                "llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock
+            ) as mock_compare,
             patch("llm_council.cli.main._load_config_defaults", return_value={}),
             patch("llm_council.cli.main._load_provider_configs", return_value={}),
         ):
@@ -602,7 +610,9 @@ class TestCLIEvaluate:
         with (
             patch("llm_council.cli.main.load_eval_dataset") as mock_load_dataset,
             patch("llm_council.cli.main.load_eval_variants") as mock_load_variants,
-            patch("llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock) as mock_compare,
+            patch(
+                "llm_council.cli.main.run_eval_comparison", new_callable=AsyncMock
+            ) as mock_compare,
             patch("llm_council.cli.main._load_config_defaults", return_value={}),
             patch("llm_council.cli.main._load_provider_configs", return_value={}),
         ):
@@ -657,7 +667,7 @@ class TestCLIImport:
             result = runner.invoke(app, ["eval-import-pr", "owner/repo", "42", "--json"])
 
         assert result.exit_code == 0
-        assert "\"repo\": \"owner/repo\"" in result.stdout
+        assert '"repo": "owner/repo"' in result.stdout
 
 
 class TestProviderConfigLoading:

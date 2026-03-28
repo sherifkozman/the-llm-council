@@ -465,12 +465,18 @@ class TestGeminiCLIProviderDoctor:
     def test_legacy_gemini_approval_modes_are_normalized(self):
         """Legacy Gemini approval aliases should map to current CLI values."""
         assert GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")._approval_mode == "default"
-        assert GeminiCLIProvider(
-            cli_path="/opt/homebrew/bin/gemini", approval_mode="confirm"
-        )._approval_mode == "default"
-        assert GeminiCLIProvider(
-            cli_path="/opt/homebrew/bin/gemini", approval_mode="auto"
-        )._approval_mode == "yolo"
+        assert (
+            GeminiCLIProvider(
+                cli_path="/opt/homebrew/bin/gemini", approval_mode="confirm"
+            )._approval_mode
+            == "default"
+        )
+        assert (
+            GeminiCLIProvider(
+                cli_path="/opt/homebrew/bin/gemini", approval_mode="auto"
+            )._approval_mode
+            == "yolo"
+        )
 
     def test_invalid_gemini_approval_mode_raises(self):
         """Unknown Gemini approval modes should fail fast."""

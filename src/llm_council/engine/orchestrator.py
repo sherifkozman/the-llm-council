@@ -410,7 +410,9 @@ class Orchestrator:
             )
 
         try:
-            critique, critique_timing = await self._timed(lambda: self._run_critique(drafts), "critique")
+            critique, critique_timing = await self._timed(
+                lambda: self._run_critique(drafts), "critique"
+            )
             phase_timings.append(critique_timing)
 
             # Store critique as artifact if enabled
@@ -426,7 +428,9 @@ class Orchestrator:
         except Exception as exc:
             detail = self._format_exception_chain(exc)
             critique = ""
-            self._append_degradation_note(f"Critique failed ({detail}); continuing without critique.")
+            self._append_degradation_note(
+                f"Critique failed ({detail}); continuing without critique."
+            )
             logger.warning("Critique phase failed; continuing without critique: %s", detail)
 
         try:
@@ -566,7 +570,9 @@ class Orchestrator:
                     Message(role="user", content=user_prompt),
                 ],
                 timeout_seconds=self._provider_request_timeout_seconds("critique"),
-                max_tokens=self._phase_max_tokens(self._config.max_critique_tokens, phase="critique"),
+                max_tokens=self._phase_max_tokens(
+                    self._config.max_critique_tokens, phase="critique"
+                ),
                 temperature=self._phase_temperature(self._config.critique_temperature),
                 reasoning=self._reasoning,
             )
@@ -715,7 +721,9 @@ class Orchestrator:
 
         while True:
             try:
-                result = await asyncio.wait_for(adapter.generate(request), timeout=self._config.timeout)
+                result = await asyncio.wait_for(
+                    adapter.generate(request), timeout=self._config.timeout
+                )
                 if isinstance(result, GenerateResponse):
                     response = result
                 else:
@@ -767,7 +775,9 @@ class Orchestrator:
             requested_budget_class=self._config.budget_class,
             requested_capabilities=self._config.required_capabilities,
         )
-        self._system_prompt = get_effective_system_prompt(self._subagent_config, self._resolved_mode)
+        self._system_prompt = get_effective_system_prompt(
+            self._subagent_config, self._resolved_mode
+        )
         if self._config.model_pack:
             self._resolved_model_pack = self._config.model_pack
             self._model_pack_source = "config"
@@ -830,11 +840,15 @@ class Orchestrator:
             "execution_profile": (
                 self._capability_plan.execution_profile if self._capability_plan else "prompt_only"
             ),
-            "budget_class": self._capability_plan.budget_class if self._capability_plan else "normal",
+            "budget_class": self._capability_plan.budget_class
+            if self._capability_plan
+            else "normal",
             "required_capabilities": (
                 list(self._capability_plan.required_capabilities) if self._capability_plan else []
             ),
-            "registered_tools": list(self._capability_plan.tool_names) if self._capability_plan else [],
+            "registered_tools": list(self._capability_plan.tool_names)
+            if self._capability_plan
+            else [],
             "evidence_requirements": (
                 list(self._capability_plan.evidence_requirements) if self._capability_plan else []
             ),
@@ -933,7 +947,9 @@ class Orchestrator:
         if not self._providers:
             return
 
-        should_health_check = self._config.enable_health_check or self._should_attempt_provider_auto_fallback()
+        should_health_check = (
+            self._config.enable_health_check or self._should_attempt_provider_auto_fallback()
+        )
         if not should_health_check:
             return
 
@@ -1023,7 +1039,7 @@ class Orchestrator:
                 }
 
     def _instantiate_providers(
-        self, provider_names: list[str]
+        self, provider_names: list[str], *, treat_as_models: bool = False
     ) -> tuple[dict[str, ProviderAdapter], dict[str, str]]:
         """Instantiate a set of providers without mutating run state."""
 
@@ -1033,7 +1049,7 @@ class Orchestrator:
         init_errors: dict[str, str] = {}
         for name in provider_names:
             try:
-                if "/" in name and name != "openrouter":
+                if treat_as_models or ("/" in name and name != "openrouter"):
                     providers[name] = create_openrouter_for_model(name)
                     continue
                 kwargs = self._config.provider_configs.get(name, {})
@@ -1207,7 +1223,9 @@ class Orchestrator:
         if not self._capability_plan.evidence_requirements:
             return ""
 
-        requirements = "\n".join(f"- {item}" for item in self._capability_plan.evidence_requirements)
+        requirements = "\n".join(
+            f"- {item}" for item in self._capability_plan.evidence_requirements
+        )
         return (
             "## Execution Requirements\n"
             f"This run is classified as `{self._capability_plan.execution_profile}` "
@@ -1298,9 +1316,7 @@ class Orchestrator:
 
             validation = self._validate_response(draft_text)
             if validation.ok:
-                note = (
-                    f"Synthesis failed ({reason}); used validated draft output from {provider_name}."
-                )
+                note = f"Synthesis failed ({reason}); used validated draft output from {provider_name}."
                 self._append_degradation_note(note)
                 self._record_degraded_output("draft", provider_name, reason)
                 return (
@@ -1503,9 +1519,9 @@ class Orchestrator:
     def _model_override(self, provider_name: str) -> str | None:
         """Return the model override for a provider if configured."""
 
-        return self._resolved_model_overrides.get(provider_name) or self._config.model_overrides.get(
+        return self._resolved_model_overrides.get(
             provider_name
-        )
+        ) or self._config.model_overrides.get(provider_name)
 
     async def _candidate_providers_for_phase(self, phase: str) -> list[tuple[str, ProviderAdapter]]:
         """Return ordered healthy provider candidates for a phase."""
@@ -1554,9 +1570,7 @@ class Orchestrator:
         notes = self._execution_plan.setdefault("degradation_notes", [])
         notes.append(note)
 
-    def _record_degraded_output(
-        self, source: str, provider_name: str | None, reason: str
-    ) -> None:
+    def _record_degraded_output(self, source: str, provider_name: str | None, reason: str) -> None:
         """Record when the final output came from a degraded fallback path."""
 
         if self._execution_plan is None:
@@ -1624,7 +1638,9 @@ class Orchestrator:
                 len(models),
                 ", ".join(models),
             )
-            self._providers, self._provider_init_errors = self._instantiate_providers(list(models))
+            self._providers, self._provider_init_errors = self._instantiate_providers(
+                list(models), treat_as_models=True
+            )
         else:
             self._providers, self._provider_init_errors = self._instantiate_providers(
                 self._provider_names

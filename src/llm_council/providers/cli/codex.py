@@ -119,7 +119,9 @@ class CodexCLIProvider(ProviderAdapter):
     def _request_timeout(self, request: GenerateRequest) -> float:
         """Return the effective timeout for this request."""
 
-        return float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
+        return (
+            float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
+        )
 
     async def generate(
         self, request: GenerateRequest

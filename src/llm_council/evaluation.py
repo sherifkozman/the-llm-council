@@ -207,9 +207,7 @@ def load_eval_variants(path: str | Path) -> EvalVariantsFile:
 
     variants_path = Path(path)
     raw = variants_path.read_text(encoding="utf-8")
-    data = (
-        json.loads(raw) if variants_path.suffix.lower() == ".json" else yaml.safe_load(raw)
-    )
+    data = json.loads(raw) if variants_path.suffix.lower() == ".json" else yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise ValueError(f"Evaluation variants file must be an object: {variants_path}")
     return EvalVariantsFile.model_validate(data)
@@ -357,7 +355,9 @@ def evaluate_case_result(case: EvalCase, result: CouncilResult) -> EvalCaseResul
 
     if expectations.required_capabilities:
         actual_capabilities = list(execution_plan.get("required_capabilities") or [])
-        missing = [item for item in expectations.required_capabilities if item not in actual_capabilities]
+        missing = [
+            item for item in expectations.required_capabilities if item not in actual_capabilities
+        ]
         criteria.append(
             _criterion(
                 "required_capabilities",
@@ -370,7 +370,9 @@ def evaluate_case_result(case: EvalCase, result: CouncilResult) -> EvalCaseResul
 
     if expectations.executed_capabilities:
         actual_executed = list(execution_plan.get("executed_capabilities") or [])
-        missing = [item for item in expectations.executed_capabilities if item not in actual_executed]
+        missing = [
+            item for item in expectations.executed_capabilities if item not in actual_executed
+        ]
         criteria.append(
             _criterion(
                 "executed_capabilities",
@@ -429,7 +431,9 @@ def evaluate_case_result(case: EvalCase, result: CouncilResult) -> EvalCaseResul
         )
 
     if expectations.output_contains_any:
-        matched_items = [item for item in expectations.output_contains_any if item.lower() in output_text]
+        matched_items = [
+            item for item in expectations.output_contains_any if item.lower() in output_text
+        ]
         minimum_matches = expectations.minimum_output_contains_any_matches or 1
         criteria.append(
             _criterion(
@@ -485,7 +489,9 @@ def build_eval_report(
     passed_cases = sum(1 for item in case_results if item.passed)
     failed_cases = total_cases - passed_cases
     total_criteria = sum(len(item.criteria) for item in case_results)
-    passed_criteria = sum(1 for item in case_results for criterion in item.criteria if criterion.passed)
+    passed_criteria = sum(
+        1 for item in case_results for criterion in item.criteria if criterion.passed
+    )
 
     return EvalReport(
         dataset_name=dataset.name,
@@ -539,9 +545,7 @@ def _select_variants(
 def _merge_variant_config(base: CouncilConfig, variant: EvalVariant) -> CouncilConfig:
     """Merge a named variant onto a base council config."""
 
-    provider_configs = {
-        key: dict(value) for key, value in base.provider_configs.items()
-    }
+    provider_configs = {key: dict(value) for key, value in base.provider_configs.items()}
     for provider_name, config in variant.provider_configs.items():
         provider_configs[provider_name] = dict(config)
 
@@ -598,8 +602,12 @@ def _build_mode_scorecards(case_results: list[EvalCaseResult]) -> list[EvalModeS
         total_cases = len(items)
         passed_cases = sum(1 for item in items if item.passed)
         total_criteria = sum(len(item.criteria) for item in items)
-        passed_criteria = sum(1 for item in items for criterion in item.criteria if criterion.passed)
-        average_duration_ms = int(sum(item.duration_ms for item in items) / total_cases) if total_cases else 0
+        passed_criteria = sum(
+            1 for item in items for criterion in item.criteria if criterion.passed
+        )
+        average_duration_ms = (
+            int(sum(item.duration_ms for item in items) / total_cases) if total_cases else 0
+        )
         scorecards.append(
             EvalModeScorecard(
                 mode_key=mode_key,

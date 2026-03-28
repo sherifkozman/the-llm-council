@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
 from pydantic import BaseModel, Field
@@ -156,7 +156,9 @@ def list_subagents() -> list[str]:
     return [p.stem for p in SUBAGENTS_DIR.glob("*.yaml")]
 
 
-def _merge_config_dicts(base: dict[str, Any] | None, override: dict[str, Any] | None) -> dict[str, Any]:
+def _merge_config_dicts(
+    base: dict[str, Any] | None, override: dict[str, Any] | None
+) -> dict[str, Any]:
     """Merge shallow config dictionaries with override precedence."""
 
     merged: dict[str, Any] = {}
@@ -206,10 +208,15 @@ def get_effective_schema(config: dict[str, Any], mode: str | None = None) -> str
 
     resolved_mode = resolve_mode(config, mode)
     if resolved_mode and "modes" in config:
-        mode_config = config["modes"].get(resolved_mode, {})
-        if "schema" in mode_config:
-            return mode_config["schema"]
-    return config.get("schema")
+        modes = config.get("modes")
+        if isinstance(modes, dict):
+            mode_config = modes.get(resolved_mode, {})
+            if isinstance(mode_config, dict):
+                schema = mode_config.get("schema")
+                if isinstance(schema, str):
+                    return schema
+    schema = config.get("schema")
+    return schema if isinstance(schema, str) else None
 
 
 def get_effective_system_prompt(config: dict[str, Any], mode: str | None = None) -> str:
@@ -324,7 +331,9 @@ def get_model_for_subagent(
     Returns:
         OpenRouter-format model ID (e.g., 'anthropic/claude-opus-4-6').
     """
-    pack = normalize_model_pack(model_pack) if model_pack is not None else get_model_pack(config, mode)
+    pack = (
+        normalize_model_pack(model_pack) if model_pack is not None else get_model_pack(config, mode)
+    )
     return get_model_for_pack(pack)
 
 
@@ -338,7 +347,11 @@ def get_mode_config(config: dict[str, Any], mode: str) -> dict[str, Any]:
     Returns:
         Mode configuration dict, or empty dict if mode not found.
     """
-    return config.get("modes", {}).get(mode, {})
+    modes = config.get("modes")
+    if not isinstance(modes, dict):
+        return {}
+    mode_config = modes.get(mode, {})
+    return cast(dict[str, Any], mode_config) if isinstance(mode_config, dict) else {}
 
 
 __all__ = [

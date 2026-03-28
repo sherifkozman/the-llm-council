@@ -164,7 +164,9 @@ class VertexAIProvider(ProviderAdapter):
         self._timeout_ms = (
             timeout_ms
             if timeout_ms is not None
-            else int(env_timeout) if env_timeout is not None else DEFAULT_TIMEOUT_MS
+            else int(env_timeout)
+            if env_timeout is not None
+            else DEFAULT_TIMEOUT_MS
         )
         env_retry_attempts = os.environ.get(ENV_RETRY_ATTEMPTS)
         self._retry_attempts = (

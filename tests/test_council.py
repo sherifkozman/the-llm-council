@@ -193,7 +193,9 @@ class TestCouncilRun:
             )
             assert mock_orch_class.call_args_list[1].kwargs["config"].mode == "assess"
             assert mock_orch_class.call_args_list[1].kwargs["config"].model_pack == "deep_reasoner"
-            assert mock_orch_class.call_args_list[1].kwargs["config"].execution_profile == "grounded"
+            assert (
+                mock_orch_class.call_args_list[1].kwargs["config"].execution_profile == "grounded"
+            )
             assert mock_orch_class.call_args_list[1].kwargs["config"].budget_class == "premium"
             assert mock_orch_class.call_args_list[1].kwargs["config"].required_capabilities == [
                 "planning-assess",

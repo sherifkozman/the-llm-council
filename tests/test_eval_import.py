@@ -34,7 +34,7 @@ class TestEvalImport:
                 "body": (
                     '<a href="#"><img alt="P1" src="badge"></a> **Leaky internal error**\n\n'
                     "Use an opaque 500 response.\n\n"
-                    "```suggestion\nhttp.Error(w, \"internal server error\", http.StatusInternalServerError)\n```"
+                    '```suggestion\nhttp.Error(w, "internal server error", http.StatusInternalServerError)\n```'
                 ),
                 "path": "backend/handler.go",
                 "line": 77,

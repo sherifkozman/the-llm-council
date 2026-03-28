@@ -191,9 +191,7 @@ class ToolRegistry:
                 )
             else:
                 # Simple type shorthand: "query: string"
-                parameters.append(
-                    ToolParameter(name=param_name, type=str(param_config))
-                )
+                parameters.append(ToolParameter(name=param_name, type=str(param_config)))
 
         return Tool(
             name=config.get("name", name),
@@ -247,7 +245,9 @@ class ToolRegistry:
 
         return sorted(self._capability_packs.keys())
 
-    def resolve_capability_tools(self, pack_names: list[str], role: str | None = None) -> list[Tool]:
+    def resolve_capability_tools(
+        self, pack_names: list[str], role: str | None = None
+    ) -> list[Tool]:
         """Resolve tools referenced by capability packs."""
 
         resolved: list[Tool] = []
@@ -264,7 +264,11 @@ class ToolRegistry:
             for tool_name in pack.tools:
                 tool = self.get_tool(tool_name)
                 if tool is None:
-                    logger.debug("Tool %s referenced by capability pack %s is not registered", tool_name, pack_name)
+                    logger.debug(
+                        "Tool %s referenced by capability pack %s is not registered",
+                        tool_name,
+                        pack_name,
+                    )
                     continue
                 if role and tool.roles and role not in tool.roles:
                     continue

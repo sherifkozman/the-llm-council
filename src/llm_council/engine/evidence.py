@@ -492,7 +492,9 @@ def _fetch_docs_page(url: str) -> tuple[str, str] | None:
         return None
 
     content_type = response.headers.get("content-type", "").lower()
-    if not any(token in content_type for token in ("text/html", "text/plain", "application/xhtml+xml")):
+    if not any(
+        token in content_type for token in ("text/html", "text/plain", "application/xhtml+xml")
+    ):
         return None
 
     return _extract_page_summary(response.text, url)
@@ -623,7 +625,10 @@ def _extract_page_summary(content: str, fallback_url: str) -> tuple[str, str]:
         text_content = _clean_text(re.sub(r"<[^>]+>", " ", content))
         summary = text_content[:200].rsplit(" ", 1)[0] if len(text_content) > 200 else text_content
 
-    return title or fallback_url, summary or "Documentation page fetched with no extractable summary."
+    return (
+        title or fallback_url,
+        summary or "Documentation page fetched with no extractable summary.",
+    )
 
 
 def _clean_text(value: str) -> str:

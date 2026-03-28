@@ -47,9 +47,7 @@ class TestEvidenceCollection:
         """Legacy security-audit alias should still work and leave unsupported packs pending."""
         (tmp_path / "src").mkdir()
         (tmp_path / "src" / "auth.py").write_text(
-            "TOKEN='dev'\n"
-            "def run_auth(password, session):\n"
-            "    return password, session, TOKEN\n"
+            "TOKEN='dev'\ndef run_auth(password, session):\n    return password, session, TOKEN\n"
         )
 
         plan = CapabilityPlan(

@@ -19,7 +19,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 import yaml
@@ -38,6 +38,9 @@ from llm_council.evaluation import (
     run_eval_dataset,
 )
 from llm_council.protocol.types import ReasoningProfile, RuntimeProfile
+
+if TYPE_CHECKING:
+    from llm_council.protocol.types import CouncilConfig
 
 # Global state for CLI context
 _cli_state: dict[str, Any] = {
@@ -189,7 +192,8 @@ def _load_config() -> dict[str, Any]:
 def _load_config_defaults() -> dict[str, Any]:
     """Load defaults section from config file."""
     config = _load_config()
-    return config.get("defaults", {})
+    defaults = config.get("defaults", {})
+    return defaults if isinstance(defaults, dict) else {}
 
 
 def _load_provider_configs() -> dict[str, dict[str, Any]]:
@@ -453,14 +457,14 @@ def run(
 
     # Handle dry-run
     if dry_run:
-        effective_schema = schema_file
-        if not effective_schema:
+        effective_schema: str = str(schema_file) if schema_file else "default"
+        if not schema_file:
             try:
                 from llm_council.subagents import get_effective_schema, load_subagent
 
-                effective_schema = get_effective_schema(
-                    load_subagent(resolved_agent), resolved_mode
-                ) or "default"
+                effective_schema = (
+                    get_effective_schema(load_subagent(resolved_agent), resolved_mode) or "default"
+                )
             except Exception:
                 effective_schema = "default"
 
@@ -529,22 +533,15 @@ def run(
             council.run(task=task_text, subagent=resolved_agent, follow_router=route)
         )
 
-        # Format output
-        if output_json:
-            output_text = json.dumps(result.model_dump(), indent=2, default=str)
-        else:
-            output_text = None
+        output_payload = json.dumps(result.model_dump(), indent=2, default=str)
 
         # Write to file or stdout
         if output_file:
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            if output_json:
-                output_file.write_text(output_text)
-            else:
-                output_file.write_text(json.dumps(result.model_dump(), indent=2, default=str))
+            output_file.write_text(output_payload)
             _print(f"[green]Output written to {output_file}[/green]")
         elif output_json:
-            print(output_text)
+            print(output_payload)
         else:
             if result.success:
                 console.print(
@@ -612,9 +609,7 @@ def run(
                         )
                     pending_capabilities = result.execution_plan.get("pending_capabilities") or []
                     if pending_capabilities:
-                        console.print(
-                            "  Pending capabilities: " + ", ".join(pending_capabilities)
-                        )
+                        console.print("  Pending capabilities: " + ", ".join(pending_capabilities))
                     model_overrides = result.execution_plan.get("model_overrides") or {}
                     if model_overrides:
                         console.print(
@@ -633,27 +628,31 @@ def run(
                         console.print(
                             "  Phase token budgets: "
                             + ", ".join(
-                                f"{phase}={tokens}"
-                                for phase, tokens in phase_token_budgets.items()
+                                f"{phase}={tokens}" for phase, tokens in phase_token_budgets.items()
                             )
                         )
                     if reasoning:
                         console.print(
                             "  Reasoning: "
                             + ", ".join(
-                                f"{key}={value}" for key, value in reasoning.items() if value is not None
+                                f"{key}={value}"
+                                for key, value in reasoning.items()
+                                if value is not None
                             )
                         )
                 if result.routed and result.routing_decision:
+                    routing_mode = result.routing_decision.get("mode")
+                    routing_mode_suffix = (
+                        f" --mode {routing_mode}" if isinstance(routing_mode, str) else ""
+                    )
                     console.print("\n[bold]Routing:[/bold]")
                     console.print(
                         "  Routed to: "
                         f"{result.routing_decision.get('subagent_to_run')}"
-                        f"{' --mode ' + result.routing_decision.get('mode') if result.routing_decision.get('mode') else ''}"
+                        f"{routing_mode_suffix}"
                     )
                     console.print(
-                        "  Router reasoning: "
-                        f"{result.routing_decision.get('reasoning') or 'n/a'}"
+                        f"  Router reasoning: {result.routing_decision.get('reasoning') or 'n/a'}"
                     )
 
     except Exception as e:
@@ -716,10 +715,7 @@ def doctor(
 
     if provider_filters:
         requested = [
-            item.strip()
-            for raw in provider_filters
-            for item in raw.split(",")
-            if item.strip()
+            item.strip() for raw in provider_filters for item in raw.split(",") if item.strip()
         ]
         selected: list[str] = []
         for requested_name in requested:
@@ -1081,13 +1077,15 @@ def _build_eval_base_config(
     max_retries_override: int | None = None,
     runtime_profile: RuntimeProfile = RuntimeProfile.DEFAULT,
     reasoning_profile: ReasoningProfile = ReasoningProfile.DEFAULT,
-):
+) -> CouncilConfig:
     """Build the shared CouncilConfig used by eval commands."""
 
     from llm_council.protocol.types import CouncilConfig
 
     model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
-    effective_timeout = timeout_override if timeout_override is not None else config_defaults.get("timeout", 120)
+    effective_timeout = (
+        timeout_override if timeout_override is not None else config_defaults.get("timeout", 120)
+    )
     max_retries = (
         max_retries_override
         if max_retries_override is not None

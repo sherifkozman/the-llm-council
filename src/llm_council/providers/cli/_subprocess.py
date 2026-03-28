@@ -8,7 +8,9 @@ import os
 import signal
 
 
-async def terminate_process_tree(proc: asyncio.subprocess.Process, grace_seconds: float = 1.0) -> None:
+async def terminate_process_tree(
+    proc: asyncio.subprocess.Process, grace_seconds: float = 1.0
+) -> None:
     """Terminate a CLI subprocess and any children it spawned.
 
     CLI wrappers such as Node-based agents can leave child processes running after

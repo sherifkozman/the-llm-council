@@ -226,13 +226,17 @@ class OpenAIProvider(ProviderAdapter):
         self._timeout_seconds = (
             timeout_seconds
             if timeout_seconds is not None
-            else float(env_timeout) if env_timeout is not None else DEFAULT_TIMEOUT_SECONDS
+            else float(env_timeout)
+            if env_timeout is not None
+            else DEFAULT_TIMEOUT_SECONDS
         )
         env_max_retries = os.environ.get(ENV_MAX_RETRIES)
         self._max_retries = (
             max_retries
             if max_retries is not None
-            else int(env_max_retries) if env_max_retries is not None else DEFAULT_MAX_RETRIES
+            else int(env_max_retries)
+            if env_max_retries is not None
+            else DEFAULT_MAX_RETRIES
         )
         self._client: Any = None
 
