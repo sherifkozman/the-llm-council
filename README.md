@@ -1,7 +1,7 @@
 # The LLM Council
 
 ```
-$ council run architect "Design a mass hallucination prevention system"
+$ council run drafter --mode arch "Design a mass hallucination prevention system"
 
                     ╔══════════════════════════════════════════════════════════╗
                     ║             ⚖️  THE LLM COUNCIL CONVENES  ⚖️              ║
@@ -61,9 +61,8 @@ A Multi-LLM Council Framework that orchestrates multiple LLM backends to enable 
 
 This release also includes a mode-aware execution path with runtime profiles,
 routed handoff, capability planning, and deterministic eval tooling. Those
-capabilities materially extend the package runtime, but they should not yet be
-treated as a claim of stable benchmarked superiority for review or security
-analysis.
+capabilities materially extend the package runtime and make the public surface
+more explicit for planning, review, security, and research workflows.
 
 ## Why Use a Council?
 
@@ -199,8 +198,8 @@ council run drafter "Quick fix" --no-artifacts
 # Get structured JSON output
 council run planner "Add user authentication" --json
 
-# Legacy syntax still works (shows deprecation warning)
-council run implementer "Build a login page"  # → drafter --mode impl
+# Legacy aliases still work, but prefer canonical subagents and modes
+council run drafter --mode impl "Build a login page"
 ```
 
 ### Python API
@@ -270,7 +269,7 @@ commit imported diffs, copied code, or review fixtures into tracked repo paths.
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │                    Subagent Configs                          │   │
-│  │  router | planner | architect | implementer | reviewer | ... │   │
+│  │  router | planner | researcher | drafter | critic | ...     │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
@@ -336,19 +335,12 @@ council run planner --mode plan "Plan implementation"  # Planning (default)
 council run planner --mode assess "Redis vs Memcached" # Build vs buy
 ```
 
-### Deprecated Aliases (Backwards Compatible)
+### Legacy Aliases
 
-The following legacy names still work but show a deprecation warning:
-
-| Old Name | Use Instead | Removed In |
-|----------|-------------|------------|
-| `implementer` | `drafter --mode impl` | v1.0 |
-| `architect` | `drafter --mode arch` | v1.0 |
-| `test-designer` | `drafter --mode test` | v1.0 |
-| `reviewer` | `critic --mode review` | v1.0 |
-| `red-team` | `critic --mode security` | v1.0 |
-| `assessor` | `planner --mode assess` | v1.0 |
-| `shipper` | `synthesizer` | v1.0 |
+Legacy names such as `implementer`, `architect`, `reviewer`, `red-team`,
+`assessor`, `test-designer`, and `shipper` still work for backwards
+compatibility, but public docs and examples now use the canonical subagents and
+modes.
 
 ## Writing a Provider
 
@@ -419,7 +411,7 @@ export ANTHROPIC_MODEL="claude-opus-4-6@20260301"  # model with version
 # Multi-model council: comma-separated OpenRouter model IDs
 export COUNCIL_MODELS="anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
 
-# Per-provider model override (v0.6.0+)
+# Per-provider model override (v0.7.0+)
 export OPENAI_MODEL="gpt-5.4"               # Override OpenAI default
 export ANTHROPIC_MODEL="claude-opus-4-6"     # Override Anthropic default
 export GOOGLE_MODEL="gemini-3.1-pro-preview" # Override Google default

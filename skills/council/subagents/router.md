@@ -1,33 +1,29 @@
-# Router Subagent
+# Router
 
-## Purpose
-Task classification and routing to the appropriate subagent.
+Primary task-classification subagent.
 
-## When to Use
-- When unsure which subagent to use
-- Classifying incoming tasks automatically
-- Building meta-agents that dispatch work
-- Analyzing task complexity
+Use it when you want the package to choose the next subagent and mode.
 
-## Output Schema
-Returns JSON with:
-- `task_type`: Classified task type
-- `recommended_subagent`: Best subagent for this task
-- `complexity`: simple/moderate/complex
-- `reasoning`: Why this subagent was chosen
-- `alternative_subagents`: Other valid choices
-- `confidence`: Confidence score (0.0-1.0)
+Typical output fields:
 
-## CLI Options
+- `subagent_to_run`
+- `mode`
+- `model_pack`
+- `execution_profile`
+- `budget_class`
+- `required_capabilities`
+
+## Examples
+
 ```bash
-council run router "task" --health-check --json --verbose
-```
+council run router "Add pagination to users API" --json
+# -> drafter --mode impl
 
-## Example
-```bash
-council run router "Should we use Redis or Memcached for caching?" --json
-```
+council run router "Is our auth system secure?" --json
+# -> critic --mode security
 
-## Cost & Time
-- **Cost**: ~$0.10 per classification
-- **Time**: ~30 seconds
+council run router "Redis vs Memcached for caching" --json
+# -> planner --mode assess
+
+council run router "Assess whether we should adopt a hosted vector store" --route
+```

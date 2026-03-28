@@ -101,12 +101,12 @@ class VertexAIProvider(ProviderAdapter):
         # Gemini models
         export GOOGLE_CLOUD_PROJECT=my-project
         export VERTEX_AI_MODEL=gemini-2.5-pro
-        council run architect "Design a cache" --providers vertex-ai
+        council run drafter --mode arch "Design a cache" --providers vertex-ai
 
         # Claude models
         export ANTHROPIC_VERTEX_PROJECT_ID=my-project
         export ANTHROPIC_MODEL=claude-opus-4-6@20260301
-        council run architect "Design a cache" --providers vertex-ai
+        council run drafter --mode arch "Design a cache" --providers vertex-ai
     """
 
     name: ClassVar[str] = "vertex-ai"

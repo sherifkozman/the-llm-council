@@ -1,36 +1,21 @@
-# Assessor Subagent
+# Assessor (Legacy Alias)
 
-## Purpose
-Build-vs-buy, go/no-go, and technical tradeoff analysis with weighted criteria.
+`assessor` is a backwards-compatible alias.
 
-## When to Use
-- Build vs buy decisions
-- Go/no-go decisions
-- Technology A vs B comparisons
-- Cost-benefit analysis
-- Vendor selection
-- Prioritizing technical debt vs features
+Prefer:
 
-## Output Schema
-Returns JSON with:
-- `decision_question`: What is being evaluated
-- `options`: Array with scores, pros, cons, costs, risks
-- `evaluation_criteria`: Weighted scoring criteria
-- `recommendation`: Suggested choice with rationale
-- `sensitivity_analysis`: Robustness of the decision
-- `next_steps`: Concrete actions
-- `confidence`: Confidence score (0.0-1.0)
-
-## CLI Options
 ```bash
-council run assessor "task" --health-check --json --verbose
+council run planner --mode assess "<task>"
 ```
 
-## Example
-```bash
-council run assessor "Should we build custom auth or use Auth0?" --json
-```
+Use it for:
 
-## Cost & Time
-- **Cost**: ~$0.35 per assessment
-- **Time**: ~2.5 minutes
+- build-vs-buy decisions
+- tradeoff analysis
+- recommendation scoring
+
+Example:
+
+```bash
+council run planner --mode assess "Should we build custom auth or use Auth0?" --json
+```

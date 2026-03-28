@@ -54,9 +54,9 @@ Provider Status
 
 ```bash
 # Run a planner task
-council run planner "Add user authentication to my app"
+council run planner --mode plan "Add user authentication to my app"
 
-# Generate code with the implementer
+# Generate code with the drafter
 council run drafter --mode impl "Create a Python function to validate email addresses"
 
 # Get structured JSON output

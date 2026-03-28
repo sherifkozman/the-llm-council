@@ -1,35 +1,20 @@
-# Planner Subagent
+# Planner
 
-## Purpose
-Execution roadmaps with phased plans, dependency analysis, and risk mitigation.
+Primary planning and assessment subagent.
 
-## When to Use
-- Planning multi-phase implementations
-- Creating sprint/milestone roadmaps
-- Breaking down large epics into stories
-- Sequencing work with complex dependencies
-- Migration planning
+## Modes
 
-## Output Schema
-Returns JSON with:
-- `phases`: Array with objectives, tasks, dependencies
-- `critical_path`: Tasks that gate the project
-- `parallelizable_work`: Tasks that can be concurrent
-- `risk_mitigation`: How to handle identified risks
-- `rollback_plan`: How to undo changes if needed
-- `success_criteria`: How to know each phase is complete
-- `confidence`: Confidence score (0.0-1.0)
+| Mode | Use for |
+|------|---------|
+| `plan` | execution roadmaps, migration plans, phased delivery |
+| `assess` | build-vs-buy, go/no-go, tradeoff analysis |
 
-## CLI Options
+## Examples
+
 ```bash
-council run planner "task" --health-check --json --verbose
-```
+council run planner --mode plan "Plan MongoDB to PostgreSQL migration" --json
+council run planner --mode assess "Redis vs Memcached for sessions" --json
 
-## Example
-```bash
-council run planner "Plan the migration from MongoDB to PostgreSQL" --json
+# With file context
+council run planner --mode plan --files PRD.md "Plan implementation" --json
 ```
-
-## Cost & Time
-- **Cost**: ~$0.40 per plan
-- **Time**: ~5 minutes

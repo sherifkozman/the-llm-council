@@ -23,7 +23,7 @@ class Council:
         council = Council(providers=["openrouter"])
         result = await council.run(
             task="Build a login page with OAuth",
-            subagent="implementer"
+            subagent="drafter"
         )
         print(result.output)
         ```
@@ -93,7 +93,7 @@ class Council:
 
         Args:
             task: The task description.
-            subagent: Subagent type (router, planner, implementer, etc.).
+            subagent: Subagent type (router, planner, researcher, drafter, critic, synthesizer).
             follow_router: When true, execute the router recommendation after a router run.
 
         Returns:
@@ -185,16 +185,19 @@ class Council:
 
     @classmethod
     def available_subagents(cls) -> list[str]:
-        """Get list of available subagent types."""
+        """Get list of accepted subagent identifiers, including compatibility aliases."""
         return [
             "router",
             "planner",
             "assessor",
             "researcher",
+            "drafter",
             "architect",
             "implementer",
+            "critic",
             "reviewer",
             "test-designer",
+            "synthesizer",
             "shipper",
             "red-team",
         ]

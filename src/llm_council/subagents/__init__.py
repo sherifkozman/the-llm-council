@@ -1,9 +1,9 @@
-"""
-Subagent configurations.
+"""Subagent configurations.
 
-YAML-based configurations for each subagent role (v0.5.0):
-- Core: drafter, critic, synthesizer, researcher, planner, router
-- Legacy (deprecated): implementer, architect, reviewer, etc.
+YAML-based configurations for the canonical subagent surface:
+- Primary: drafter, critic, synthesizer, researcher, planner, router
+- Compatibility aliases remain available for older names such as implementer,
+  architect, reviewer, and red-team
 
 Supports per-subagent configuration for:
 - Provider preferences (preferred, fallback, exclude)

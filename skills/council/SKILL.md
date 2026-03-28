@@ -1,282 +1,145 @@
 ---
 name: council
-description: Run multi-LLM council for adversarial debate and cross-validation. Orchestrates Claude, GPT, and Gemini for production-grade implementation, code review, architecture design, research, and security analysis.
+description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill
+# LLM Council Skill (v0.7.0)
 
-Multi-model council: parallel drafts -> adversarial critique -> validated synthesis.
+Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
-> **Prerequisite:** This skill requires the `the-llm-council` Python package to be installed. The skill provides IDE integration but the actual council runs via the installed CLI. If you see `command not found: council`, run `pip install the-llm-council` first.
+> This skill requires the `the-llm-council` package to be installed. The skill
+> provides the agent-side interface; actual runs happen through the installed
+> `council` CLI.
 
 ## Setup
 
-### 1. Install
-```bash
-pip install the-llm-council>=0.6.0
-
-# With specific provider SDKs
-pip install the-llm-council[anthropic,openai,google]
-
-# With Vertex AI (Enterprise GCP)
-pip install the-llm-council[vertex]
-```
-
-### 2. Configure API Keys
-
-| Provider | Environment Variable | Notes |
-|----------|---------------------|-------|
-| OpenRouter | `OPENROUTER_API_KEY` | **Recommended** - single key for all models |
-| OpenAI | `OPENAI_API_KEY` | Direct GPT access |
-| Anthropic | `ANTHROPIC_API_KEY` | Direct Claude access |
-| Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
-| Vertex AI | `GOOGLE_CLOUD_PROJECT` or `ANTHROPIC_VERTEX_PROJECT_ID` + ADC | Enterprise GCP |
+Install the package:
 
 ```bash
-# Minimum setup (OpenRouter)
-export OPENROUTER_API_KEY="your-key"
+pip install 'the-llm-council>=0.7.0'
 ```
 
-### 3. Verify
+Optional extras:
+
+```bash
+pip install 'the-llm-council[anthropic,openai,google]>=0.7.0'
+pip install 'the-llm-council[vertex]>=0.7.0'
+```
+
+Configure at least one provider key:
+
+| Provider | Environment Variable |
+|----------|----------------------|
+| OpenRouter | `OPENROUTER_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
+| Vertex AI | `GOOGLE_CLOUD_PROJECT` or `ANTHROPIC_VERTEX_PROJECT_ID` + ADC |
+
+Verify what is usable in the current shell:
+
 ```bash
 council doctor
+council doctor --deep --provider claude --provider gemini --provider codex
 ```
 
-## Usage
+## Canonical Surface
 
 ```bash
-council run <subagent> "<task>" [options]
+council run <subagent> [--mode <mode>] "<task>" [options]
 ```
 
-### CLI Options (v0.6.0)
+Primary subagents:
 
-| Option | Description |
-|--------|-------------|
-| `--mode` | Agent mode (e.g., `impl`/`arch`/`test` for drafter) |
-| `--json` | Output structured JSON |
-| `--verbose, -v` | Verbose output with metrics |
-| `--models, -m` | Comma-separated OpenRouter model IDs |
-| `--providers, -p` | Comma-separated provider list |
-| `--timeout, -t` | Request timeout in seconds |
-| `--temperature` | Model temperature (0.0-2.0) |
-| `--max-tokens` | Max output tokens |
-| `--input, -i` | Read task from file (use `-` for stdin) |
-| `--output, -o` | Write output to file |
-| `--context, --system` | Additional system context/instructions |
-| `--schema` | Custom output schema JSON file |
-| `--no-artifacts` | Disable artifact storage (faster) |
-| `--dry-run` | Show what would run without executing |
+| Subagent | Modes | Use for |
+|----------|-------|---------|
+| `drafter` | `impl`, `arch`, `test` | implementation, architecture, tests |
+| `critic` | `review`, `security` | code review and security analysis |
+| `planner` | `plan`, `assess` | execution plans and decision assessments |
+| `researcher` | — | research with sources and evidence |
+| `router` | — | task classification and routed handoff |
+| `synthesizer` | — | final merged output |
 
-### Other Commands
-```bash
-council doctor                     # Check provider health
-council doctor --provider openai   # Check specific provider
-council config --show              # Show current configuration
-council config --init              # Create default config
-council config --validate          # Validate config file
-council --version                  # Show version
-```
+Legacy aliases such as `implementer`, `architect`, `reviewer`, `red-team`,
+`assessor`, `test-designer`, and `shipper` still work, but they are no longer
+the preferred interface.
 
-## Subagents (v0.5.0+)
-
-### Core Agents
-
-| Subagent | Modes | Use For | Details |
-|----------|-------|---------|---------|
-| `drafter` | `impl`, `arch`, `test` | Code, architecture, tests | See below |
-| `critic` | `review`, `security` | Code review, security audit | See below |
-| `synthesizer` | - | Merge and finalize outputs | See `subagents/synthesizer.md` |
-| `researcher` | - | Technical research | See `subagents/researcher.md` |
-| `planner` | `plan`, `assess` | Roadmaps, decisions | See `subagents/planner.md` |
-| `router` | - | Task classification | See `subagents/router.md` |
-
-### Agent Modes
-
-**drafter modes:**
-- `--mode impl` - Feature implementation, bug fixes (default)
-- `--mode arch` - System design, API schemas
-- `--mode test` - Test suite design
-
-**critic modes:**
-- `--mode review` - Code review with CWE IDs (default)
-- `--mode security` - Security threat analysis
-
-**planner modes:**
-- `--mode plan` - Execution roadmaps (default)
-- `--mode assess` - Build vs buy decisions
-
-### Deprecated Aliases (Backwards Compatible)
-
-The following legacy agent names still work but will be removed in v1.0:
-
-| Old Name | Use Instead | Removed In |
-|----------|-------------|------------|
-| `implementer` | `drafter --mode impl` | v1.0 |
-| `architect` | `drafter --mode arch` | v1.0 |
-| `test-designer` | `drafter --mode test` | v1.0 |
-| `reviewer` | `critic --mode review` | v1.0 |
-| `red-team` | `critic --mode security` | v1.0 |
-| `assessor` | `planner --mode assess` | v1.0 |
-| `shipper` | `synthesizer` | v1.0 |
-
-## Multi-Model Configuration
-
-Run multiple models in parallel for adversarial debate:
+## Common Commands
 
 ```bash
-# Via CLI flag
-council run drafter --mode arch "Design caching layer" \
-  --models "anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
+# Implementation
+council run drafter --mode impl "Add pagination to users API"
 
-# Via environment variable
-export COUNCIL_MODELS="anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
+# Architecture
+council run drafter --mode arch "Design a caching layer"
+
+# Tests
+council run drafter --mode test "Design tests for cursor pagination"
+
+# Review
+council run critic --mode review "Review auth changes"
+
+# Security
+council run critic --mode security "Analyze auth system vulnerabilities"
+
+# Planning
+council run planner --mode plan "Plan MongoDB to PostgreSQL migration"
+
+# Assessment
+council run planner --mode assess "Redis vs Memcached for sessions"
+
+# Research
+council run researcher "Research WebSocket libraries for Node.js"
+
+# Router handoff
+council run router "Should we buy or build auth?" --route
 ```
 
-### Model Pack Overrides
+## Useful Options
 
-Fine-tune which models handle specific task types:
+| Option | Purpose |
+|--------|---------|
+| `--mode <mode>` | Select a runtime mode for `drafter`, `critic`, or `planner` |
+| `--json` | Return structured JSON |
+| `--verbose` | Show resolved execution details and council phases |
+| `--providers` | Explicit provider list. Omit to use config defaults |
+| `--models` | Explicit model list |
+| `--runtime-profile bounded` | Lower latency and token budgets |
+| `--reasoning-profile off|light` | Reduce reasoning overhead |
+| `--route` | Follow a router decision into the chosen subagent/mode |
+| `--files` | Add file context to the task |
+| `--dry-run` | Show the resolved plan without executing |
+| `--schema` | Use a custom output schema |
 
-```bash
-export COUNCIL_MODEL_FAST="anthropic/claude-haiku-4-5"        # Quick tasks (router, synthesizer)
-export COUNCIL_MODEL_REASONING="anthropic/claude-opus-4-6"    # Deep analysis (planner, critic)
-export COUNCIL_MODEL_CODE="openai/gpt-5.4"                   # Code generation (drafter)
-export COUNCIL_MODEL_CRITIC="anthropic/claude-sonnet-4-6"     # Adversarial critique
-export COUNCIL_MODEL_GROUNDED="google/gemini-3.1-pro-preview" # Research tasks
-export COUNCIL_MODEL_CODE_COMPLEX="anthropic/claude-opus-4-6" # Complex refactoring
-```
+## Provider Names
 
-### Per-Provider Model Override
+Canonical provider names:
 
-```bash
-export OPENAI_MODEL="gpt-5.4"                # Override OpenAI default
-export ANTHROPIC_MODEL="claude-opus-4-6"      # Override Anthropic default
-export GOOGLE_MODEL="gemini-3.1-pro-preview"  # Override Google default
-export OPENROUTER_MODEL="anthropic/claude-opus-4-6"  # Override OpenRouter default
-```
+- `openrouter`
+- `openai`
+- `anthropic`
+- `google`
+- `vertex-ai`
+- `claude`
+- `gemini`
+- `codex`
 
-## Config File
+User-selected providers and models should be respected. Health checks and deep
+doctor probes are for diagnostics, not for silently overriding explicit
+configuration.
 
-Optional YAML configuration:
+## When To Use It
 
-```yaml
-# ~/.config/llm-council/config.yaml
-providers:
-  - name: openrouter
-    default_model: anthropic/claude-opus-4-6
-  - name: openai
-    default_model: gpt-5.4
-  - name: google
-    default_model: gemini-3.1-pro-preview
+Use council for:
 
-defaults:
-  providers:
-    - openrouter
-  timeout: 120
-  max_retries: 3
-  summary_tier: actions
-  output_format: json  # or "rich" (default)
-```
+- non-trivial implementation work
+- architecture and system design
+- code review and security analysis
+- planning and build-vs-buy style decisions
+- research that benefits from multiple models critiquing each other
 
-## Python API
+Skip it for:
 
-```python
-from llm_council import Council
-from llm_council.protocol.types import CouncilConfig
-
-config = CouncilConfig(
-    providers=["openrouter"],
-    models=["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
-    mode="impl",
-    timeout=120,
-    temperature=0.7,
-    max_tokens=4000,
-    system_context="Additional instructions...",
-)
-council = Council(config=config)
-result = await council.run(
-    task="Build a login page with OAuth",
-    subagent="drafter"
-)
-print(result.output)
-print(result.success)
-print(result.duration_ms)
-print(result.cost_estimate.estimated_cost_usd)
-```
-
-## When to Use
-
-**Use council for:**
-- Feature implementation requiring production quality
-- Code review with security analysis (CWE IDs)
-- Architecture design decisions
-- Technical research informing decisions
-- Build vs buy assessments
-- Security threat modeling
-
-**Skip council for:**
-- Quick file lookups
-- Single-line fixes
-- Simple questions
-
-## Examples
-
-```bash
-# Feature implementation
-council run drafter --mode impl "Add pagination to users API" --json
-
-# Code review
-council run critic --mode review "Review the authentication changes" --json
-
-# Multi-model architecture design
-council run drafter --mode arch "Design caching layer" \
-  --models "anthropic/claude-opus-4-6,openai/gpt-5.4" --json
-
-# Security threat model
-council run critic --mode security "Analyze auth system vulnerabilities" --json
-
-# Build vs buy decision
-council run planner --mode assess "Should we build or buy a payment system?" --json
-
-# Read task from file, write output to file
-council run drafter --mode impl -i task.md -o result.json --json
-
-# Dry run (see what would execute)
-council run drafter --mode impl "Build login page" --dry-run
-
-# With additional context
-council run critic --mode review "Review auth changes" \
-  --context "Focus on OWASP Top 10 vulnerabilities"
-
-# Legacy syntax (still works, shows deprecation warning)
-council run implementer "Add pagination" --json
-council run reviewer "Review changes" --json
-```
-
-## Security Notes
-
-- **API Keys**: Never embed secrets in task descriptions or skill files. Use environment variables.
-- **Data Sensitivity**: Avoid sending files containing secrets (`.env`, credentials) to the council. Context is sent to external LLM providers.
-- **Context Injection**: User-provided `--context` content is wrapped in XML delimiters and framed as reference data to mitigate prompt injection.
-- **Skill Integrity**: Treat `SKILL.md` and `subagents/*.md` as configuration code. Keep under version control.
-
-## Troubleshooting
-
-```bash
-# Check all providers
-council doctor
-
-# Check specific provider
-council doctor --provider openrouter --json
-
-# Verbose output for debugging
-council run drafter --mode impl "task" --verbose
-
-# Debug logging
-council --debug run drafter "task"
-
-# Faster runs (skip artifact storage)
-council run drafter "task" --no-artifacts
-
-# Dry run to see configuration
-council run drafter --mode impl "task" --dry-run
-```
+- trivial one-line edits
+- simple lookups
+- tasks where a single direct model call is clearly enough

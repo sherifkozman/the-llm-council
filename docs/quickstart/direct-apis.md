@@ -579,14 +579,14 @@ For local or offline use, LLM Council supports CLI-based providers:
 
 ```bash
 # Requires codex CLI to be installed
-council run drafter --mode impl "Build a parser" --providers codex-cli
+council run drafter --mode impl "Build a parser" --providers codex
 ```
 
 ### Gemini CLI
 
 ```bash
 # Requires gemini CLI to be installed
-council run researcher "AI safety research" --providers gemini-cli
+council run researcher "AI safety research" --providers gemini
 ```
 
 CLI providers execute local commands instead of making API calls, useful for:

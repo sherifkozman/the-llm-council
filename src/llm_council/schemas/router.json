@@ -24,7 +24,7 @@
     "subagent_to_run": {
       "type": "string",
       "enum": ["drafter", "critic", "synthesizer", "researcher", "planner", "router"],
-      "description": "The core subagent that should handle this task (v0.5.0+)"
+      "description": "The canonical subagent that should handle this task"
     },
     "mode": {
       "type": "string",

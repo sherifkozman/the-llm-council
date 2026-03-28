@@ -1,35 +1,21 @@
-# Shipper Subagent
+# Shipper (Legacy Alias)
 
-## Purpose
-Release notes, changelogs, and deployment documentation from git history.
+`shipper` is a backwards-compatible alias.
 
-## When to Use
-- Generating release notes for versions
-- Creating changelogs from git history
-- Documenting breaking changes
-- Preparing deployment runbooks
-- Creating migration guides
+Prefer:
 
-## Output Schema
-Returns JSON with:
-- `release_notes`: Formatted notes with features, fixes, breaking changes
-- `version`: Release version
-- `summary`: High-level overview
-- `breaking_changes`: With migration guides
-- `deployment_notes`: Prerequisites, steps, rollback plan
-- `stakeholder_summary`: Executive/non-technical overview
-- `confidence`: Confidence score (0.0-1.0)
-
-## CLI Options
 ```bash
-council run shipper "task" --health-check --json --verbose
+council run synthesizer "<task>"
 ```
 
-## Example
-```bash
-council run shipper "Generate release notes for v2.0.0" --json
-```
+Use it for:
 
-## Cost & Time
-- **Cost**: ~$0.35 per release
-- **Time**: ~3 minutes
+- final merged output
+- release notes or changelog generation
+- structured finalization tasks
+
+Example:
+
+```bash
+council run synthesizer "Generate release notes for v2.0.0" --json
+```
