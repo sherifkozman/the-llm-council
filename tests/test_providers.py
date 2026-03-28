@@ -21,6 +21,9 @@ from llm_council.providers.base import (
     ProviderCapabilities,
     classify_error,
 )
+from llm_council.providers.cli.claude_code import ClaudeCodeCLIProvider
+from llm_council.providers.cli.codex import CodexCLIProvider
+from llm_council.providers.cli.gemini import GeminiCLIProvider
 from llm_council.providers.google import (
     DEFAULT_MODEL as GOOGLE_DEFAULT_MODEL,
 )
@@ -39,11 +42,8 @@ from llm_council.providers.openrouter import (
 from llm_council.providers.openrouter import (
     OpenRouterProvider,
 )
-from llm_council.providers.cli.gemini import GeminiCLIProvider
-from llm_council.providers.cli.codex import CodexCLIProvider
-from llm_council.providers.cli.claude_code import ClaudeCodeCLIProvider
-from llm_council.providers.vertex import VertexAIProvider
 from llm_council.providers.registry import ProviderRegistry, get_registry
+from llm_council.providers.vertex import VertexAIProvider
 
 
 class TestProviderCapabilities:

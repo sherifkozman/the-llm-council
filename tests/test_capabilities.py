@@ -7,7 +7,6 @@ from pathlib import Path
 from llm_council.engine.capabilities import select_capability_plan
 from llm_council.registry.tool_registry import ToolRegistry
 
-
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "tool_registry.yaml"
 
 

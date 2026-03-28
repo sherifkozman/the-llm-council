@@ -20,7 +20,6 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
-from llm_council.providers.cli._subprocess import terminate_process_tree
 from llm_council.providers.base import (
     DoctorResult,
     ErrorType,
@@ -31,6 +30,7 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
+from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
 

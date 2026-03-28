@@ -380,7 +380,7 @@ class TestOrchestratorDoctor:
             mock_registry = MagicMock()
             mock_registry.get_provider.return_value = mock_provider
             mock_reg.return_value = mock_registry
-            orch = Orchestrator(providers=["mock"], config=config)
+            Orchestrator(providers=["mock"], config=config)
 
     @pytest.mark.asyncio
     async def test_call_provider_records_provider_error_on_abort(self):

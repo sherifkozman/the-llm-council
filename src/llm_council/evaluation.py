@@ -194,10 +194,7 @@ def load_eval_dataset(path: str | Path) -> EvalDataset:
 
     dataset_path = Path(path)
     raw = dataset_path.read_text(encoding="utf-8")
-    if dataset_path.suffix.lower() == ".json":
-        data = json.loads(raw)
-    else:
-        data = yaml.safe_load(raw)
+    data = json.loads(raw) if dataset_path.suffix.lower() == ".json" else yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise ValueError(f"Evaluation dataset must be an object: {dataset_path}")
     dataset = EvalDataset.model_validate(data)
@@ -210,10 +207,9 @@ def load_eval_variants(path: str | Path) -> EvalVariantsFile:
 
     variants_path = Path(path)
     raw = variants_path.read_text(encoding="utf-8")
-    if variants_path.suffix.lower() == ".json":
-        data = json.loads(raw)
-    else:
-        data = yaml.safe_load(raw)
+    data = (
+        json.loads(raw) if variants_path.suffix.lower() == ".json" else yaml.safe_load(raw)
+    )
     if not isinstance(data, dict):
         raise ValueError(f"Evaluation variants file must be an object: {variants_path}")
     return EvalVariantsFile.model_validate(data)

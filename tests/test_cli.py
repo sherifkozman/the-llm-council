@@ -100,7 +100,7 @@ class TestCLIDoctor:
             mock_provider.doctor = AsyncMock(return_value=mock_doctor_result)
             mock_reg.return_value = mock_registry
 
-            result = runner.invoke(app, ["doctor"])
+            runner.invoke(app, ["doctor"])
 
             # Verify get_provider was called with config kwargs
             mock_registry.get_provider.assert_called_with("openai", default_model="gpt-5.2")

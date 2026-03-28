@@ -8,6 +8,7 @@ The engine coordinates:
 4. Health checks and graceful degradation
 """
 
+from llm_council.engine.capabilities import CapabilityPlan, select_capability_plan
 from llm_council.engine.degradation import (
     DegradationAction,
     DegradationDecision,
@@ -16,7 +17,7 @@ from llm_council.engine.degradation import (
     FailureEvent,
     create_default_policy,
 )
-from llm_council.engine.capabilities import CapabilityPlan, select_capability_plan
+from llm_council.engine.evidence import EvidenceBundle, EvidenceItem, collect_capability_evidence
 from llm_council.engine.health import (
     HealthChecker,
     HealthReport,
@@ -24,7 +25,6 @@ from llm_council.engine.health import (
     ProviderHealth,
     preflight_check,
 )
-from llm_council.engine.evidence import EvidenceBundle, EvidenceItem, collect_capability_evidence
 from llm_council.engine.orchestrator import Orchestrator
 
 __all__ = [
