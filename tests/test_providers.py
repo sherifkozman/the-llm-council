@@ -244,6 +244,18 @@ class TestErrorClassification:
             ErrorType.TIMEOUT
         )
 
+    def test_invalid_request_error_is_not_treated_as_auth(self):
+        """Generic invalid request errors should not be mislabeled as auth failures."""
+        assert classify_error('{"type":"invalid_request_error","message":"bad input"}') == (
+            ErrorType.UNKNOWN
+        )
+
+    def test_chatgpt_codex_model_mismatch_is_model_unavailable(self):
+        """ChatGPT-auth Codex model mismatches should classify as model availability issues."""
+        assert classify_error(
+            "The 'gpt-5.4-codex' model is not supported when using Codex with a ChatGPT account."
+        ) == ErrorType.MODEL_UNAVAILABLE
+
 
 class TestMockProvider:
     """Tests for mock provider functionality."""
@@ -584,6 +596,64 @@ class TestCLIProviderTimeouts:
 
         assert response.text == "ok"
         assert mock_exec.await_args.kwargs["start_new_session"] is True
+
+    def test_codex_cli_defaults_to_chatgpt_compatible_model(self):
+        """Codex CLI should default to a model that works with ChatGPT auth."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        assert provider._default_model == "gpt-5.4"
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_rewrites_codex_model_for_chatgpt_auth(self):
+        """`*-codex` models should be normalized when local Codex auth uses ChatGPT."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        login_process = AsyncMock()
+        login_process.communicate.return_value = (b"Logged in using ChatGPT\n", b"")
+        login_process.returncode = 0
+
+        exec_process = AsyncMock()
+        exec_process.communicate.return_value = (b"READY\n", b"")
+        exec_process.returncode = 0
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=[login_process, exec_process],
+        ) as mock_exec:
+            response = await provider.generate(
+                GenerateRequest(prompt="test", model="gpt-5.4-codex")
+            )
+
+        assert response.text == "READY\n"
+        assert mock_exec.await_args_list[1].args[:4] == (
+            "/usr/local/bin/codex",
+            "exec",
+            "--sandbox",
+            "read-only",
+        )
+        assert "-m" in mock_exec.await_args_list[1].args
+        model_index = mock_exec.await_args_list[1].args.index("-m")
+        assert mock_exec.await_args_list[1].args[model_index + 1] == "gpt-5.4"
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_error_reports_useful_tail(self):
+        """Codex CLI errors should retain the meaningful trailing error line."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b"",
+            (
+                b"OpenAI Codex v0.117.0 (research preview)\n"
+                b"model: gpt-5.4-codex\n"
+                b"ERROR: {\"type\":\"error\",\"status\":400,\"error\":{\"type\":"
+                b"\"invalid_request_error\",\"message\":\"The 'gpt-5.4-codex' model is not "
+                b"supported when using Codex with a ChatGPT account.\"}}\n"
+            ),
+        )
+        process.returncode = 1
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            with pytest.raises(RuntimeError, match="MODEL UNAVAILABLE: ERROR:"):
+                await provider.generate(GenerateRequest(prompt="test"))
 
     @pytest.mark.asyncio
     async def test_claude_cli_starts_new_session(self):

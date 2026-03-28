@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-03-28
+
+### Changed
+- Codex CLI provider now defaults to `gpt-5.4` so ChatGPT-authenticated local Codex installs work without extra model config
+- bounded runtime gives Codex longer per-phase request caps for planner-style council runs that exceed the generic 15s draft timeout
+- Codex quickstart docs now note the compatibility default and when to opt into `*-codex` variants explicitly
+
+### Fixed
+- Codex CLI provider now rewrites incompatible `*-codex` model names when local login status shows `Logged in using ChatGPT`
+- Codex CLI error reporting now preserves the meaningful trailing `ERROR:` lines instead of truncating the banner and hiding the real cause
+- provider error classification no longer treats generic `invalid_request_error` responses as auth failures by default
+
 ## [0.7.1] - 2026-03-27
 
 ### Changed
@@ -492,7 +504,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.4...v0.7.0
 [0.6.4]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.3...v0.6.4

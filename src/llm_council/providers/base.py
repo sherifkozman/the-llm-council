@@ -65,7 +65,6 @@ _AUTH_PATTERNS = (
     "unauthorized",
     "authentication",
     "api key not found",
-    "invalid_request_error",
     "401",
 )
 
@@ -75,6 +74,9 @@ _MODEL_UNAVAILABLE_PATTERNS = (
     "does not exist",
     "model is currently overloaded",
     "capacity",
+    "model is not supported when using codex with a chatgpt account",
+    "not supported when using codex with a chatgpt account",
+    "unsupported model",
 )
 
 _TIMEOUT_PATTERNS = (

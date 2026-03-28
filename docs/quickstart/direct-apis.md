@@ -582,6 +582,10 @@ For local or offline use, LLM Council supports CLI-based providers:
 council run drafter --mode impl "Build a parser" --providers codex
 ```
 
+`codex` defaults to `gpt-5.4` so local ChatGPT-authenticated Codex CLI installs work
+without extra config. If your local Codex environment supports `*-codex` variants,
+you can still opt in via `providers[].default_model`.
+
 ### Gemini CLI
 
 ```bash

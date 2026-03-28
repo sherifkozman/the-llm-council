@@ -370,6 +370,18 @@ class TestOrchestratorValidation:
         assert orch._provider_request_timeout_seconds("critique") == 10.0
         assert orch._provider_request_timeout_seconds("synthesis") == 15.0
 
+    def test_bounded_runtime_profile_allows_longer_codex_phase_caps(self):
+        """Codex gets larger bounded caps because planner-style prompts exceed generic limits."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=60)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["codex"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="codex") == 30.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="codex") == 25.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="codex") == 40.0
+
 
 class TestOrchestratorDoctor:
     """Tests for Orchestrator doctor method."""

@@ -569,7 +569,9 @@ class Orchestrator:
                     Message(role="system", content=system_prompt),
                     Message(role="user", content=user_prompt),
                 ],
-                timeout_seconds=self._provider_request_timeout_seconds("critique"),
+                timeout_seconds=self._provider_request_timeout_seconds(
+                    "critique", provider_name=provider_name
+                ),
                 max_tokens=self._phase_max_tokens(
                     self._config.max_critique_tokens, phase="critique"
                 ),
@@ -634,7 +636,9 @@ class Orchestrator:
                         Message(role="system", content=system_prompt),
                         Message(role="user", content=user_prompt),
                     ],
-                    timeout_seconds=self._provider_request_timeout_seconds("synthesis"),
+                    timeout_seconds=self._provider_request_timeout_seconds(
+                        "synthesis", provider_name=provider_name
+                    ),
                     max_tokens=self._phase_max_tokens(
                         self._config.max_synthesis_tokens,
                         phase="synthesis",
@@ -691,7 +695,9 @@ class Orchestrator:
                 Message(role="system", content=system_prompt),
                 Message(role="user", content=user_prompt),
             ],
-            timeout_seconds=self._provider_request_timeout_seconds("draft"),
+            timeout_seconds=self._provider_request_timeout_seconds(
+                "draft", provider_name=provider_name
+            ),
             max_tokens=self._phase_max_tokens(self._config.max_draft_tokens, phase="draft"),
             temperature=self._phase_temperature(self._config.draft_temperature),
             reasoning=self._reasoning,
@@ -831,9 +837,18 @@ class Orchestrator:
                 ),
             },
             "provider_request_timeouts": {
-                "draft": self._provider_request_timeout_seconds("draft"),
-                "critique": self._provider_request_timeout_seconds("critique"),
-                "synthesis": self._provider_request_timeout_seconds("synthesis"),
+                "draft": self._provider_request_timeout_seconds(
+                    "draft",
+                    provider_name=self._provider_names[0] if len(self._provider_names) == 1 else None,
+                ),
+                "critique": self._provider_request_timeout_seconds(
+                    "critique",
+                    provider_name=self._provider_names[0] if len(self._provider_names) == 1 else None,
+                ),
+                "synthesis": self._provider_request_timeout_seconds(
+                    "synthesis",
+                    provider_name=self._provider_names[0] if len(self._provider_names) == 1 else None,
+                ),
             },
             "model_overrides": dict(self._resolved_model_overrides),
             "reasoning": self._reasoning.model_dump(exclude_none=True) if self._reasoning else None,
@@ -1150,7 +1165,9 @@ class Orchestrator:
 
         return self._config.temperature if self._config.temperature is not None else default
 
-    def _provider_request_timeout_seconds(self, phase: str) -> float:
+    def _provider_request_timeout_seconds(
+        self, phase: str, *, provider_name: str | None = None
+    ) -> float:
         """Return a provider request timeout that settles just before the outer run timeout."""
 
         base_timeout = max(float(self._config.timeout) - 1.0, 1.0)
@@ -1160,6 +1177,12 @@ class Orchestrator:
                 "critique": 10.0,
                 "synthesis": 15.0,
             }
+            if provider_name == "codex":
+                bounded_caps = {
+                    "draft": 30.0,
+                    "critique": 25.0,
+                    "synthesis": 40.0,
+                }
             return max(min(base_timeout, bounded_caps.get(phase, base_timeout)), 1.0)
 
         return base_timeout
