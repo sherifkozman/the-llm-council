@@ -139,6 +139,7 @@ class BaseAgent(ABC):
     def add_tools_from_registry(self, role: str | None = None) -> None:
         """Load tools from registry for this agent's role."""
         registry = get_tool_registry()
+        registry.ensure_loaded()
         role_tools = registry.get_tools_for_role(role or self.ROLE_NAME)
         self._tools.extend(role_tools)
 

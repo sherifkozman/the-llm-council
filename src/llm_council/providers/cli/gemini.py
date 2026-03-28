@@ -20,6 +20,7 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
+from llm_council.providers.cli._subprocess import terminate_process_tree
 from llm_council.providers.base import (
     DoctorResult,
     ErrorType,
@@ -35,11 +36,17 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gemini-2.0-flash-exp"
 # SECURITY: Least-privilege defaults - require approval for actions
-# Override via default_flags param for agentic mode
-DEFAULT_APPROVAL_MODE = "confirm"
+# Older adapter configs used "confirm"/"auto"; normalize them to the
+# current CLI vocabulary to stay backward compatible.
+DEFAULT_APPROVAL_MODE = "default"
+_APPROVAL_MODE_ALIASES = {
+    "confirm": "default",
+    "auto": "yolo",
+}
+_VALID_APPROVAL_MODES = {"default", "auto_edit", "yolo", "plan"}
 
 # Unsafe modes that require explicit opt-in
-_UNSAFE_MODES = {"yolo", "auto"}
+_UNSAFE_MODES = {"yolo"}
 _UNSAFE_WARNING = (
     "WARNING: Gemini CLI is running with permissive approval mode that allows "
     "local file/env access without confirmation. This is unsafe with untrusted inputs."
@@ -60,7 +67,7 @@ _ENV_ALLOWLIST = {
 class GeminiCLIProvider(ProviderAdapter):
     """Gemini CLI provider adapter."""
 
-    name: ClassVar[str] = "gemini-cli"
+    name: ClassVar[str] = "gemini"
     capabilities: ClassVar[ProviderCapabilities] = ProviderCapabilities(
         streaming=False,
         tool_use=False,
@@ -78,8 +85,18 @@ class GeminiCLIProvider(ProviderAdapter):
     ) -> None:
         self._cli_path = cli_path or shutil.which("gemini")
         self._default_model = default_model or DEFAULT_MODEL
-        self._approval_mode = approval_mode or DEFAULT_APPROVAL_MODE
+        self._approval_mode = self._normalize_approval_mode(approval_mode)
         self._timeout = timeout
+
+    def _normalize_approval_mode(self, approval_mode: str | None) -> str:
+        """Map legacy aliases to current Gemini CLI approval modes."""
+
+        mode = (approval_mode or DEFAULT_APPROVAL_MODE).strip().lower()
+        mode = _APPROVAL_MODE_ALIASES.get(mode, mode)
+        if mode not in _VALID_APPROVAL_MODES:
+            valid = ", ".join(sorted(_VALID_APPROVAL_MODES))
+            raise ValueError(f"Unsupported Gemini approval mode '{approval_mode}'. Use one of: {valid}")
+        return mode
 
     def _check_unsafe_mode(self) -> None:
         """Emit warning if using unsafe permissive approval mode."""
@@ -89,6 +106,11 @@ class GeminiCLIProvider(ProviderAdapter):
     def _get_minimal_env(self) -> dict[str, str]:
         """Get minimal environment with only allowlisted variables."""
         return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
+
+    def _request_timeout(self, request: GenerateRequest) -> float:
+        """Return the effective timeout for this request."""
+
+        return float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
 
     def _build_command(self, request: GenerateRequest) -> list[str]:
         """Build CLI command as argument list (safe from injection)."""
@@ -127,15 +149,16 @@ class GeminiCLIProvider(ProviderAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._get_minimal_env(),
+            start_new_session=True,
         )
 
+        timeout = self._request_timeout(request)
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            await terminate_process_tree(proc)
             raise RuntimeError(
-                f"Gemini CLI timed out after {self._timeout}s. "
+                f"Gemini CLI timed out after {timeout}s. "
                 "Consider increasing timeout or simplifying the task."
             )
 
@@ -182,8 +205,8 @@ class GeminiCLIProvider(ProviderAdapter):
     async def doctor(self) -> DoctorResult:
         if not self._cli_path:
             return DoctorResult(ok=False, message="CLI not found")
-        if not os.environ.get("GEMINI_API_KEY"):
-            return DoctorResult(ok=False, message="GEMINI_API_KEY not set")
+        if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+            return DoctorResult(ok=False, message="GEMINI_API_KEY or GOOGLE_API_KEY not set")
         return DoctorResult(ok=True, message="CLI available")
 
 
@@ -191,7 +214,7 @@ def _register() -> None:
     from llm_council.providers.registry import get_registry
 
     with contextlib.suppress(ValueError):
-        get_registry().register_provider("gemini-cli", GeminiCLIProvider)
+        get_registry().register_provider("gemini", GeminiCLIProvider)
 
 
 _register()

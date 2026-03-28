@@ -21,7 +21,7 @@ tools:
         type: integer
         default: 5
         description: Maximum results to return
-    roles: [drafter, researcher]
+    roles: [drafter, researcher, planner, critic]
 
   context7_lookup:
     name: context7_lookup
@@ -35,7 +35,7 @@ tools:
         type: string
         required: false
         description: Specific topic to focus on
-    roles: [drafter, researcher]
+    roles: [drafter, researcher, planner]
 
   # Code analysis tools
   code_analysis:
@@ -63,8 +63,8 @@ tools:
       path:
         type: string
         required: false
-        description: Path to search in (default: current directory)
-    roles: [drafter, critic, researcher]
+        description: "Path to search in (default: current directory)"
+    roles: [drafter, critic, researcher, planner]
 
   # File operations
   read_file:
@@ -95,3 +95,67 @@ tools:
         required: true
         description: List of checklist items
     roles: [planner, synthesizer]
+
+capability_packs:
+  repo-analysis:
+    name: repo-analysis
+    description: Repository-aware context gathering for implementation, review, and planning
+    tools: [read_file, grep_search, code_analysis]
+    roles: [drafter, critic, planner]
+    evidence_requirements:
+      - Verify claims against local repository context where possible
+      - Name missing repository context explicitly when evidence is incomplete
+
+  docs-research:
+    name: docs-research
+    description: Documentation and current-information grounding
+    tools: [web_search, context7_lookup]
+    roles: [drafter, researcher, planner, critic]
+    evidence_requirements:
+      - Prefer authoritative or official documentation
+      - State freshness or source confidence when external information may change
+
+  planning-assess:
+    name: planning-assess
+    description: Planning and decision-support toolkit for plans and assessments
+    tools: [create_checklist, read_file, grep_search]
+    roles: [planner]
+    evidence_requirements:
+      - Identify dependencies, blockers, and alternatives explicitly
+      - Distinguish verified constraints from assumptions
+
+  security-audit:
+    name: security-audit
+    description: Deprecated compatibility alias for security code-audit support
+    tools: [code_analysis, grep_search, read_file, web_search]
+    roles: [critic]
+    evidence_requirements:
+      - Ground findings in realistic attack paths and affected components
+      - Separate confirmed weaknesses from speculative concerns
+
+  security-code-audit:
+    name: security-code-audit
+    description: Code-centric security review support for vulnerable flows and dangerous patterns
+    tools: [code_analysis, grep_search, read_file]
+    roles: [critic]
+    evidence_requirements:
+      - Tie weaknesses to concrete files, flows, or security-sensitive operations
+      - Separate code-level verification from speculative attack narrative
+
+  red-team-recon:
+    name: red-team-recon
+    description: Attack-surface and threat-model reconnaissance support
+    tools: [grep_search, read_file, web_search]
+    roles: [critic]
+    evidence_requirements:
+      - Identify exposed surfaces, trust boundaries, and attacker prerequisites explicitly
+      - Distinguish observed exposure from inferred exploitation paths
+
+  diff-review:
+    name: diff-review
+    description: Code review support focused on changed code and local impact
+    tools: [read_file, grep_search, code_analysis]
+    roles: [critic]
+    evidence_requirements:
+      - Tie review findings to concrete locations or behavioral impact
+      - Avoid preference-only commentary unless it affects maintainability or risk

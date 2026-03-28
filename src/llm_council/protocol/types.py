@@ -23,6 +23,21 @@ class SummaryTier(str, Enum):
     AUDIT = "audit"  # Full detail for audit trail
 
 
+class ReasoningProfile(str, Enum):
+    """High-level reasoning intensity overrides for runtime execution."""
+
+    DEFAULT = "default"
+    OFF = "off"
+    LIGHT = "light"
+
+
+class RuntimeProfile(str, Enum):
+    """High-level execution budget overrides for council phases."""
+
+    DEFAULT = "default"
+    BOUNDED = "bounded"
+
+
 class CouncilConfig(BaseModel):
     """Configuration for a council run."""
 
@@ -87,6 +102,14 @@ class CouncilConfig(BaseModel):
         ge=1,
         description="Maximum output tokens",
     )
+    runtime_profile: RuntimeProfile = Field(
+        default=RuntimeProfile.DEFAULT,
+        description="High-level runtime budget override (default/bounded).",
+    )
+    reasoning_profile: ReasoningProfile = Field(
+        default=ReasoningProfile.DEFAULT,
+        description="High-level override for reasoning intensity (default/off/light).",
+    )
     system_context: str | None = Field(
         default=None,
         description="Additional system context/instructions to prepend",
@@ -94,6 +117,40 @@ class CouncilConfig(BaseModel):
     output_schema: dict[str, Any] | None = Field(
         default=None,
         description="Custom JSON schema for output validation",
+    )
+    model_pack: str | None = Field(
+        default=None,
+        description="Optional runtime model-pack override (e.g. deep_reasoner, grounded)",
+    )
+    model_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Explicit per-provider model overrides. "
+            "These are user-selected models and should take precedence over subagent defaults."
+        ),
+    )
+    execution_profile: str | None = Field(
+        default=None,
+        description="Optional execution-profile override (prompt_only, light_tools, grounded, deep_analysis)",
+    )
+    budget_class: str | None = Field(
+        default=None,
+        description="Optional budget-class override (cheap, normal, premium)",
+    )
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Optional capability-pack overrides to merge into the run",
+    )
+    disable_local_evidence: bool = Field(
+        default=False,
+        description="Disable local evidence collection and rely only on provided reference material.",
+    )
+    follow_router: bool = Field(
+        default=False,
+        description=(
+            "If true, a router run is followed by a second run using the router's "
+            "recommended subagent and mode."
+        ),
     )
     provider_configs: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -118,6 +175,10 @@ class CouncilRequest(BaseModel):
     mode: str | None = Field(
         default=None,
         description="Agent mode for consolidated agents",
+    )
+    follow_router: bool = Field(
+        default=False,
+        description="Follow router output by running the recommended subagent and mode",
     )
     config: CouncilConfig | None = Field(
         default=None,
@@ -194,6 +255,18 @@ class CouncilResponse(BaseModel):
     run_id: str | None = Field(
         default=None,
         description="Artifact store run ID",
+    )
+    routed: bool = Field(
+        default=False,
+        description="Whether this response came from a router-followed execution",
+    )
+    routing_decision: dict[str, Any] | None = Field(
+        default=None,
+        description="Router output used to select the routed subagent and mode",
+    )
+    routing_execution_plan: dict[str, Any] | None = Field(
+        default=None,
+        description="Execution plan produced by the router run before follow-up execution",
     )
 
 

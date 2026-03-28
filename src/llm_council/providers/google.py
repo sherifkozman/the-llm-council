@@ -24,6 +24,10 @@ from llm_council.providers.base import (
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
 ENV_MODEL = "GOOGLE_MODEL"
+ENV_TIMEOUT_MS = "GOOGLE_TIMEOUT_MS"
+ENV_RETRY_ATTEMPTS = "GOOGLE_RETRY_ATTEMPTS"
+DEFAULT_TIMEOUT_MS = 15000
+DEFAULT_RETRY_ATTEMPTS = 1
 
 # Model prefixes that support structured output with response_schema
 # See: https://ai.google.dev/gemini-api/docs/structured-output
@@ -160,6 +164,8 @@ class GoogleProvider(ProviderAdapter):
         self,
         api_key: str | None = None,
         default_model: str | None = None,
+        timeout_ms: int | None = None,
+        retry_attempts: int | None = None,
     ) -> None:
         """Initialize the Google AI provider.
 
@@ -171,6 +177,20 @@ class GoogleProvider(ProviderAdapter):
             api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         )
         self._default_model = default_model or os.environ.get(ENV_MODEL) or DEFAULT_MODEL
+        env_timeout = os.environ.get(ENV_TIMEOUT_MS)
+        self._timeout_ms = (
+            timeout_ms
+            if timeout_ms is not None
+            else int(env_timeout) if env_timeout is not None else DEFAULT_TIMEOUT_MS
+        )
+        env_retry_attempts = os.environ.get(ENV_RETRY_ATTEMPTS)
+        self._retry_attempts = (
+            retry_attempts
+            if retry_attempts is not None
+            else int(env_retry_attempts)
+            if env_retry_attempts is not None
+            else DEFAULT_RETRY_ATTEMPTS
+        )
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -190,7 +210,15 @@ class GoogleProvider(ProviderAdapter):
                     "Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable or pass api_key."
                 )
 
-            self._client = genai.Client(api_key=self._api_key)
+            self._client = genai.Client(
+                api_key=self._api_key,
+                http_options=genai.types.HttpOptions(
+                    timeout=self._timeout_ms,
+                    retry_options=genai.types.HttpRetryOptions(
+                        attempts=self._retry_attempts,
+                    ),
+                ),
+            )
         return self._client
 
     async def generate(

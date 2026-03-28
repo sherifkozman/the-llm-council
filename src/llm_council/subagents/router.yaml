@@ -34,6 +34,9 @@ prompts:
         complexity: normal
         subagent_to_run: drafter
         mode: impl
+        execution_profile: light_tools
+        budget_class: normal
+        required_capabilities: ["repo-analysis"]
         model_pack: code_specialist_normal
         reasoning: "Standard UI implementation with auth integration"
 
@@ -44,6 +47,9 @@ prompts:
         complexity: normal
         subagent_to_run: critic
         mode: review
+        execution_profile: light_tools
+        budget_class: normal
+        required_capabilities: ["diff-review", "repo-analysis"]
         model_pack: harsh_critic
         reasoning: "Security review requires careful critical analysis"
 
@@ -53,6 +59,10 @@ prompts:
         risk_level: critical
         complexity: complex
         subagent_to_run: planner
+        mode: plan
+        execution_profile: light_tools
+        budget_class: normal
+        required_capabilities: ["planning-assess", "repo-analysis"]
         model_pack: deep_reasoner
         reasoning: "Major architectural change requires thorough planning"
 
@@ -62,6 +72,9 @@ prompts:
         risk_level: low
         complexity: normal
         subagent_to_run: researcher
+        execution_profile: grounded
+        budget_class: normal
+        required_capabilities: ["docs-research"]
         model_pack: grounded
         suggested_tools: ["context7", "web_search"]
         reasoning: "External research task, needs grounding"
@@ -73,6 +86,9 @@ prompts:
         complexity: complex
         subagent_to_run: drafter
         mode: arch
+        execution_profile: light_tools
+        budget_class: normal
+        required_capabilities: ["repo-analysis"]
         model_pack: deep_reasoner
         reasoning: "Foundational architecture decision with long-term impact"
 
@@ -83,6 +99,9 @@ prompts:
         complexity: normal
         subagent_to_run: drafter
         mode: test
+        execution_profile: light_tools
+        budget_class: normal
+        required_capabilities: ["repo-analysis"]
         model_pack: code_specialist_normal
         reasoning: "Test generation for critical financial code"
 
@@ -92,6 +111,8 @@ prompts:
         risk_level: low
         complexity: simple
         subagent_to_run: synthesizer
+        execution_profile: prompt_only
+        budget_class: cheap
         model_pack: fast_generator
         reasoning: "Straightforward documentation task"
 
@@ -102,6 +123,9 @@ prompts:
         complexity: complex
         subagent_to_run: critic
         mode: security
+        execution_profile: deep_analysis
+        budget_class: premium
+        required_capabilities: ["red-team-recon", "security-code-audit", "repo-analysis"]
         model_pack: harsh_critic
         reasoning: "Security adversarial analysis requires thorough critique"
 

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-27
+
+### Added
+- Mode-aware runtime wiring across `Council` and `Orchestrator`
+  - runtime `mode`, `runtime_profile`, `reasoning_profile`, `temperature`, `max_tokens`, and output-schema overrides now flow into execution
+  - execution plans now expose effective mode, schema, model pack, providers, phase budgets, and degradation details
+- Routed handoff support
+  - `council run router ... --route` can now continue into the router-selected subagent and mode
+  - routed runs can carry model-pack, execution-profile, budget-class, and capability recommendations into the follow-up run
+- Capability-aware execution baseline
+  - capability planning and execution-profile selection added to the runtime
+  - initial packs include `repo-analysis`, `docs-research`, `planning-assess`, `diff-review`, `security-code-audit`, and `red-team-recon`
+- Deterministic evaluation tooling
+  - new `council eval`, `council eval-compare`, and `council eval-import-pr` commands
+  - public runtime baseline dataset under `evals/runtime-baseline.yaml`
+- Deep doctor support
+  - `council doctor --deep` now distinguishes installed/configured providers from providers that can answer a trivial non-interactive prompt
+
+### Changed
+- Canonical CLI provider names are now `codex`, `gemini`, and `claude`, with legacy aliases preserved for compatibility
+- Public docs now describe the current runtime surface, local-only eval import boundary, and routed execution behavior
+- Bounded runtime request caps were recalibrated to better match real review workloads
+
+### Fixed
+- Explicit user-selected providers and configured models now take precedence over subagent defaults
+- Auto-fallback now stays limited to the default unhealthy path instead of overriding explicit user provider choices
+- CLI provider timeout settlement now kills the full subprocess tree instead of hanging on timed-out children
+- Gemini CLI approval-mode handling updated to current CLI behavior
+- OpenAI timeout and provider error reporting now preserve the underlying cause chain for easier diagnosis
+- Bounded review prompts are slimmer and no longer force schema-heavy draft/critique instructions
+
 ## [0.6.4] - 2026-03-26
 
 ### Added
@@ -454,7 +485,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.4...v0.7.0
+[0.6.4]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.3...v0.6.4
+[0.6.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.5.2...v0.5.3

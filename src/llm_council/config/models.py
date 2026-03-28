@@ -210,6 +210,14 @@ def get_model_for_pack(pack: ModelPack) -> str:
     return ModelConfig.get_instance().get_model_for_pack(pack)
 
 
+def normalize_model_pack(model_pack: str | ModelPack) -> ModelPack:
+    """Normalize a model pack string or enum into a ModelPack value."""
+
+    if isinstance(model_pack, ModelPack):
+        return model_pack
+    return resolve_model_pack(model_pack)
+
+
 def is_multi_model_enabled() -> bool:
     """Check if multi-model council is enabled.
 
