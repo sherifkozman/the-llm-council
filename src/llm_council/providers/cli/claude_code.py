@@ -13,14 +13,13 @@ No shell is spawned; arguments are passed as a list directly to the binary.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import shutil
 from collections.abc import AsyncIterator
 from typing import ClassVar
-
-import contextlib
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -32,6 +31,7 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
+from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
     argument lists (no shell). Environment is restricted to an allowlist.
     """
 
-    name: ClassVar[str] = "claude-code"
+    name: ClassVar[str] = "claude"
     capabilities: ClassVar[ProviderCapabilities] = ProviderCapabilities(
         streaming=False,
         tool_use=False,
@@ -115,6 +115,13 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         """Get minimal environment with only allowlisted variables."""
         return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
 
+    def _request_timeout(self, request: GenerateRequest) -> float:
+        """Return the effective timeout for this request."""
+
+        return (
+            float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
+        )
+
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
@@ -131,15 +138,16 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._get_minimal_env(),
+            start_new_session=True,
         )
 
+        timeout = self._request_timeout(request)
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            await terminate_process_tree(proc)
             raise RuntimeError(
-                f"Claude Code CLI timed out after {self._timeout}s. "
+                f"Claude Code CLI timed out after {timeout}s. "
                 "Consider increasing timeout or simplifying the task."
             )
 
@@ -237,7 +245,7 @@ def _register() -> None:
     from llm_council.providers.registry import get_registry
 
     with contextlib.suppress(ValueError):
-        get_registry().register_provider("claude-code", ClaudeCodeCLIProvider)
+        get_registry().register_provider("claude", ClaudeCodeCLIProvider)
 
 
 _register()

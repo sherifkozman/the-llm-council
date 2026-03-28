@@ -31,6 +31,7 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
+from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ _ENV_ALLOWLIST = {
 class CodexCLIProvider(ProviderAdapter):
     """Codex CLI provider adapter."""
 
-    name: ClassVar[str] = "codex-cli"
+    name: ClassVar[str] = "codex"
     capabilities: ClassVar[ProviderCapabilities] = ProviderCapabilities(
         streaming=False,
         tool_use=False,
@@ -115,6 +116,13 @@ class CodexCLIProvider(ProviderAdapter):
         """Get minimal environment with only allowlisted variables."""
         return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
 
+    def _request_timeout(self, request: GenerateRequest) -> float:
+        """Return the effective timeout for this request."""
+
+        return (
+            float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
+        )
+
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
@@ -132,15 +140,16 @@ class CodexCLIProvider(ProviderAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._get_minimal_env(),
+            start_new_session=True,
         )
 
+        timeout = self._request_timeout(request)
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            await terminate_process_tree(proc)
             raise RuntimeError(
-                f"Codex CLI timed out after {self._timeout}s. "
+                f"Codex CLI timed out after {timeout}s. "
                 "Consider increasing timeout or simplifying the task."
             )
 
@@ -185,14 +194,41 @@ class CodexCLIProvider(ProviderAdapter):
     async def doctor(self) -> DoctorResult:
         if not self._cli_path:
             return DoctorResult(ok=False, message="CLI not found")
-        return DoctorResult(ok=True, message="CLI available")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self._cli_path,
+                "login",
+                "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._get_minimal_env(),
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            return DoctorResult(ok=False, message="CLI login status check timed out")
+        except Exception as exc:  # pragma: no cover - defensive path
+            return DoctorResult(ok=False, message=f"CLI login status check failed: {exc}")
+
+        output = stdout.decode("utf-8", errors="replace").strip()
+        error_output = stderr.decode("utf-8", errors="replace").strip()
+        status_text = output or error_output or f"CLI returned exit code {proc.returncode}"
+        lowered = status_text.lower()
+
+        if proc.returncode != 0:
+            return DoctorResult(ok=False, message=status_text)
+        if "not logged in" in lowered or "logged out" in lowered:
+            return DoctorResult(ok=False, message=status_text)
+        if "logged in" in lowered:
+            return DoctorResult(ok=True, message=status_text)
+        return DoctorResult(ok=True, message=f"CLI available ({status_text})")
 
 
 def _register() -> None:
     from llm_council.providers.registry import get_registry
 
     with contextlib.suppress(ValueError):
-        get_registry().register_provider("codex-cli", CodexCLIProvider)
+        get_registry().register_provider("codex", CodexCLIProvider)
 
 
 _register()

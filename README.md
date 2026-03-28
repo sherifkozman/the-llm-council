@@ -59,6 +59,12 @@ $ council run architect "Design a mass hallucination prevention system"
 
 A Multi-LLM Council Framework that orchestrates multiple LLM backends to enable **adversarial debate**, **cross-validation**, and **structured decision-making**.
 
+This release also includes a mode-aware execution path with runtime profiles,
+routed handoff, capability planning, and deterministic eval tooling. Those
+capabilities materially extend the package runtime, but they should not yet be
+treated as a claim of stable benchmarked superiority for review or security
+analysis.
+
 ## Why Use a Council?
 
 Single-model outputs have blind spots. By running multiple models in parallel and having them critique each other, the council:
@@ -72,13 +78,15 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Model Council** | Run Claude, GPT-4, and Gemini in parallel via single OpenRouter key |
+| **Multi-Model Council** | Run Claude, GPT-5.4, and Gemini in parallel via OpenRouter or direct APIs |
+| **Mode-Aware Runtime** | `drafter`, `critic`, and `planner` honor runtime modes and execution profiles |
 | **Adversarial Critique** | Built-in critique phase identifies weaknesses and blind spots |
 | **Schema Validation** | JSON schema validation with automatic retry for structured outputs |
 | **Provider Agnostic** | Swap between OpenRouter, direct APIs, or CLI-based providers |
-| **Health Checks** | Preflight provider health checks with latency tracking |
+| **Deep Doctor** | `council doctor --deep` checks real non-interactive generation readiness |
 | **Graceful Degradation** | Automatic retry, fallback, and skip strategies for failures |
 | **Artifact Store** | Persistent storage of drafts with tiered summarization |
+| **Eval Tooling** | `eval`, `eval-compare`, and local-only `eval-import-pr` support reproducible checks |
 | **Secret-Safe Logging** | Redaction pipeline prevents credential leakage |
 
 ## Requirements
@@ -163,7 +171,7 @@ Copy the `skills/council/` directory to your agent's skills folder. The skill fo
 # Set your API key
 export OPENROUTER_API_KEY="your-key"
 
-# Run a council task (v0.5.0 syntax with modes)
+# Run a council task (v0.7.x syntax with modes)
 council run drafter --mode impl "Build a login page with OAuth"
 
 # Multi-model council (Claude + GPT-5 + Gemini debating)
@@ -176,6 +184,14 @@ council run drafter "Build a login page"
 
 # Code review with security analysis
 council run critic --mode review "Review auth changes" --verbose
+
+# Ask the router to choose the next subagent/mode, then follow through
+council run router "Assess whether we should add a hosted vector store" --route
+
+# Bound latency/cost for review-style runs
+council run critic --mode review "Review auth changes" \
+  --runtime-profile bounded \
+  --reasoning-profile off
 
 # Disable artifact storage for faster runs
 council run drafter "Quick fix" --no-artifacts
@@ -207,7 +223,31 @@ print(result.output)
 
 ```bash
 council doctor
+
+# Verify actual non-interactive generation readiness
+# May incur API/CLI usage.
+council doctor --deep --provider claude --provider gemini --provider codex
 ```
+
+### Run Deterministic Evals
+
+```bash
+# Public deterministic runtime checks
+council eval evals/runtime-baseline.yaml --providers openrouter
+
+# Compare named variants on the same dataset
+council eval-compare evals/runtime-baseline.yaml variants.yaml --providers openai
+```
+
+For private benchmark creation, import external PR review material into
+`.council-private/` only:
+
+```bash
+council eval-import-pr owner/repo 123
+```
+
+That path is gitignored and intended for local-only evaluation inputs. Do not
+commit imported diffs, copied code, or review fixtures into tracked repo paths.
 
 ## Architecture
 
@@ -266,7 +306,7 @@ council doctor
    └── Store drafts and outputs for context management
 ```
 
-## Subagents (v0.5.0)
+## Subagents (v0.7.x)
 
 ### Core Agents
 

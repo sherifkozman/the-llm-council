@@ -18,6 +18,11 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CONFIG_CANDIDATES = (
+    Path(__file__).resolve().parents[3] / "config" / "tool_registry.yaml",
+    Path.cwd() / "config" / "tool_registry.yaml",
+)
+
 
 @dataclass
 class ToolParameter:
@@ -93,6 +98,17 @@ class Tool:
         }
 
 
+@dataclass
+class CapabilityPack:
+    """Named bundle of tools and evidence expectations."""
+
+    name: str
+    description: str
+    tools: list[str] = field(default_factory=list)
+    roles: list[str] = field(default_factory=list)
+    evidence_requirements: list[str] = field(default_factory=list)
+
+
 class ToolRegistry:
     """
     Registry for declarative tool definitions.
@@ -120,6 +136,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        self._capability_packs: dict[str, CapabilityPack] = {}
         self._loaded = False
 
     @classmethod
@@ -138,12 +155,20 @@ class ToolRegistry:
         try:
             data = yaml.safe_load(config_path.read_text()) or {}
             tools_data = data.get("tools", {})
+            packs_data = data.get("capability_packs", {})
 
             for tool_name, tool_config in tools_data.items():
                 self.register_tool(self._parse_tool(tool_name, tool_config))
+            for pack_name, pack_config in packs_data.items():
+                self.register_capability_pack(self._parse_capability_pack(pack_name, pack_config))
 
             self._loaded = True
-            logger.info(f"Loaded {len(self._tools)} tools from {config_path}")
+            logger.info(
+                "Loaded %d tools and %d capability packs from %s",
+                len(self._tools),
+                len(self._capability_packs),
+                config_path,
+            )
 
         except (yaml.YAMLError, OSError) as e:
             logger.error(f"Failed to load tool registry: {e}")
@@ -166,9 +191,7 @@ class ToolRegistry:
                 )
             else:
                 # Simple type shorthand: "query: string"
-                parameters.append(
-                    ToolParameter(name=param_name, type=str(param_config))
-                )
+                parameters.append(ToolParameter(name=param_name, type=str(param_config)))
 
         return Tool(
             name=config.get("name", name),
@@ -178,14 +201,36 @@ class ToolRegistry:
             handler=config.get("handler"),
         )
 
+    def _parse_capability_pack(self, name: str, config: dict[str, Any]) -> CapabilityPack:
+        """Parse capability pack configuration into CapabilityPack object."""
+
+        return CapabilityPack(
+            name=config.get("name", name),
+            description=config.get("description", ""),
+            tools=list(config.get("tools", [])),
+            roles=list(config.get("roles", [])),
+            evidence_requirements=list(config.get("evidence_requirements", [])),
+        )
+
     def register_tool(self, tool: Tool) -> None:
         """Register a tool in the registry."""
         self._tools[tool.name] = tool
         logger.debug(f"Registered tool: {tool.name}")
 
+    def register_capability_pack(self, pack: CapabilityPack) -> None:
+        """Register a capability pack in the registry."""
+
+        self._capability_packs[pack.name] = pack
+        logger.debug("Registered capability pack: %s", pack.name)
+
     def get_tool(self, name: str) -> Tool | None:
         """Get a tool by name."""
         return self._tools.get(name)
+
+    def get_capability_pack(self, name: str) -> CapabilityPack | None:
+        """Get a capability pack by name."""
+
+        return self._capability_packs.get(name)
 
     def get_tools_for_role(self, role: str) -> list[Tool]:
         """Get all tools available to a specific role."""
@@ -194,6 +239,62 @@ class ToolRegistry:
     def get_all_tools(self) -> list[Tool]:
         """Get all registered tools."""
         return list(self._tools.values())
+
+    def list_capability_packs(self) -> list[str]:
+        """Return the registered capability pack names."""
+
+        return sorted(self._capability_packs.keys())
+
+    def resolve_capability_tools(
+        self, pack_names: list[str], role: str | None = None
+    ) -> list[Tool]:
+        """Resolve tools referenced by capability packs."""
+
+        resolved: list[Tool] = []
+        seen: set[str] = set()
+
+        for pack_name in pack_names:
+            pack = self.get_capability_pack(pack_name)
+            if pack is None:
+                logger.debug("Capability pack not found: %s", pack_name)
+                continue
+            if role and pack.roles and role not in pack.roles:
+                continue
+
+            for tool_name in pack.tools:
+                tool = self.get_tool(tool_name)
+                if tool is None:
+                    logger.debug(
+                        "Tool %s referenced by capability pack %s is not registered",
+                        tool_name,
+                        pack_name,
+                    )
+                    continue
+                if role and tool.roles and role not in tool.roles:
+                    continue
+                if tool.name in seen:
+                    continue
+                resolved.append(tool)
+                seen.add(tool.name)
+
+        return resolved
+
+    def ensure_loaded(self, config_path: Path | None = None) -> None:
+        """Load registry data on first use if it has not been loaded yet."""
+
+        if self._loaded:
+            return
+
+        if config_path is not None:
+            self.load_from_yaml(config_path)
+            return
+
+        for candidate in DEFAULT_CONFIG_CANDIDATES:
+            if candidate.exists():
+                self.load_from_yaml(candidate)
+                return
+
+        logger.debug("No default tool registry config found; registry remains empty.")
 
     def to_openai_tools(self, role: str | None = None) -> list[dict[str, Any]]:
         """Convert tools to OpenAI format, optionally filtered by role."""

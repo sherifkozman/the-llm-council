@@ -3,6 +3,9 @@ CLI entry point for LLM Council.
 
 Commands:
     council run <subagent> <task>  - Run a council task
+    council eval <dataset>         - Run a dataset-driven evaluation
+    council eval-compare           - Compare named runtime variants on one dataset
+    council eval-import-pr         - Import PR review material into local-only storage
     council doctor                  - Check provider status
     council config                  - Manage configuration
 """
@@ -16,7 +19,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 import yaml
@@ -25,6 +28,19 @@ from rich.panel import Panel
 from rich.table import Table
 
 from llm_council import __version__
+from llm_council.eval_import import import_github_pr_review
+from llm_council.evaluation import (
+    EvalComparisonReport,
+    EvalReport,
+    load_eval_dataset,
+    load_eval_variants,
+    run_eval_comparison,
+    run_eval_dataset,
+)
+from llm_council.protocol.types import ReasoningProfile, RuntimeProfile
+
+if TYPE_CHECKING:
+    from llm_council.protocol.types import CouncilConfig
 
 # Global state for CLI context
 _cli_state: dict[str, Any] = {
@@ -176,7 +192,8 @@ def _load_config() -> dict[str, Any]:
 def _load_config_defaults() -> dict[str, Any]:
     """Load defaults section from config file."""
     config = _load_config()
-    return config.get("defaults", {})
+    defaults = config.get("defaults", {})
+    return defaults if isinstance(defaults, dict) else {}
 
 
 def _load_provider_configs() -> dict[str, dict[str, Any]]:
@@ -300,6 +317,20 @@ def run(
         int | None,
         typer.Option("--max-tokens", help="Max output tokens"),
     ] = None,
+    runtime_profile: Annotated[
+        RuntimeProfile,
+        typer.Option(
+            "--runtime-profile",
+            help="High-level runtime budget override: default or bounded",
+        ),
+    ] = RuntimeProfile.DEFAULT,
+    reasoning_profile: Annotated[
+        ReasoningProfile,
+        typer.Option(
+            "--reasoning-profile",
+            help="High-level reasoning override: default, off, or light",
+        ),
+    ] = ReasoningProfile.DEFAULT,
     input_file: Annotated[
         str | None,
         typer.Option("--input", "-i", help="Read task from file (use '-' for stdin)"),
@@ -328,6 +359,13 @@ def run(
         Path | None,
         typer.Option("--schema", help="Custom output schema JSON file"),
     ] = None,
+    route: Annotated[
+        bool,
+        typer.Option(
+            "--route",
+            help="When running router, execute the routed subagent and mode after classification",
+        ),
+    ] = False,
 ) -> None:
     """Run a council task with the specified subagent."""
     console = _get_console()
@@ -393,6 +431,9 @@ def run(
 
     # Resolve agent aliases
     resolved_agent, resolved_mode, was_deprecated = _resolve_agent_alias(subagent, mode)
+    if route and resolved_agent != "router":
+        console.print("[red]Error:[/red] --route can only be used with the router subagent")
+        raise typer.Exit(1)
 
     # Show deprecation warning
     if was_deprecated and not output_json:
@@ -416,6 +457,17 @@ def run(
 
     # Handle dry-run
     if dry_run:
+        effective_schema: str = str(schema_file) if schema_file else "default"
+        if not schema_file:
+            try:
+                from llm_council.subagents import get_effective_schema, load_subagent
+
+                effective_schema = (
+                    get_effective_schema(load_subagent(resolved_agent), resolved_mode) or "default"
+                )
+            except Exception:
+                effective_schema = "default"
+
         _print(f"[bold]Dry run:[/bold] would execute {resolved_agent}")
         _print(f"  Mode: {resolved_mode or 'default'}")
         _print(f"  Providers: {', '.join(provider_list)}")
@@ -423,9 +475,12 @@ def run(
         _print(f"  Timeout: {effective_timeout}s")
         _print(f"  Temperature: {temperature if temperature is not None else 'default'}")
         _print(f"  Max tokens: {max_tokens if max_tokens is not None else 'default'}")
+        _print(f"  Runtime profile: {runtime_profile.value}")
+        _print(f"  Reasoning profile: {reasoning_profile.value}")
         ctx_display = context[:50] + "..." if context and len(context) > 50 else context or "none"
         _print(f"  Context: {ctx_display}")
-        _print(f"  Schema: {schema_file or 'default'}")
+        _print(f"  Schema: {effective_schema}")
+        _print(f"  Follow router: {'yes' if route else 'no'}")
         _print(f"  Task: {task_text[:100]}{'...' if len(task_text) > 100 else ''}")
         return
 
@@ -465,30 +520,28 @@ def run(
             mode=resolved_mode,
             temperature=temperature,
             max_tokens=max_tokens,
+            runtime_profile=runtime_profile,
+            reasoning_profile=reasoning_profile,
             system_context=context,
             output_schema=custom_schema,
+            follow_router=route,
             provider_configs=_load_provider_configs(),
         )
 
         council = Council(config=config)
-        result = asyncio.run(council.run(task=task_text, subagent=resolved_agent))
+        result = asyncio.run(
+            council.run(task=task_text, subagent=resolved_agent, follow_router=route)
+        )
 
-        # Format output
-        if output_json:
-            output_text = json.dumps(result.model_dump(), indent=2, default=str)
-        else:
-            output_text = None
+        output_payload = json.dumps(result.model_dump(), indent=2, default=str)
 
         # Write to file or stdout
         if output_file:
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            if output_json:
-                output_file.write_text(output_text)
-            else:
-                output_file.write_text(json.dumps(result.model_dump(), indent=2, default=str))
+            output_file.write_text(output_payload)
             _print(f"[green]Output written to {output_file}[/green]")
         elif output_json:
-            print(output_text)
+            print(output_payload)
         else:
             if result.success:
                 console.print(
@@ -513,6 +566,94 @@ def run(
                 console.print(f"  Attempts: {result.synthesis_attempts}")
                 if result.cost_estimate:
                     console.print(f"  Est. cost: ${result.cost_estimate.estimated_cost_usd:.4f}")
+                if result.execution_plan:
+                    console.print("\n[bold]Execution Plan:[/bold]")
+                    console.print(
+                        f"  Mode: {result.execution_plan.get('mode') or resolved_mode or 'default'}"
+                    )
+                    console.print(
+                        f"  Schema: {result.execution_plan.get('schema_name') or 'none'} "
+                        f"({result.execution_plan.get('schema_source') or 'unknown'})"
+                    )
+                    console.print(
+                        f"  Model pack: {result.execution_plan.get('model_pack') or 'default'} "
+                        f"({result.execution_plan.get('model_pack_source') or 'unknown'})"
+                    )
+                    console.print(
+                        "  Execution profile: "
+                        f"{result.execution_plan.get('execution_profile') or 'prompt_only'}"
+                    )
+                    console.print(
+                        f"  Runtime profile: {result.execution_plan.get('runtime_profile') or 'default'}"
+                    )
+                    console.print(
+                        f"  Budget class: {result.execution_plan.get('budget_class') or 'normal'}"
+                    )
+                    providers_display = result.execution_plan.get("providers") or provider_list
+                    console.print(f"  Providers: {', '.join(providers_display)}")
+                    required_capabilities = result.execution_plan.get("required_capabilities") or []
+                    if required_capabilities:
+                        console.print(
+                            "  Required capabilities: " + ", ".join(required_capabilities)
+                        )
+                    registered_tools = result.execution_plan.get("registered_tools") or []
+                    if registered_tools:
+                        console.print("  Registered tools: " + ", ".join(registered_tools))
+                    evidence_items = result.execution_plan.get("evidence_items")
+                    if evidence_items:
+                        console.print(f"  Evidence items: {evidence_items}")
+                    executed_capabilities = result.execution_plan.get("executed_capabilities") or []
+                    if executed_capabilities:
+                        console.print(
+                            "  Executed capabilities: " + ", ".join(executed_capabilities)
+                        )
+                    pending_capabilities = result.execution_plan.get("pending_capabilities") or []
+                    if pending_capabilities:
+                        console.print("  Pending capabilities: " + ", ".join(pending_capabilities))
+                    model_overrides = result.execution_plan.get("model_overrides") or {}
+                    if model_overrides:
+                        console.print(
+                            "  Model overrides: "
+                            + ", ".join(
+                                f"{provider}={model}"
+                                for provider, model in sorted(model_overrides.items())
+                            )
+                        )
+                    reasoning = result.execution_plan.get("reasoning")
+                    reasoning_profile_used = result.execution_plan.get("reasoning_profile")
+                    if reasoning_profile_used:
+                        console.print(f"  Reasoning profile: {reasoning_profile_used}")
+                    phase_token_budgets = result.execution_plan.get("phase_token_budgets") or {}
+                    if phase_token_budgets:
+                        console.print(
+                            "  Phase token budgets: "
+                            + ", ".join(
+                                f"{phase}={tokens}" for phase, tokens in phase_token_budgets.items()
+                            )
+                        )
+                    if reasoning:
+                        console.print(
+                            "  Reasoning: "
+                            + ", ".join(
+                                f"{key}={value}"
+                                for key, value in reasoning.items()
+                                if value is not None
+                            )
+                        )
+                if result.routed and result.routing_decision:
+                    routing_mode = result.routing_decision.get("mode")
+                    routing_mode_suffix = (
+                        f" --mode {routing_mode}" if isinstance(routing_mode, str) else ""
+                    )
+                    console.print("\n[bold]Routing:[/bold]")
+                    console.print(
+                        "  Routed to: "
+                        f"{result.routing_decision.get('subagent_to_run')}"
+                        f"{routing_mode_suffix}"
+                    )
+                    console.print(
+                        f"  Router reasoning: {result.routing_decision.get('reasoning') or 'n/a'}"
+                    )
 
     except Exception as e:
         if output_json:
@@ -533,10 +674,28 @@ def doctor(
         bool,
         typer.Option("--json", help="Output as JSON"),
     ] = False,
-    provider_filter: Annotated[
-        str | None,
-        typer.Option("--provider", help="Check specific provider only"),
+    provider_filters: Annotated[
+        list[str] | None,
+        typer.Option("--provider", help="Check one or more specific providers"),
     ] = None,
+    deep: Annotated[
+        bool,
+        typer.Option(
+            "--deep",
+            help=(
+                "Run a low-cost non-interactive generation probe after the normal provider health "
+                "check. This may incur API/CLI usage."
+            ),
+        ),
+    ] = False,
+    probe_timeout: Annotated[
+        float,
+        typer.Option(
+            "--probe-timeout",
+            min=1.0,
+            help="Timeout in seconds for the deep readiness probe",
+        ),
+    ] = 5.0,
 ) -> None:
     """Check provider availability and configuration."""
     console = _get_console()
@@ -554,15 +713,30 @@ def doctor(
     registry = get_registry()
     provider_names = registry.list_providers()
 
-    if provider_filter:
-        if provider_filter not in provider_names:
-            if output_json:
-                print(json.dumps({"error": f"Unknown provider: {provider_filter}"}))
-            else:
-                console.print(f"[red]Error:[/red] Unknown provider: {provider_filter}")
-                console.print(f"Available: {', '.join(provider_names)}")
-            raise typer.Exit(1)
-        provider_names = [provider_filter]
+    if provider_filters:
+        requested = [
+            item.strip() for raw in provider_filters for item in raw.split(",") if item.strip()
+        ]
+        selected: list[str] = []
+        for requested_name in requested:
+            normalized = registry.resolve_name(requested_name)
+            if normalized not in provider_names:
+                if output_json:
+                    print(
+                        json.dumps(
+                            {
+                                "error": f"Unknown provider: {requested_name}",
+                                "available": provider_names,
+                            }
+                        )
+                    )
+                else:
+                    console.print(f"[red]Error:[/red] Unknown provider: {requested_name}")
+                    console.print(f"Available: {', '.join(provider_names)}")
+                raise typer.Exit(1)
+            if normalized not in selected:
+                selected.append(normalized)
+        provider_names = selected
 
     if not provider_names:
         if output_json:
@@ -575,24 +749,74 @@ def doctor(
     # Load per-provider config so doctor shows configured models
     provider_cfgs = _load_provider_configs()
 
+    async def _run_deep_probe(provider: Any) -> dict[str, Any]:
+        from time import perf_counter
+
+        from llm_council.providers.base import GenerateRequest
+
+        start = perf_counter()
+        response = await provider.generate(
+            GenerateRequest(
+                prompt="Reply with OK and nothing else.",
+                timeout_seconds=probe_timeout,
+            )
+        )
+        latency_ms = round((perf_counter() - start) * 1000, 1)
+        text = (response.text if hasattr(response, "text") else str(response)).strip()
+        return {
+            "probe_ok": True,
+            "probe_message": text[:120] or "Probe completed",
+            "probe_latency_ms": latency_ms,
+        }
+
     async def _check_provider(name: str) -> dict[str, Any]:
         try:
             kwargs = provider_cfgs.get(name, {})
             provider = registry.get_provider(name, **kwargs)
             result = await provider.doctor()
-            return {
+            payload = {
                 "name": name,
                 "ok": result.ok,
                 "message": result.message or "",
                 "latency_ms": result.latency_ms,
             }
+            if deep:
+                if result.ok:
+                    try:
+                        payload.update(await _run_deep_probe(provider))
+                    except Exception as e:
+                        payload.update(
+                            {
+                                "probe_ok": False,
+                                "probe_message": str(e),
+                                "probe_latency_ms": None,
+                            }
+                        )
+                else:
+                    payload.update(
+                        {
+                            "probe_ok": False,
+                            "probe_message": "Skipped because base doctor failed",
+                            "probe_latency_ms": None,
+                        }
+                    )
+            return payload
         except Exception as e:
-            return {
+            payload = {
                 "name": name,
                 "ok": False,
                 "message": str(e),
                 "latency_ms": None,
             }
+            if deep:
+                payload.update(
+                    {
+                        "probe_ok": False,
+                        "probe_message": "Skipped because provider initialization failed",
+                        "probe_latency_ms": None,
+                    }
+                )
+            return payload
 
     async def _run_all_checks() -> list[dict[str, Any]]:
         return await asyncio.gather(*[_check_provider(n) for n in provider_names])
@@ -607,13 +831,464 @@ def doctor(
         table.add_column("Status")
         table.add_column("Message")
         table.add_column("Latency")
+        if deep:
+            table.add_column("Probe")
+            table.add_column("Probe Latency")
 
         for r in results:
             status = "[green]OK[/green]" if r["ok"] else "[red]FAIL[/red]"
             latency = f"{r['latency_ms']:.0f}ms" if r["latency_ms"] else "-"
-            table.add_row(r["name"], status, r["message"] or "-", latency)
+            row = [r["name"], status, r["message"] or "-", latency]
+            if deep:
+                probe_status = "[green]OK[/green]" if r.get("probe_ok") else "[red]FAIL[/red]"
+                probe_latency = (
+                    f"{r['probe_latency_ms']:.0f}ms" if r.get("probe_latency_ms") else "-"
+                )
+                row.extend([f"{probe_status} {r.get('probe_message') or '-'}", probe_latency])
+            table.add_row(*row)
 
         console.print(table)
+
+
+@app.command("eval")
+def evaluate(
+    dataset_path: Annotated[
+        Path,
+        typer.Argument(help="Path to an evaluation dataset (.yaml, .yml, or .json)"),
+    ],
+    providers: Annotated[
+        str | None,
+        typer.Option("--providers", "-p", help="Comma-separated provider list"),
+    ] = None,
+    models: Annotated[
+        str | None,
+        typer.Option("--models", "-m", help="Comma-separated model IDs for multi-model council"),
+    ] = None,
+    timeout: Annotated[
+        int | None,
+        typer.Option("--timeout", help="Override per-provider timeout in seconds"),
+    ] = None,
+    max_retries: Annotated[
+        int | None,
+        typer.Option("--max-retries", help="Override synthesis retry count"),
+    ] = None,
+    runtime_profile: Annotated[
+        RuntimeProfile,
+        typer.Option(
+            "--runtime-profile",
+            help="High-level runtime budget override for eval runs: default or bounded",
+        ),
+    ] = RuntimeProfile.DEFAULT,
+    reasoning_profile: Annotated[
+        ReasoningProfile,
+        typer.Option(
+            "--reasoning-profile",
+            help="High-level reasoning override for eval runs: default, off, or light",
+        ),
+    ] = ReasoningProfile.DEFAULT,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output as JSON"),
+    ] = False,
+    output_file: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write report to file"),
+    ] = None,
+    case_ids: Annotated[
+        list[str] | None,
+        typer.Option("--case", help="Restrict eval to one or more case IDs"),
+    ] = None,
+    max_cases: Annotated[
+        int | None,
+        typer.Option("--max-cases", help="Run only the first N selected cases"),
+    ] = None,
+    fail_fast: Annotated[
+        bool,
+        typer.Option("--fail-fast", help="Stop on the first failing case"),
+    ] = False,
+) -> None:
+    """Run a dataset-driven evaluation and emit per-mode scorecards."""
+    console = _get_console()
+
+    # Apply output_format default from config (CLI flag takes precedence)
+    if not output_json:
+        config_defaults = _load_config_defaults()
+        output_json = config_defaults.get("output_format") == "json"
+    else:
+        config_defaults = _load_config_defaults()
+
+    if providers:
+        provider_list = [p.strip() for p in providers.split(",") if p.strip()]
+    else:
+        provider_list = config_defaults.get("providers", ["openrouter"])
+
+    try:
+        dataset = load_eval_dataset(dataset_path)
+        base_config = _build_eval_base_config(
+            provider_list,
+            models,
+            config_defaults,
+            timeout_override=timeout,
+            max_retries_override=max_retries,
+            runtime_profile=runtime_profile,
+            reasoning_profile=reasoning_profile,
+        )
+        report = asyncio.run(
+            run_eval_dataset(
+                dataset,
+                base_config=base_config,
+                case_ids=case_ids,
+                max_cases=max_cases,
+                fail_fast=fail_fast,
+            )
+        )
+    except Exception as e:
+        if output_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    _emit_eval_report(report, output_json=output_json, output_file=output_file)
+    if report.failed_cases:
+        raise typer.Exit(1)
+
+
+@app.command("eval-compare")
+def evaluate_compare(
+    dataset_path: Annotated[
+        Path,
+        typer.Argument(help="Path to an evaluation dataset (.yaml, .yml, or .json)"),
+    ],
+    variants_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a named variant file (.yaml, .yml, or .json)"),
+    ],
+    providers: Annotated[
+        str | None,
+        typer.Option("--providers", "-p", help="Base comma-separated provider list"),
+    ] = None,
+    models: Annotated[
+        str | None,
+        typer.Option("--models", "-m", help="Base comma-separated model IDs"),
+    ] = None,
+    timeout: Annotated[
+        int | None,
+        typer.Option("--timeout", help="Override per-provider timeout in seconds"),
+    ] = None,
+    max_retries: Annotated[
+        int | None,
+        typer.Option("--max-retries", help="Override synthesis retry count"),
+    ] = None,
+    runtime_profile: Annotated[
+        RuntimeProfile,
+        typer.Option(
+            "--runtime-profile",
+            help="High-level runtime budget override for compare runs: default or bounded",
+        ),
+    ] = RuntimeProfile.DEFAULT,
+    reasoning_profile: Annotated[
+        ReasoningProfile,
+        typer.Option(
+            "--reasoning-profile",
+            help="High-level reasoning override for compare runs: default, off, or light",
+        ),
+    ] = ReasoningProfile.DEFAULT,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output as JSON"),
+    ] = False,
+    output_file: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write report to file"),
+    ] = None,
+    variant_names: Annotated[
+        list[str] | None,
+        typer.Option("--variant", help="Restrict compare to one or more named variants"),
+    ] = None,
+    case_ids: Annotated[
+        list[str] | None,
+        typer.Option("--case", help="Restrict eval to one or more case IDs"),
+    ] = None,
+    max_cases: Annotated[
+        int | None,
+        typer.Option("--max-cases", help="Run only the first N selected cases"),
+    ] = None,
+    fail_fast: Annotated[
+        bool,
+        typer.Option("--fail-fast", help="Stop on the first failing case"),
+    ] = False,
+) -> None:
+    """Compare multiple named runtime variants on the same evaluation dataset."""
+    console = _get_console()
+
+    if not output_json:
+        config_defaults = _load_config_defaults()
+        output_json = config_defaults.get("output_format") == "json"
+    else:
+        config_defaults = _load_config_defaults()
+
+    if providers:
+        provider_list = [p.strip() for p in providers.split(",") if p.strip()]
+    else:
+        provider_list = config_defaults.get("providers", ["openrouter"])
+
+    try:
+        dataset = load_eval_dataset(dataset_path)
+        variants = load_eval_variants(variants_path)
+        base_config = _build_eval_base_config(
+            provider_list,
+            models,
+            config_defaults,
+            timeout_override=timeout,
+            max_retries_override=max_retries,
+            runtime_profile=runtime_profile,
+            reasoning_profile=reasoning_profile,
+        )
+        report = asyncio.run(
+            run_eval_comparison(
+                dataset,
+                variants,
+                base_config=base_config,
+                variant_names=variant_names,
+                case_ids=case_ids,
+                max_cases=max_cases,
+                fail_fast=fail_fast,
+            )
+        )
+    except Exception as e:
+        if output_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    _emit_eval_comparison_report(report, output_json=output_json, output_file=output_file)
+    if any(item.report.failed_cases for item in report.variant_results):
+        raise typer.Exit(1)
+
+
+def _build_eval_base_config(
+    provider_list: list[str],
+    models: str | None,
+    config_defaults: dict[str, Any],
+    *,
+    timeout_override: int | None = None,
+    max_retries_override: int | None = None,
+    runtime_profile: RuntimeProfile = RuntimeProfile.DEFAULT,
+    reasoning_profile: ReasoningProfile = ReasoningProfile.DEFAULT,
+) -> CouncilConfig:
+    """Build the shared CouncilConfig used by eval commands."""
+
+    from llm_council.protocol.types import CouncilConfig
+
+    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
+    effective_timeout = (
+        timeout_override if timeout_override is not None else config_defaults.get("timeout", 120)
+    )
+    max_retries = (
+        max_retries_override
+        if max_retries_override is not None
+        else config_defaults.get("max_retries", 3)
+    )
+    enable_degradation = config_defaults.get("enable_degradation", True)
+
+    return CouncilConfig(
+        providers=provider_list,
+        models=model_list,
+        timeout=effective_timeout,
+        max_retries=max_retries,
+        enable_artifact_store=True,
+        enable_health_check=False,
+        enable_graceful_degradation=enable_degradation,
+        runtime_profile=runtime_profile,
+        reasoning_profile=reasoning_profile,
+        provider_configs=_load_provider_configs(),
+    )
+
+
+def _emit_eval_report(
+    report: EvalReport,
+    *,
+    output_json: bool,
+    output_file: Path | None,
+) -> None:
+    """Render an evaluation report to stdout and optionally to a file."""
+
+    console = _get_console()
+    payload = report.model_dump()
+
+    if output_file:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        if output_json:
+            output_file.write_text(json.dumps(payload, indent=2, default=str))
+        else:
+            output_file.write_text(json.dumps(payload, indent=2, default=str))
+
+    if output_json:
+        print(json.dumps(payload, indent=2, default=str))
+        return
+
+    summary = (
+        f"Cases: {report.passed_cases}/{report.total_cases} passed\n"
+        f"Criteria: {report.passed_criteria}/{report.total_criteria} passed\n"
+        f"Duration: {report.duration_ms}ms"
+    )
+    title = f"[green]Eval: {report.dataset_name}[/green]"
+    border_style = "green" if report.failed_cases == 0 else "yellow"
+    console.print(Panel(summary, title=title, border_style=border_style))
+
+    table = Table(title="Per-Mode Scorecards")
+    table.add_column("Mode", style="cyan")
+    table.add_column("Cases")
+    table.add_column("Case Pass Rate")
+    table.add_column("Criteria Pass Rate")
+    table.add_column("Avg Duration")
+
+    for item in report.mode_scorecards:
+        table.add_row(
+            item.mode_key,
+            f"{item.passed_cases}/{item.total_cases}",
+            f"{item.case_pass_rate:.0%}",
+            f"{item.criteria_pass_rate:.0%}",
+            f"{item.average_duration_ms}ms",
+        )
+    console.print(table)
+
+    failing_cases = [case for case in report.case_results if not case.passed]
+    if failing_cases:
+        console.print("\n[bold]Failing Cases:[/bold]")
+        for case in failing_cases:
+            failures = [criterion for criterion in case.criteria if not criterion.passed]
+            failure_summary = "; ".join(
+                f"{criterion.name}: {criterion.message or f'expected {criterion.expected!r}, got {criterion.actual!r}'}"
+                for criterion in failures
+            )
+            console.print(f"  - {case.case_id} ({case.mode_key}): {failure_summary}")
+
+
+def _emit_eval_comparison_report(
+    report: EvalComparisonReport,
+    *,
+    output_json: bool,
+    output_file: Path | None,
+) -> None:
+    """Render a comparison report across named runtime variants."""
+
+    console = _get_console()
+    payload = report.model_dump()
+
+    if output_file:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(json.dumps(payload, indent=2, default=str))
+
+    if output_json:
+        print(json.dumps(payload, indent=2, default=str))
+        return
+
+    summary = (
+        f"Dataset: {report.dataset_name}\n"
+        f"Variants: {len(report.variant_results)}\n"
+        f"Best: {report.best_variant or '-'}"
+    )
+    console.print(
+        Panel(
+            summary,
+            title="[green]Eval Comparison[/green]",
+            border_style="green" if report.variant_results else "yellow",
+        )
+    )
+
+    table = Table(title="Variant Ranking")
+    table.add_column("Rank")
+    table.add_column("Variant", style="cyan")
+    table.add_column("Cases")
+    table.add_column("Case Pass Rate")
+    table.add_column("Criteria Pass Rate")
+    table.add_column("Duration")
+    table.add_column("Providers")
+
+    results_by_name = {item.variant_name: item for item in report.variant_results}
+    for index, variant_name in enumerate(report.ranking, start=1):
+        item = results_by_name[variant_name]
+        variant_report = item.report
+        table.add_row(
+            str(index),
+            variant_name,
+            f"{variant_report.passed_cases}/{variant_report.total_cases}",
+            f"{variant_report.case_pass_rate:.0%}",
+            f"{variant_report.criteria_pass_rate:.0%}",
+            f"{variant_report.duration_ms}ms",
+            ", ".join(item.providers),
+        )
+    console.print(table)
+
+
+@app.command()
+def eval_import_pr(
+    repo: Annotated[
+        str,
+        typer.Argument(help="GitHub repo slug, e.g. sherifkozman/eve"),
+    ],
+    pr_number: Annotated[
+        int,
+        typer.Argument(help="Pull request number to import"),
+    ],
+    output_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-root",
+            help="Local-only output root. Defaults to .council-private/imports/github",
+        ),
+    ] = None,
+    max_diff_lines: Annotated[
+        int | None,
+        typer.Option("--max-diff-lines", help="Optionally truncate imported patch to N lines"),
+    ] = None,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output as JSON"),
+    ] = False,
+) -> None:
+    """Import a PR diff and Greptile review labels into local-only storage."""
+    console = _get_console()
+
+    try:
+        imported = import_github_pr_review(
+            repo,
+            pr_number,
+            output_root=output_root,
+            max_diff_lines=max_diff_lines,
+        )
+    except Exception as e:
+        if output_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    payload = imported.model_dump()
+    if output_json:
+        print(json.dumps(payload, indent=2, default=str))
+        return
+
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Repo: {imported.repo}",
+                    f"PR: {imported.pr_number}",
+                    f"Title: {imported.title}",
+                    f"Imported Greptile comments: {imported.imported_comment_count}",
+                    f"Import root: {imported.import_root}",
+                    f"Review input: {imported.review_input_path}",
+                    f"Labels: {imported.greptile_labels_path}",
+                ]
+            ),
+            title="[green]PR Import Complete[/green]",
+            border_style="green",
+        )
+    )
 
 
 @app.command()

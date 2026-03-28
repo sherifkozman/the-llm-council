@@ -1,0 +1,111 @@
+version: 1
+name: runtime-baseline
+description: >
+  Baseline dataset for mode-aware runtime behavior, capability activation,
+  and minimal structured outputs across high-value modes.
+cases:
+  - id: planner-plan-runtime
+    task: Plan the rollout for capability-augmented council in this repository
+    subagent: planner
+    mode: plan
+    expectations:
+      success: true
+      execution_plan_values:
+        mode: plan
+        execution_profile: light_tools
+        budget_class: normal
+      required_capabilities:
+        - planning-assess
+        - repo-analysis
+      executed_capabilities:
+        - planning-assess
+        - repo-analysis
+      minimum_evidence_items: 2
+      output_keys:
+        - objective
+        - phases
+        - success_criteria
+        - risks
+
+  - id: planner-assess-runtime
+    task: Assess whether llm-council should split security analysis into code audit and red-team recon
+    subagent: planner
+    mode: assess
+    expectations:
+      success: true
+      execution_plan_values:
+        mode: assess
+        execution_profile: grounded
+        budget_class: premium
+      required_capabilities:
+        - planning-assess
+        - docs-research
+      output_keys:
+        - decision
+        - criteria_evaluation
+        - recommendation
+        - reasoning
+
+  - id: critic-security-runtime
+    task: Find all the ways an attacker could exploit our auth system
+    subagent: critic
+    mode: security
+    expectations:
+      success: true
+      execution_plan_values:
+        mode: security
+        execution_profile: deep_analysis
+        budget_class: premium
+      required_capabilities:
+        - red-team-recon
+        - security-code-audit
+        - repo-analysis
+      executed_capabilities:
+        - red-team-recon
+        - security-code-audit
+        - repo-analysis
+      minimum_evidence_items: 3
+      output_keys:
+        - review_summary
+        - issues
+        - recommendations
+        - reasoning
+
+  - id: critic-review-runtime
+    task: Review the current branch changes for correctness risks
+    subagent: critic
+    mode: review
+    expectations:
+      success: true
+      execution_plan_values:
+        mode: review
+        execution_profile: light_tools
+        budget_class: normal
+      required_capabilities:
+        - diff-review
+        - repo-analysis
+      minimum_evidence_items: 1
+      output_keys:
+        - review_summary
+        - issues
+        - recommendations
+        - reasoning
+
+  - id: researcher-docs-runtime
+    task: Research React server component best practices
+    subagent: researcher
+    expectations:
+      success: true
+      execution_plan_values:
+        execution_profile: grounded
+        budget_class: normal
+      required_capabilities:
+        - docs-research
+      executed_capabilities:
+        - docs-research
+      minimum_evidence_items: 1
+      output_keys:
+        - research_question
+        - summary
+        - findings
+        - sources

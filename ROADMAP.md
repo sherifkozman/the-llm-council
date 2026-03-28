@@ -4,18 +4,19 @@
 
 This document outlines the development direction for The LLM Council. We welcome community input on priorities and feature design.
 
-## Current Release: v0.4.13
+## Current Release: v0.7.0
 
-The foundation is complete:
+The current release foundation includes:
 
-- **Multi-model council** - Parallel drafts from Claude, GPT-4, Gemini via OpenRouter or direct APIs
+- **Multi-model council** - Parallel drafts from Claude, GPT-5.4, and Gemini via OpenRouter or direct APIs
 - **Adversarial critique** - Models challenge each other's outputs
 - **Validated synthesis** - JSON schema validation with retry logic
-- **10 specialized subagents** - router, planner, assessor, researcher, architect, implementer, reviewer, test-designer, shipper, red-team
+- **Mode-aware subagents** - primary runtime surface is `router`, `planner`, `researcher`, `drafter`, `critic`, and `synthesizer`, with legacy aliases still supported
 - **Graceful degradation** - Continues if some providers fail
 - **Provider flexibility** - OpenRouter, direct APIs (Anthropic, OpenAI, Google), Vertex AI (Gemini + Claude)
-- **CLI tooling** - `council run`, `council doctor`, `council config`
+- **CLI tooling** - `council run`, `council doctor`, `council eval`, `council eval-compare`, `council eval-import-pr`, `council config`
 - **Extended reasoning** - Support for thinking/reasoning modes (Anthropic, Google, OpenAI)
+- **Runtime controls** - `runtime_profile`, `reasoning_profile`, routed handoff, and deeper provider readiness checks
 - **Artifact store** - Content-addressed storage with tiered summarization
 
 ---
@@ -58,7 +59,38 @@ Route simpler tasks to cheaper models, escalate to stronger models on validation
 - Validator-driven escalation
 - Target: 20-50% cost reduction without quality loss
 
-**Why**: Not every task needs GPT-4. Smart routing reduces costs significantly.
+**Why**: Not every task needs the most expensive reasoning models. Smart
+routing reduces costs significantly.
+
+---
+
+### Mode-Native Capability Packs + Staged Execution
+
+**Priority: High** · `in progress`
+
+Move council from prompt-only execution toward mode-aware, lazy-loaded
+capabilities selected at runtime.
+
+- Keep `prompt_only` as the default for low-risk tasks
+- Add execution profiles such as `light_tools`, `grounded`, and `deep_analysis`
+- Load capability packs only when the mode and risk justify them
+- Prioritize `planner --mode plan|assess` and `critic --mode security` in the first rollout
+- Measure value per mode instead of relying on one blended quality metric
+
+Implemented baseline in the current release line:
+
+- mode-aware runtime selection is wired through `Council` and `Orchestrator`
+- routed handoff can follow the router-selected subagent/mode
+- capability planning is exposed in execution plans
+- deterministic eval tooling is public
+- private PR-import benchmarking remains local-only under `.council-private/`
+
+Reference design:
+- `docs/architecture/capability-augmented-council.md`
+
+**Why**: Prompts alone are not enough for planning, security, research, and
+code-aware tasks. Mode-native evidence gathering should improve output quality
+without forcing every run into an expensive agent loop.
 
 ---
 
@@ -176,4 +208,4 @@ Have an idea not listed here? [Open an issue](https://github.com/sherifkozman/th
 
 ---
 
-*Last updated: 2025-12-23*
+*Last updated: 2026-03-27*

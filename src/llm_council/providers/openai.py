@@ -23,6 +23,10 @@ from llm_council.providers.base import (
 
 DEFAULT_MODEL = "gpt-5.4"
 ENV_MODEL = "OPENAI_MODEL"
+ENV_TIMEOUT_SECONDS = "OPENAI_TIMEOUT_SECONDS"
+ENV_MAX_RETRIES = "OPENAI_MAX_RETRIES"
+DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_MAX_RETRIES = 0
 
 # Models that support structured output with json_schema response_format
 # See: https://platform.openai.com/docs/guides/structured-outputs
@@ -207,6 +211,8 @@ class OpenAIProvider(ProviderAdapter):
         self,
         api_key: str | None = None,
         default_model: str | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> None:
         """Initialize the OpenAI provider.
 
@@ -216,6 +222,22 @@ class OpenAIProvider(ProviderAdapter):
         """
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._default_model = default_model or os.environ.get(ENV_MODEL) or DEFAULT_MODEL
+        env_timeout = os.environ.get(ENV_TIMEOUT_SECONDS)
+        self._timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else float(env_timeout)
+            if env_timeout is not None
+            else DEFAULT_TIMEOUT_SECONDS
+        )
+        env_max_retries = os.environ.get(ENV_MAX_RETRIES)
+        self._max_retries = (
+            max_retries
+            if max_retries is not None
+            else int(env_max_retries)
+            if env_max_retries is not None
+            else DEFAULT_MAX_RETRIES
+        )
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -235,7 +257,11 @@ class OpenAIProvider(ProviderAdapter):
                     "Set OPENAI_API_KEY environment variable or pass api_key."
                 )
 
-            self._client = AsyncOpenAI(api_key=self._api_key)
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                timeout=self._timeout_seconds,
+                max_retries=self._max_retries,
+            )
         return self._client
 
     async def generate(
@@ -258,6 +284,8 @@ class OpenAIProvider(ProviderAdapter):
             "model": request.model or self._default_model,
             "messages": messages,
         }
+        if request.timeout_seconds is not None:
+            kwargs["timeout"] = request.timeout_seconds
 
         if request.max_tokens is not None:
             model = request.model or self._default_model
@@ -267,7 +295,14 @@ class OpenAIProvider(ProviderAdapter):
             else:
                 kwargs["max_tokens"] = request.max_tokens
         if request.temperature is not None:
-            kwargs["temperature"] = request.temperature
+            model = request.model or self._default_model
+            if self._model_supports_temperature(model):
+                kwargs["temperature"] = request.temperature
+            else:
+                logger.warning(
+                    "Model %s does not support temperature parameter; ignored",
+                    model,
+                )
         if request.top_p is not None:
             kwargs["top_p"] = request.top_p
         if request.stop:
@@ -318,7 +353,7 @@ class OpenAIProvider(ProviderAdapter):
                     effort = "medium"
                 kwargs["reasoning_effort"] = effort
             else:
-                logger.warning(
+                logger.debug(
                     "Model %s does not support reasoning_effort parameter; ignored",
                     model,
                 )
@@ -430,6 +465,14 @@ class OpenAIProvider(ProviderAdapter):
 
         # Check if model starts with any o-series prefix
         return any(model.startswith(prefix) for prefix in REASONING_MODEL_PREFIXES)
+
+    def _model_supports_temperature(self, model: str) -> bool:
+        """Check if a model supports the temperature parameter.
+
+        OpenAI o-series reasoning models reject temperature entirely.
+        """
+
+        return not any(model.startswith(prefix) for prefix in REASONING_MODEL_PREFIXES)
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""

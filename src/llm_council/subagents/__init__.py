@@ -12,16 +12,19 @@ Supports per-subagent configuration for:
 - Model packs (maps to specific models)
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
 from pydantic import BaseModel, Field
 
 from llm_council.config.models import (
-    DEFAULT_MODEL_PACKS,
     ModelPack,
+    get_model_for_pack,
+    normalize_model_pack,
     resolve_model_pack,
 )
 
@@ -153,22 +156,101 @@ def list_subagents() -> list[str]:
     return [p.stem for p in SUBAGENTS_DIR.glob("*.yaml")]
 
 
-def get_provider_preferences(config: dict[str, Any]) -> ProviderPreferences | None:
-    """Extract provider preferences from a subagent config.
+def _merge_config_dicts(
+    base: dict[str, Any] | None, override: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Merge shallow config dictionaries with override precedence."""
+
+    merged: dict[str, Any] = {}
+    if isinstance(base, dict):
+        merged.update(base)
+    if isinstance(override, dict):
+        merged.update(override)
+    return merged
+
+
+def resolve_mode(config: dict[str, Any], mode: str | None = None) -> str | None:
+    """Resolve the active mode for a subagent configuration.
 
     Args:
         config: Loaded subagent YAML configuration.
+        mode: Optional requested mode.
 
     Returns:
-        ProviderPreferences if 'providers' key exists, None otherwise.
+        Resolved mode name or None if the subagent is mode-less.
+
+    Raises:
+        ValueError: If the requested mode is not defined for the subagent.
     """
-    providers_data = config.get("providers")
+
+    modes = config.get("modes", {})
+    if not modes:
+        return mode
+
+    if mode:
+        if mode not in modes:
+            valid = ", ".join(sorted(modes.keys()))
+            raise ValueError(f"Invalid mode '{mode}'. Valid modes: {valid}")
+        return mode
+
+    default_mode = config.get("default_mode")
+    if isinstance(default_mode, str):
+        if default_mode not in modes:
+            valid = ", ".join(sorted(modes.keys()))
+            raise ValueError(f"Invalid default_mode '{default_mode}'. Valid modes: {valid}")
+        return default_mode
+
+    return None
+
+
+def get_effective_schema(config: dict[str, Any], mode: str | None = None) -> str | None:
+    """Get the effective schema name for a subagent and mode."""
+
+    resolved_mode = resolve_mode(config, mode)
+    if resolved_mode and "modes" in config:
+        modes = config.get("modes")
+        if isinstance(modes, dict):
+            mode_config = modes.get(resolved_mode, {})
+            if isinstance(mode_config, dict):
+                schema = mode_config.get("schema")
+                if isinstance(schema, str):
+                    return schema
+    schema = config.get("schema")
+    return schema if isinstance(schema, str) else None
+
+
+def get_effective_system_prompt(config: dict[str, Any], mode: str | None = None) -> str:
+    """Get the effective system prompt, including mode-specific additions."""
+
+    prompts = config.get("prompts", {})
+    parts: list[str] = []
+    system_prompt = prompts.get("system")
+    if isinstance(system_prompt, str) and system_prompt.strip():
+        parts.append(system_prompt.strip())
+
+    resolved_mode = resolve_mode(config, mode)
+    if resolved_mode:
+        mode_prompt = prompts.get("mode_prompts", {}).get(resolved_mode)
+        if isinstance(mode_prompt, str) and mode_prompt.strip():
+            parts.append(mode_prompt.strip())
+
+    return "\n\n".join(parts)
+
+
+def get_provider_preferences(
+    config: dict[str, Any], mode: str | None = None
+) -> ProviderPreferences | None:
+    """Extract provider preferences from a subagent config, including mode overrides."""
+
+    resolved_mode = resolve_mode(config, mode)
+    mode_config = get_mode_config(config, resolved_mode) if resolved_mode else {}
+    providers_data = _merge_config_dicts(config.get("providers"), mode_config.get("providers"))
     if providers_data:
         return ProviderPreferences(**providers_data)
     return None
 
 
-def get_model_overrides(config: dict[str, Any]) -> ModelOverrides | None:
+def get_model_overrides(config: dict[str, Any], mode: str | None = None) -> ModelOverrides | None:
     """Extract model overrides from a subagent config.
 
     Args:
@@ -177,13 +259,15 @@ def get_model_overrides(config: dict[str, Any]) -> ModelOverrides | None:
     Returns:
         ModelOverrides if 'models' key exists, None otherwise.
     """
-    models_data = config.get("models")
+    resolved_mode = resolve_mode(config, mode)
+    mode_config = get_mode_config(config, resolved_mode) if resolved_mode else {}
+    models_data = _merge_config_dicts(config.get("models"), mode_config.get("models"))
     if models_data:
         return ModelOverrides(**models_data)
     return None
 
 
-def get_reasoning_budget(config: dict[str, Any]) -> ReasoningBudget | None:
+def get_reasoning_budget(config: dict[str, Any], mode: str | None = None) -> ReasoningBudget | None:
     """Extract reasoning budget from a subagent config.
 
     Args:
@@ -192,7 +276,9 @@ def get_reasoning_budget(config: dict[str, Any]) -> ReasoningBudget | None:
     Returns:
         ReasoningBudget if 'reasoning' key exists, None otherwise.
     """
-    reasoning_data = config.get("reasoning")
+    resolved_mode = resolve_mode(config, mode)
+    mode_config = get_mode_config(config, resolved_mode) if resolved_mode else {}
+    reasoning_data = _merge_config_dicts(config.get("reasoning"), mode_config.get("reasoning"))
     if reasoning_data:
         return ReasoningBudget(**reasoning_data)
     return None
@@ -233,18 +319,22 @@ def get_model_pack(config: dict[str, Any], mode: str | None = None) -> ModelPack
 def get_model_for_subagent(
     config: dict[str, Any],
     mode: str | None = None,
+    model_pack: str | ModelPack | None = None,
 ) -> str:
     """Get the default model ID for a subagent based on its model pack.
 
     Args:
         config: Loaded subagent YAML configuration.
         mode: Optional mode for consolidated agents.
+        model_pack: Optional runtime model-pack override.
 
     Returns:
         OpenRouter-format model ID (e.g., 'anthropic/claude-opus-4-6').
     """
-    pack = get_model_pack(config, mode)
-    return DEFAULT_MODEL_PACKS[pack]
+    pack = (
+        normalize_model_pack(model_pack) if model_pack is not None else get_model_pack(config, mode)
+    )
+    return get_model_for_pack(pack)
 
 
 def get_mode_config(config: dict[str, Any], mode: str) -> dict[str, Any]:
@@ -257,7 +347,11 @@ def get_mode_config(config: dict[str, Any], mode: str) -> dict[str, Any]:
     Returns:
         Mode configuration dict, or empty dict if mode not found.
     """
-    return config.get("modes", {}).get(mode, {})
+    modes = config.get("modes")
+    if not isinstance(modes, dict):
+        return {}
+    mode_config = modes.get(mode, {})
+    return cast(dict[str, Any], mode_config) if isinstance(mode_config, dict) else {}
 
 
 __all__ = [
@@ -271,6 +365,9 @@ __all__ = [
     "get_provider_preferences",
     "get_model_overrides",
     "get_reasoning_budget",
+    "resolve_mode",
+    "get_effective_schema",
+    "get_effective_system_prompt",
     # Model pack resolution (v0.5.1)
     "get_model_pack",
     "get_model_for_subagent",

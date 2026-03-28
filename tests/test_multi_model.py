@@ -32,6 +32,7 @@ class TestModelConfig:
             "COUNCIL_MODEL_FAST",
             "COUNCIL_MODEL_REASONING",
             "COUNCIL_MODEL_CODE",
+            "COUNCIL_MODEL_GROUNDED",
             "COUNCIL_MODEL_CRITIC",
         ]:
             os.environ.pop(key, None)
@@ -333,3 +334,15 @@ class TestSubagentModelPack:
 
         # Should be the FAST pack model (claude-haiku-4-5)
         assert "haiku" in model.lower()
+
+    def test_get_model_for_subagent_honors_pack_env_override(self) -> None:
+        """Subagent model resolution should use pack overrides from environment."""
+        from llm_council.subagents import get_model_for_subagent, load_subagent
+
+        os.environ["COUNCIL_MODEL_GROUNDED"] = "google/custom-grounded"
+        ModelConfig.reset()
+
+        researcher_config = load_subagent("researcher")
+        model = get_model_for_subagent(researcher_config)
+
+        assert model == "google/custom-grounded"

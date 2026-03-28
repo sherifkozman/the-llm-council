@@ -40,6 +40,32 @@
       "enum": ["deep_reasoner", "fast_generator", "grounded", "code_specialist_normal", "code_specialist_complex", "harsh_critic"],
       "description": "Recommended model pack for this task"
     },
+    "execution_profile": {
+      "type": "string",
+      "enum": ["prompt_only", "light_tools", "grounded", "deep_analysis"],
+      "description": "Recommended execution profile for this task"
+    },
+    "budget_class": {
+      "type": "string",
+      "enum": ["cheap", "normal", "premium"],
+      "description": "Recommended budget level for the routed task"
+    },
+    "required_capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "repo-analysis",
+          "docs-research",
+          "planning-assess",
+          "security-audit",
+          "security-code-audit",
+          "red-team-recon",
+          "diff-review"
+        ]
+      },
+      "description": "Capability packs required before making high-confidence claims"
+    },
     "reasoning": {
       "type": "string",
       "minLength": 20,

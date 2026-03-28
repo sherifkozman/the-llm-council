@@ -77,6 +77,14 @@ _MODEL_UNAVAILABLE_PATTERNS = (
     "capacity",
 )
 
+_TIMEOUT_PATTERNS = (
+    "timeout",
+    "timed out",
+    "read timed out",
+    "request timed out",
+    "deadline exceeded",
+)
+
 _NETWORK_PATTERNS = (
     "connection",
     "network",
@@ -122,6 +130,11 @@ def classify_error(error_text: str, return_code: int = -1) -> ErrorType:
     for pattern in _MODEL_UNAVAILABLE_PATTERNS:
         if pattern.lower() in error_lower:
             return ErrorType.MODEL_UNAVAILABLE
+
+    # Check timeouts before general network issues so read/deadline failures retry correctly
+    for pattern in _TIMEOUT_PATTERNS:
+        if pattern in error_lower:
+            return ErrorType.TIMEOUT
 
     # Check for network issues (retryable)
     for pattern in _NETWORK_PATTERNS:
@@ -250,6 +263,11 @@ class GenerateRequest(BaseModel):
     prompt: str | None = Field(default=None, description="Prompt string for simple use cases.")
     messages: Sequence[Message] | None = Field(
         default=None, description="Chat-style message sequence."
+    )
+    timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        description="Optional provider request timeout in seconds.",
     )
     max_tokens: int | None = Field(default=None, description="Maximum tokens to generate.")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)

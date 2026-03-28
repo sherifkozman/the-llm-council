@@ -16,7 +16,9 @@ _log = logging.getLogger(__name__)
 # Backwards-compatible provider name aliases
 _PROVIDER_ALIASES: dict[str, str] = {
     "vertex": "vertex-ai",
-    "claude": "claude-code",
+    "claude-code": "claude",
+    "codex-cli": "codex",
+    "gemini-cli": "gemini",
 }
 
 
@@ -66,17 +68,21 @@ class ProviderRegistry:
             **kwargs: Forwarded to the adapter constructor
                 (e.g. ``default_model``).
         """
-        normalized = name.strip().lower()
-        if not normalized:
-            raise ValueError("Provider name must be a non-empty string.")
-        # Resolve backwards-compatible aliases
-        normalized = _PROVIDER_ALIASES.get(normalized, normalized)
+        normalized = self.resolve_name(name)
         with self._lock:
             adapter_class = self._providers.get(normalized)
         if adapter_class is None:
             available = ", ".join(self.list_providers())
             raise KeyError(f"Provider '{normalized}' is not registered. Available: [{available}]")
         return adapter_class(**kwargs)
+
+    def resolve_name(self, name: str) -> str:
+        """Resolve a provider name or alias to its canonical registered name."""
+
+        normalized = name.strip().lower()
+        if not normalized:
+            raise ValueError("Provider name must be a non-empty string.")
+        return _PROVIDER_ALIASES.get(normalized, normalized)
 
     def list_providers(self) -> list[str]:
         """Return a sorted list of registered provider names."""

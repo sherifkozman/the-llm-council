@@ -1,21 +1,41 @@
 # LLM Council Documentation
 
-LLM Council is a Multi-LLM orchestration framework that enables adversarial debate, cross-validation, and structured decision-making across multiple language model providers.
+LLM Council is a multi-LLM orchestration framework for adversarial debate,
+cross-validation, and structured decision-making across multiple model
+providers.
+
+The public package now supports both:
+
+- the core three-phase council flow
+- a mode-aware execution path with lightweight capability
+  planning, routed handoff, and evaluation tooling
 
 ## Overview
 
-LLM Council orchestrates multiple LLM backends in a three-phase workflow:
+LLM Council centers on a three-phase workflow:
 
 1. **Parallel Drafts** - Multiple providers generate independent solutions concurrently
 2. **Adversarial Critique** - A critic model identifies weaknesses, contradictions, and blind spots
 3. **Synthesis** - The best elements are merged, critiques addressed, and output validated against JSON schemas
 
-This approach produces more robust, well-considered outputs than single-model generation.
+This approach is intended to produce more robust, better-audited outputs than a
+single-model pass. The newer capability-aware execution path should be treated
+as an evolving runtime surface rather than a claim of fully benchmarked review
+or security quality.
 
 ## Key Features
 
 ### Multi-Model Orchestration
-Run parallel drafts from Claude (Anthropic), GPT (OpenAI), Gemini (Google), or any supported provider. The framework automatically coordinates multiple API calls and merges results.
+Run parallel drafts from Claude (Anthropic), GPT-5.4 (OpenAI), Gemini
+(Google/Vertex), or any supported provider. The framework coordinates multiple
+provider calls and merges results into a structured output.
+
+### Mode-Aware Runtime
+Core subagents such as `drafter`, `critic`, and `planner` now honor explicit
+`--mode` selection at runtime instead of treating mode definitions as static
+YAML only. Execution profiles such as `prompt_only`,
+`light_tools`, `grounded`, and `deep_analysis` are exposed in the runtime and
+evaluation surfaces.
 
 ### Adversarial Critique
 Built-in critique phase systematically identifies:
@@ -25,14 +45,24 @@ Built-in critique phase systematically identifies:
 - Contradictory recommendations
 
 ### Schema Validation
-JSON Schema validation with automatic retry ensures structured outputs conform to expected formats. Failed validations trigger re-synthesis with error feedback.
+JSON Schema validation with automatic retry ensures structured outputs conform to expected formats. Failed validations trigger re-synthesis with validation error details.
 
 ### Provider Agnostic
 Swap between providers seamlessly:
 - **OpenRouter** - Single API key for 100+ models (recommended)
 - **Direct APIs** - Anthropic, OpenAI, Google native SDKs
-- **CLI Providers** - Codex CLI, Gemini CLI for local/offline use
+- **CLI Providers** - `codex`, `gemini`, and `claude` via local CLIs
 - **Custom Providers** - Plugin architecture via Python entry points
+
+### Deep Doctor
+`council doctor --deep` distinguishes “installed/configured” from “can answer a
+trivial non-interactive prompt right now.” This is useful for diagnosing local
+CLI providers and flaky auth or SDK setup.
+
+### Evaluation Tooling
+`council eval`, `council eval-compare`, and `council eval-import-pr` provide a
+public deterministic evaluation harness plus local-only PR-import support for
+private benchmark creation.
 
 ### IDE Integration
 JSON-lines protocol enables seamless integration with Claude Code and other IDEs. Results stream as structured JSON for programmatic consumption.
@@ -75,6 +105,18 @@ council run drafter --mode impl "Build a REST API for user authentication"
 # Check provider status
 council doctor
 
+# Verify actual non-interactive generation readiness
+# May incur API/CLI usage.
+council doctor --deep --provider claude --provider gemini --provider codex
+
+# Router handoff: classify, then run the chosen subagent/mode
+council run router "Assess whether we should adopt a hosted vector store" --route
+
+# Bound cost and latency for a run
+council run critic --mode review "Review these auth changes" \
+  --runtime-profile bounded \
+  --reasoning-profile off
+
 # Get JSON output
 council run planner "Add dark mode support" --json
 ```
@@ -103,22 +145,26 @@ else:
 
 ## Subagents
 
-LLM Council includes 10 specialized subagents, each with tailored prompts and JSON schemas:
+LLM Council currently exposes six primary subagents, with several backwards
+compatible aliases still supported:
 
 | Subagent | Purpose | Output Schema |
 |----------|---------|---------------|
 | `router` | Classify and route tasks to appropriate subagents | Task classification with routing recommendation |
-| `planner` | Create execution roadmaps with phases and dependencies | Phased plan with milestones and risks |
-| `assessor` | Make build/buy/no-build decisions with weighted criteria | Decision matrix with scores and rationale |
-| `researcher` | Deep market and technical research with citations | Research findings with formal references |
-| `architect` | Design system architecture, APIs, data models | Architecture diagrams and specifications |
-| `implementer` | Generate production-ready code with tests | Code files with test coverage |
-| `reviewer` | Review code for bugs, security, style issues | Findings with CWE IDs and severity |
-| `test-designer` | Design comprehensive test suites | Test plan with coverage goals |
-| `shipper` | Generate release notes and deployment guides | Release documentation |
-| `red-team` | Security threat modeling and attack vectors | Threat model with mitigations |
+| `planner` | Create execution roadmaps and assessment outputs | Plans, phases, risks, decisions |
+| `researcher` | Research with citations and evidence | Research findings and references |
+| `drafter` | Implementation, architecture, and test design | Code/design/test outputs by mode |
+| `critic` | Code review and security analysis | Review or red-team findings by mode |
+| `synthesizer` | Final merge and structured output production | Final schema-conforming output |
 
-Each subagent enforces structured output via JSON Schema, ensuring consistent, parseable results.
+Primary runtime modes:
+
+- `drafter --mode impl|arch|test`
+- `critic --mode review|security`
+- `planner --mode plan|assess`
+
+Legacy aliases such as `implementer`, `architect`, `reviewer`, `red-team`,
+`assessor`, and `test-designer` still work for backwards compatibility.
 
 ## How It Works
 
@@ -126,31 +172,38 @@ Each subagent enforces structured output via JSON Schema, ensuring consistent, p
 USER TASK
     |
     v
+[ROUTE / MODE RESOLUTION]
+    |
+    +-- Optional router handoff
+    +-- Resolve mode, schema, model pack, providers
+    |
+    v
+[EVIDENCE SELECTION]
+    |
+    +-- prompt_only (default)
+    +-- or capability-backed execution
+    |
+    v
 [PARALLEL DRAFTS]
     |
-    +-- Provider A (e.g., Claude Opus)      --> Draft A
-    +-- Provider B (e.g., GPT-4)            --> Draft B
-    +-- Provider C (e.g., Gemini Pro)       --> Draft C
+    +-- Provider A --> Draft A
+    +-- Provider B --> Draft B
+    +-- Provider C --> Draft C
     |
     v
 [ADVERSARIAL CRITIQUE]
     |
-    +-- Critic Model analyzes all drafts
-    +-- Identifies weaknesses, contradictions, blind spots
+    +-- Challenge contradictions and weak assumptions
     |
     v
 [SYNTHESIS]
     |
-    +-- Merge best elements from drafts
-    +-- Address critique points
+    +-- Merge best elements
     +-- Validate against JSON Schema
-    +-- Retry on validation failure (max 3 attempts)
+    +-- Retry on validation failure
     |
     v
 [STRUCTURED OUTPUT]
-    |
-    +-- Success: JSON matching schema
-    +-- Failure: Validation errors + partial output
 ```
 
 ## Configuration
@@ -217,6 +270,8 @@ llm_council/
 
 ## Next Steps
 
+- [Capability-Augmented Council](architecture/capability-augmented-council.md) - Kickoff spec for mode-native capabilities, staged execution, and per-mode evaluation
+- [Eval Datasets](../evals/README.md) - Baseline datasets and usage for `council eval`
 - [OpenRouter Quickstart](quickstart/openrouter.md) - Recommended setup with single API key
 - [Direct APIs Quickstart](quickstart/direct-apis.md) - Using Anthropic, OpenAI, Google directly
 - [Creating Custom Providers](providers/creating-providers.md) - Build your own provider adapters

@@ -51,12 +51,16 @@ from llm_council.providers.google import (
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_LOCATION = "us-central1"
 DEFAULT_CLAUDE_REGION = "global"
+DEFAULT_TIMEOUT_MS = 15000
+DEFAULT_RETRY_ATTEMPTS = 1
 
 # Environment variable names
 ENV_VERTEX_MODEL = "VERTEX_AI_MODEL"
 ENV_ANTHROPIC_MODEL = "ANTHROPIC_MODEL"
 ENV_ANTHROPIC_PROJECT = "ANTHROPIC_VERTEX_PROJECT_ID"
 ENV_CLAUDE_REGION = "CLOUD_ML_REGION"
+ENV_TIMEOUT_MS = "VERTEX_AI_TIMEOUT_MS"
+ENV_RETRY_ATTEMPTS = "VERTEX_AI_RETRY_ATTEMPTS"
 
 # Model prefixes for detection
 CLAUDE_MODEL_PREFIXES = ("claude-",)
@@ -120,6 +124,8 @@ class VertexAIProvider(ProviderAdapter):
         location: str | None = None,
         credentials: Any = None,
         default_model: str | None = None,
+        timeout_ms: int | None = None,
+        retry_attempts: int | None = None,
     ) -> None:
         """Initialize the Vertex AI provider.
 
@@ -153,6 +159,23 @@ class VertexAIProvider(ProviderAdapter):
             self._default_model = vertex_model
         else:
             self._default_model = DEFAULT_MODEL
+
+        env_timeout = os.environ.get(ENV_TIMEOUT_MS)
+        self._timeout_ms = (
+            timeout_ms
+            if timeout_ms is not None
+            else int(env_timeout)
+            if env_timeout is not None
+            else DEFAULT_TIMEOUT_MS
+        )
+        env_retry_attempts = os.environ.get(ENV_RETRY_ATTEMPTS)
+        self._retry_attempts = (
+            retry_attempts
+            if retry_attempts is not None
+            else int(env_retry_attempts)
+            if env_retry_attempts is not None
+            else DEFAULT_RETRY_ATTEMPTS
+        )
 
         # Clients for each model type
         self._gemini_client: Any = None
@@ -190,6 +213,12 @@ class VertexAIProvider(ProviderAdapter):
                 project=self._project,
                 location=self._location,
                 credentials=credentials,
+                http_options=genai.types.HttpOptions(
+                    timeout=self._timeout_ms,
+                    retry_options=genai.types.HttpRetryOptions(
+                        attempts=self._retry_attempts,
+                    ),
+                ),
             )
 
         return self._gemini_client

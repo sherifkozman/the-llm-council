@@ -29,21 +29,39 @@ from jsonschema import Draft7Validator
 from pydantic import BaseModel, ConfigDict, Field
 
 from llm_council.config.models import get_council_models, is_multi_model_enabled
+from llm_council.engine.capabilities import CapabilityPlan, select_capability_plan
 from llm_council.engine.degradation import DegradationAction, DegradationPolicy
+from llm_council.engine.evidence import EvidenceBundle, collect_capability_evidence
 from llm_council.engine.health import HealthReport, preflight_check
-from llm_council.protocol.types import PhaseTiming, SummaryTier
+from llm_council.protocol.types import (
+    PhaseTiming,
+    ReasoningProfile,
+    RuntimeProfile,
+    SummaryTier,
+)
 from llm_council.providers.base import (
     DoctorResult,
     GenerateRequest,
     GenerateResponse,
     Message,
     ProviderAdapter,
+    ReasoningConfig,
     StructuredOutputConfig,
 )
 from llm_council.providers.registry import get_registry
 from llm_council.schemas import load_schema
 from llm_council.storage.artifacts import ArtifactStore, ArtifactType, get_store
-from llm_council.subagents import load_subagent
+from llm_council.subagents import (
+    get_effective_schema,
+    get_effective_system_prompt,
+    get_model_for_subagent,
+    get_model_overrides,
+    get_model_pack,
+    get_provider_preferences,
+    get_reasoning_budget,
+    load_subagent,
+    resolve_mode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +122,53 @@ class OrchestratorConfig(BaseModel):
             "Used for --context/--system file injection."
         ),
     )
+    mode: str | None = Field(
+        default=None,
+        description="Subagent mode override (e.g. review/security, plan/assess).",
+    )
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Global temperature override applied to all council phases.",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description="Global max_tokens override applied to all council phases.",
+    )
+    runtime_profile: RuntimeProfile = Field(
+        default=RuntimeProfile.DEFAULT,
+        description="High-level runtime budget override (default/bounded).",
+    )
+    reasoning_profile: ReasoningProfile = Field(
+        default=ReasoningProfile.DEFAULT,
+        description="High-level override for reasoning intensity (default/off/light).",
+    )
+    output_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional custom output schema override for the run.",
+    )
+    model_pack: str | None = Field(
+        default=None,
+        description="Optional runtime model-pack override for provider/model resolution.",
+    )
+    execution_profile: str | None = Field(
+        default=None,
+        description="Optional runtime execution-profile override.",
+    )
+    budget_class: str | None = Field(
+        default=None,
+        description="Optional runtime budget-class override.",
+    )
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Optional runtime capability overrides merged into the resolved plan.",
+    )
+    disable_local_evidence: bool = Field(
+        default=False,
+        description="Disable local evidence collection and rely only on provided context.",
+    )
 
 
 class CostEstimate(BaseModel):
@@ -144,6 +209,22 @@ class CouncilResult(BaseModel):
     degradation_report: dict[str, Any] | None = Field(
         default=None, description="Degradation events during execution."
     )
+    execution_plan: dict[str, Any] | None = Field(
+        default=None,
+        description="Resolved runtime plan (mode, schema, providers, reasoning, overrides).",
+    )
+    routed: bool = Field(
+        default=False,
+        description="Whether the result came from a router-followed execution.",
+    )
+    routing_decision: dict[str, Any] | None = Field(
+        default=None,
+        description="Router output used to select the routed subagent and mode.",
+    )
+    routing_execution_plan: dict[str, Any] | None = Field(
+        default=None,
+        description="Execution plan from the router run before follow-up execution.",
+    )
 
 
 class ValidationResult(BaseModel):
@@ -161,7 +242,8 @@ class Orchestrator:
     """Coordinates multi-LLM council runs using provider adapters."""
 
     def __init__(self, providers: list[str], config: OrchestratorConfig) -> None:
-        self._provider_names = providers
+        self._configured_provider_names = list(providers)
+        self._provider_names = list(providers)
         self._config = config
         self._registry = get_registry()
         self._providers: dict[str, ProviderAdapter] = {}
@@ -174,6 +256,17 @@ class Orchestrator:
         self._subagent_name: str | None = None
         self._subagent_config: dict[str, Any] | None = None
         self._schema: dict[str, Any] | None = None
+        self._schema_name: str | None = None
+        self._schema_source: str | None = None
+        self._resolved_mode: str | None = None
+        self._system_prompt: str = ""
+        self._reasoning: ReasoningConfig | None = None
+        self._capability_plan: CapabilityPlan | None = None
+        self._evidence_bundle: EvidenceBundle | None = None
+        self._resolved_model_pack: str | None = None
+        self._model_pack_source: str | None = None
+        self._resolved_model_overrides: dict[str, str] = {}
+        self._execution_plan: dict[str, Any] | None = None
         self._artifact_store: ArtifactStore | None = None
         self._degradation_policy: DegradationPolicy | None = None
         self._health_report: HealthReport | None = None
@@ -184,7 +277,7 @@ class Orchestrator:
 
         if self._config.enable_graceful_degradation:
             self._degradation_policy = DegradationPolicy(
-                max_retries=2,
+                max_retries=self._provider_retry_budget(),
                 min_providers_required=1,
                 abort_on_all_failures=True,
             )
@@ -197,13 +290,15 @@ class Orchestrator:
         self._output_tokens = {}
         self._task = task
         self._subagent_name = subagent
+        self._health_report = None
+        self._run_id = None
+        self._execution_plan = None
+        self._evidence_bundle = None
         phase_timings: list[PhaseTiming] = []
         start_time = time.monotonic()
 
         try:
-            self._subagent_config = load_subagent(subagent)
-            schema_name = self._subagent_config.get("schema")
-            self._schema = load_schema(schema_name) if schema_name else None
+            self._prepare_run(subagent)
         except Exception as exc:
             duration_ms = int((time.monotonic() - start_time) * 1000)
             return CouncilResult(
@@ -213,6 +308,7 @@ class Orchestrator:
                 phase_timings=phase_timings or None,
                 provider_errors=dict(self._provider_init_errors) or None,
                 cost_estimate=self._build_cost_estimate(),
+                execution_plan=self._execution_plan,
             )
 
         provider_errors = self._validate_providers_for_run()
@@ -225,10 +321,8 @@ class Orchestrator:
                 phase_timings=phase_timings or None,
                 provider_errors=provider_errors,
                 cost_estimate=self._build_cost_estimate(),
+                execution_plan=self._execution_plan,
             )
-
-        # Refresh provider adapters for this run in case registry changed.
-        self._initialize_providers()
 
         # Initialize degradation policy for this run
         if self._degradation_policy:
@@ -243,23 +337,11 @@ class Orchestrator:
             )
             self._run_id = run_record.run_id
 
-        # Run preflight health checks if enabled
-        if self._config.enable_health_check and self._providers:
+        if self._providers:
             try:
-                usable_providers, health_report = await preflight_check(
-                    self._providers,
-                    timeout=10.0,
-                    skip_on_failure=True,
-                )
-                self._health_report = health_report
-                self._providers = usable_providers
-                logger.info(
-                    "Health check: %d/%d providers usable",
-                    health_report.usable_count,
-                    health_report.total_count,
-                )
+                await self._ensure_usable_providers()
             except Exception as exc:
-                logger.warning("Health check failed: %s", exc)
+                logger.warning("Provider health resolution failed: %s", exc)
 
         if not self._providers:
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -270,9 +352,32 @@ class Orchestrator:
                 phase_timings=phase_timings or None,
                 provider_errors=dict(self._provider_init_errors) or None,
                 cost_estimate=self._build_cost_estimate(),
+                execution_plan=self._execution_plan,
             )
 
+        drafts: dict[str, str] = {}
+        critique = ""
+        synthesis_result = ValidationResult(ok=False, errors=["Synthesis did not run."])
+        synth_attempts = 0
+
         try:
+            if self._capability_plan and self._capability_plan.required_capabilities:
+                evidence_bundle, evidence_timing = await self._timed(
+                    self._collect_evidence_for_run, "evidence"
+                )
+                self._evidence_bundle = evidence_bundle
+                phase_timings.append(evidence_timing)
+
+                if self._artifact_store and self._run_id and evidence_bundle.items:
+                    try:
+                        self._artifact_store.store_artifact(
+                            run_id=self._run_id,
+                            content=evidence_bundle.to_prompt_block(),
+                            artifact_type=ArtifactType.TOOL_LOG,
+                        )
+                    except Exception as exc:
+                        logger.debug("Failed to store evidence artifact: %s", exc)
+
             drafts, draft_timing = await self._timed(self._run_parallel_drafts, "drafts")
             phase_timings.append(draft_timing)
 
@@ -288,7 +393,23 @@ class Orchestrator:
                             )
                         except Exception as exc:
                             logger.debug("Failed to store draft artifact: %s", exc)
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            logger.exception("Council run failed.")
+            return CouncilResult(
+                success=False,
+                error=str(exc),
+                drafts=None,
+                critique=None,
+                synthesis_attempts=0,
+                duration_ms=duration_ms,
+                phase_timings=phase_timings or None,
+                provider_errors=dict(self._provider_init_errors) or None,
+                cost_estimate=self._build_cost_estimate(),
+                execution_plan=self._execution_plan,
+            )
 
+        try:
             critique, critique_timing = await self._timed(
                 lambda: self._run_critique(drafts), "critique"
             )
@@ -304,37 +425,34 @@ class Orchestrator:
                     )
                 except Exception as exc:
                     logger.debug("Failed to store critique artifact: %s", exc)
+        except Exception as exc:
+            detail = self._format_exception_chain(exc)
+            critique = ""
+            self._append_degradation_note(
+                f"Critique failed ({detail}); continuing without critique."
+            )
+            logger.warning("Critique phase failed; continuing without critique: %s", detail)
 
+        try:
             synth_result, synth_timing = await self._timed(
                 lambda: self._run_synthesis(drafts, critique), "synthesis"
             )
             synthesis_result, synth_attempts = synth_result
             phase_timings.append(synth_timing)
-
-            # Store synthesis as artifact if enabled
-            if self._artifact_store and self._run_id and synthesis_result.raw:
-                try:
-                    self._artifact_store.store_artifact(
-                        run_id=self._run_id,
-                        content=synthesis_result.raw,
-                        artifact_type=ArtifactType.SYNTHESIS,
-                    )
-                except Exception as exc:
-                    logger.debug("Failed to store synthesis artifact: %s", exc)
         except Exception as exc:
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            logger.exception("Council run failed.")
-            return CouncilResult(
-                success=False,
-                error=str(exc),
-                drafts=None,
-                critique=None,
-                synthesis_attempts=0,
-                duration_ms=duration_ms,
-                phase_timings=phase_timings or None,
-                provider_errors=dict(self._provider_init_errors) or None,
-                cost_estimate=self._build_cost_estimate(),
-            )
+            logger.warning("Synthesis phase failed; attempting draft fallback: %s", exc)
+            synthesis_result, synth_attempts = self._fallback_synthesis_from_drafts(drafts, exc)
+
+        # Store synthesis as artifact if enabled
+        if self._artifact_store and self._run_id and synthesis_result.raw:
+            try:
+                self._artifact_store.store_artifact(
+                    run_id=self._run_id,
+                    content=synthesis_result.raw,
+                    artifact_type=ArtifactType.SYNTHESIS,
+                )
+            except Exception as exc:
+                logger.debug("Failed to store synthesis artifact: %s", exc)
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -372,6 +490,7 @@ class Orchestrator:
             run_id=self._run_id,
             health_report=health_report_dict,
             degradation_report=degradation_report_dict,
+            execution_plan=self._execution_plan,
         )
 
     async def _run_parallel_drafts(self) -> dict[str, str]:
@@ -390,7 +509,7 @@ class Orchestrator:
         drafts: dict[str, str] = {}
         for provider_name, result in zip(self._providers.keys(), results, strict=True):
             if isinstance(result, BaseException):
-                error_msg = str(result)
+                error_msg = self._format_exception_chain(result)
                 self._provider_init_errors[provider_name] = error_msg
 
                 # Use degradation policy to decide action
@@ -413,30 +532,67 @@ class Orchestrator:
 
         return drafts
 
+    def _format_exception_chain(self, error: BaseException) -> str:
+        """Render an exception with its direct cause chain for diagnostics."""
+
+        parts = [str(error)]
+        current = error.__cause__ or error.__context__
+        while current is not None:
+            text = str(current)
+            if text:
+                parts.append(f"caused by: {text}")
+            current = current.__cause__ or current.__context__
+        return " | ".join(part for part in parts if part)
+
     async def _run_critique(self, drafts: dict[str, str]) -> str:
         """Run an adversarial critique over the drafts."""
 
         if self._task is None or self._subagent_config is None:
             raise RuntimeError("Orchestrator.run must be called before critique.")
 
-        provider_name, adapter = await self._select_provider_for_phase("critique")
+        candidates = await self._candidate_providers_for_phase("critique")
+        self._record_phase_provider_candidates("critique", [name for name, _adapter in candidates])
+        if not candidates:
+            raise RuntimeError("No healthy providers available for critique.")
+
         system_prompt = (
             "You are an adversarial reviewer. Identify errors, gaps, contradictions, "
             "and schema violations. Provide concrete fixes."
         )
         user_prompt = self._format_critique_prompt(self._task, drafts)
+        last_error: Exception | None = None
 
-        request = GenerateRequest(
-            model=self._model_override(provider_name),
-            messages=[
-                Message(role="system", content=system_prompt),
-                Message(role="user", content=user_prompt),
-            ],
-            max_tokens=self._config.max_critique_tokens,
-            temperature=self._config.critique_temperature,
-        )
-        response = await self._call_provider(provider_name, adapter, request)
-        return response.text or ""
+        for index, (provider_name, adapter) in enumerate(candidates):
+            request = GenerateRequest(
+                model=self._model_override(provider_name),
+                messages=[
+                    Message(role="system", content=system_prompt),
+                    Message(role="user", content=user_prompt),
+                ],
+                timeout_seconds=self._provider_request_timeout_seconds("critique"),
+                max_tokens=self._phase_max_tokens(
+                    self._config.max_critique_tokens, phase="critique"
+                ),
+                temperature=self._phase_temperature(self._config.critique_temperature),
+                reasoning=self._reasoning,
+            )
+            try:
+                response = await self._call_provider(
+                    provider_name,
+                    adapter,
+                    request,
+                    remaining_providers=max(len(candidates) - index - 1, 0),
+                )
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            self._record_phase_provider_used("critique", provider_name)
+            return response.text or ""
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Critique failed without a usable provider response.")
 
     async def _run_synthesis(
         self, drafts: dict[str, str], critique: str
@@ -446,51 +602,77 @@ class Orchestrator:
         if self._task is None or self._subagent_config is None:
             raise RuntimeError("Orchestrator.run must be called before synthesis.")
 
-        provider_name, adapter = await self._select_provider_for_phase("synthesis")
+        candidates = await self._candidate_providers_for_phase("synthesis")
+        self._record_phase_provider_candidates("synthesis", [name for name, _adapter in candidates])
+        if not candidates:
+            raise RuntimeError("No healthy providers available for synthesis.")
+
         schema = self._schema
         errors: list[str] = []
         last_raw: str | None = None
+        total_attempts = 0
+        last_error: Exception | None = None
 
-        for attempt in range(1, self._config.max_retries + 1):
-            system_prompt = (
-                "You are the synthesizer. Combine drafts and critique into a single response. "
-                "Return ONLY valid JSON that matches the provided schema."
-            )
-            user_prompt = self._format_synthesis_prompt(
-                task=self._task,
-                drafts=drafts,
-                critique=critique,
-                schema=schema,
-                errors=errors,
-            )
-
-            request = GenerateRequest(
-                model=self._model_override(provider_name),
-                messages=[
-                    Message(role="system", content=system_prompt),
-                    Message(role="user", content=user_prompt),
-                ],
-                max_tokens=self._config.max_synthesis_tokens,
-                temperature=self._config.synthesis_temperature,
-            )
-
-            if schema and await adapter.supports("structured_output"):
-                # Use StructuredOutputConfig for provider-agnostic structured output
-                # Each provider transforms this to their native API format
-                request.structured_output = StructuredOutputConfig(
-                    json_schema=schema,
-                    name=self._subagent_name or "council_output",
-                    strict=True,
+        for provider_index, (provider_name, adapter) in enumerate(candidates):
+            for _attempt in range(1, self._config.max_retries + 1):
+                total_attempts += 1
+                system_prompt = (
+                    "You are the synthesizer. Combine drafts and critique into a single response. "
+                    "Return ONLY valid JSON that matches the provided schema."
+                )
+                user_prompt = self._format_synthesis_prompt(
+                    task=self._task,
+                    drafts=drafts,
+                    critique=critique,
+                    schema=schema,
+                    errors=errors,
                 )
 
-            response = await self._call_provider(provider_name, adapter, request)
-            last_raw = response.text or ""
-            result = self._validate_response(last_raw)
-            if result.ok:
-                return result, attempt
-            errors = result.errors
+                request = GenerateRequest(
+                    model=self._model_override(provider_name),
+                    messages=[
+                        Message(role="system", content=system_prompt),
+                        Message(role="user", content=user_prompt),
+                    ],
+                    timeout_seconds=self._provider_request_timeout_seconds("synthesis"),
+                    max_tokens=self._phase_max_tokens(
+                        self._config.max_synthesis_tokens,
+                        phase="synthesis",
+                    ),
+                    temperature=self._phase_temperature(self._config.synthesis_temperature),
+                    reasoning=self._reasoning,
+                )
 
-        return ValidationResult(ok=False, errors=errors, raw=last_raw), self._config.max_retries
+                if schema and await adapter.supports("structured_output"):
+                    request.structured_output = StructuredOutputConfig(
+                        json_schema=schema,
+                        name=self._subagent_name or "council_output",
+                        strict=True,
+                    )
+
+                try:
+                    response = await self._call_provider(
+                        provider_name,
+                        adapter,
+                        request,
+                        remaining_providers=max(len(candidates) - provider_index - 1, 0),
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    break
+
+                last_raw = response.text or ""
+                result = self._validate_response(last_raw)
+                if result.ok:
+                    self._record_phase_provider_used("synthesis", provider_name)
+                    return result, total_attempts
+                errors = result.errors
+
+        if last_raw is not None:
+            return ValidationResult(ok=False, errors=errors, raw=last_raw), total_attempts
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Synthesis failed without a usable provider response.")
 
     async def _generate_draft(
         self, provider_name: str, adapter: ProviderAdapter
@@ -500,7 +682,7 @@ class Orchestrator:
         if self._task is None or self._subagent_config is None:
             raise RuntimeError("Orchestrator.run must be called before drafting.")
 
-        system_prompt = self._subagent_config.get("prompts", {}).get("system", "")
+        system_prompt = self._system_prompt
         user_prompt = self._format_draft_prompt(self._task)
 
         request = GenerateRequest(
@@ -509,14 +691,21 @@ class Orchestrator:
                 Message(role="system", content=system_prompt),
                 Message(role="user", content=user_prompt),
             ],
-            max_tokens=self._config.max_draft_tokens,
-            temperature=self._config.draft_temperature,
+            timeout_seconds=self._provider_request_timeout_seconds("draft"),
+            max_tokens=self._phase_max_tokens(self._config.max_draft_tokens, phase="draft"),
+            temperature=self._phase_temperature(self._config.draft_temperature),
+            reasoning=self._reasoning,
         )
         response = await self._call_provider(provider_name, adapter, request)
         return provider_name, response.text or ""
 
     async def _call_provider(
-        self, provider_name: str, adapter: ProviderAdapter, request: GenerateRequest
+        self,
+        provider_name: str,
+        adapter: ProviderAdapter,
+        request: GenerateRequest,
+        *,
+        remaining_providers: int | None = None,
     ) -> GenerateResponse:
         """Execute a provider request with timeout and usage tracking."""
 
@@ -530,36 +719,535 @@ class Orchestrator:
                     usage = dict(chunk.usage)
             return GenerateResponse(text="".join(text_parts), usage=usage)
 
-        try:
-            result = await asyncio.wait_for(adapter.generate(request), timeout=self._config.timeout)
-            if isinstance(result, GenerateResponse):
-                response = result
-            else:
-                response = await asyncio.wait_for(
-                    _consume_stream(result), timeout=self._config.timeout
+        while True:
+            try:
+                result = await asyncio.wait_for(
+                    adapter.generate(request), timeout=self._config.timeout
                 )
+                if isinstance(result, GenerateResponse):
+                    response = result
+                else:
+                    response = await asyncio.wait_for(
+                        _consume_stream(result), timeout=self._config.timeout
+                    )
 
-            self._record_usage(provider_name, response.usage)
-            return response
+                self._record_usage(provider_name, response.usage)
+                return response
 
-        except Exception as exc:
-            # Let degradation policy decide if this should be handled
-            if self._degradation_policy:
-                remaining = len(self._providers) - len(self._provider_init_errors) - 1
-                decision = self._degradation_policy.decide(
-                    provider=provider_name,
-                    error=exc,
-                    phase="call",
-                    remaining_providers=remaining,
-                )
+            except Exception as exc:
+                error_detail = self._format_exception_chain(exc)
+                if self._degradation_policy:
+                    remaining = (
+                        remaining_providers
+                        if remaining_providers is not None
+                        else len(self._providers) - len(self._provider_init_errors) - 1
+                    )
+                    decision = self._degradation_policy.decide(
+                        provider=provider_name,
+                        error=exc,
+                        phase="call",
+                        remaining_providers=remaining,
+                    )
 
-                if decision.action == DegradationAction.ABORT:
-                    raise RuntimeError(f"Provider call aborted: {decision.reason}") from exc
-                elif decision.action == DegradationAction.RETRY and decision.retry_delay_ms > 0:
-                    await asyncio.sleep(decision.retry_delay_ms / 1000.0)
+                    if decision.action == DegradationAction.ABORT:
+                        self._provider_init_errors[provider_name] = (
+                            f"{error_detail} | degraded: {decision.reason}"
+                        )
+                        raise RuntimeError(f"Provider call aborted: {decision.reason}") from exc
+                    if decision.action == DegradationAction.RETRY:
+                        if decision.retry_delay_ms > 0:
+                            await asyncio.sleep(decision.retry_delay_ms / 1000.0)
+                        continue
 
-            # Re-raise the exception to let caller handle it
-            raise
+                self._provider_init_errors[provider_name] = error_detail
+                raise
+
+    def _prepare_run(self, subagent: str) -> None:
+        """Resolve subagent mode, schema, providers, and runtime overrides for a run."""
+
+        self._subagent_config = load_subagent(subagent)
+        self._resolved_mode = resolve_mode(self._subagent_config, self._config.mode)
+        self._capability_plan = select_capability_plan(
+            subagent,
+            self._resolved_mode,
+            subagent_config=self._subagent_config,
+            requested_execution_profile=self._config.execution_profile,
+            requested_budget_class=self._config.budget_class,
+            requested_capabilities=self._config.required_capabilities,
+        )
+        self._system_prompt = get_effective_system_prompt(
+            self._subagent_config, self._resolved_mode
+        )
+        if self._config.model_pack:
+            self._resolved_model_pack = self._config.model_pack
+            self._model_pack_source = "config"
+        else:
+            self._resolved_model_pack = get_model_pack(
+                self._subagent_config,
+                self._resolved_mode,
+            ).value
+            self._model_pack_source = "subagent"
+
+        if self._config.output_schema is not None:
+            self._schema = self._config.output_schema
+            self._schema_name = "custom"
+            self._schema_source = "custom"
+        else:
+            self._schema_name = get_effective_schema(self._subagent_config, self._resolved_mode)
+            self._schema_source = "subagent"
+            self._schema = load_schema(self._schema_name) if self._schema_name else None
+
+        reasoning_budget = get_reasoning_budget(self._subagent_config, self._resolved_mode)
+        self._reasoning = self._build_reasoning_config(reasoning_budget)
+
+        provider_preferences = get_provider_preferences(self._subagent_config, self._resolved_mode)
+        self._provider_names = self._resolve_provider_names_for_run(provider_preferences)
+        self._initialize_providers()
+
+        self._resolved_model_overrides = self._resolve_model_overrides()
+        self._execution_plan = {
+            "subagent": subagent,
+            "mode": self._resolved_mode,
+            "schema_name": self._schema_name,
+            "schema_source": self._schema_source,
+            "model_pack": self._resolved_model_pack,
+            "model_pack_source": self._model_pack_source,
+            "providers": list(self._provider_names),
+            "system_prompt_configured": bool(self._system_prompt.strip()),
+            "temperature_override": self._config.temperature,
+            "max_tokens_override": self._config.max_tokens,
+            "runtime_profile": self._config.runtime_profile.value,
+            "reasoning_profile": self._config.reasoning_profile.value,
+            "provider_retry_budget": self._provider_retry_budget(),
+            "phase_token_budgets": {
+                "draft": self._phase_max_tokens(self._config.max_draft_tokens, phase="draft"),
+                "critique": self._phase_max_tokens(
+                    self._config.max_critique_tokens,
+                    phase="critique",
+                ),
+                "synthesis": self._phase_max_tokens(
+                    self._config.max_synthesis_tokens,
+                    phase="synthesis",
+                ),
+            },
+            "provider_request_timeouts": {
+                "draft": self._provider_request_timeout_seconds("draft"),
+                "critique": self._provider_request_timeout_seconds("critique"),
+                "synthesis": self._provider_request_timeout_seconds("synthesis"),
+            },
+            "model_overrides": dict(self._resolved_model_overrides),
+            "reasoning": self._reasoning.model_dump(exclude_none=True) if self._reasoning else None,
+            "execution_profile": (
+                self._capability_plan.execution_profile if self._capability_plan else "prompt_only"
+            ),
+            "budget_class": self._capability_plan.budget_class
+            if self._capability_plan
+            else "normal",
+            "required_capabilities": (
+                list(self._capability_plan.required_capabilities) if self._capability_plan else []
+            ),
+            "registered_tools": list(self._capability_plan.tool_names)
+            if self._capability_plan
+            else [],
+            "evidence_requirements": (
+                list(self._capability_plan.evidence_requirements) if self._capability_plan else []
+            ),
+            "local_evidence_disabled": self._config.disable_local_evidence,
+            "executed_capabilities": [],
+            "pending_capabilities": (
+                list(self._capability_plan.required_capabilities) if self._capability_plan else []
+            ),
+            "evidence_items": 0,
+        }
+
+    def _build_reasoning_config(self, budget: Any) -> ReasoningConfig | None:
+        """Convert a reasoning budget config into a provider-agnostic request config."""
+
+        profile = self._config.reasoning_profile
+        if profile == ReasoningProfile.OFF:
+            return None
+
+        if budget is None or not budget.enabled:
+            return None
+
+        effort = budget.effort
+        budget_tokens = budget.budget_tokens
+        thinking_level = budget.thinking_level
+
+        if profile == ReasoningProfile.LIGHT:
+            if effort not in (None, "none"):
+                effort = "low"
+            if budget_tokens is not None:
+                budget_tokens = min(budget_tokens, 4096)
+            if thinking_level not in (None, "minimal", "low"):
+                thinking_level = "low"
+
+        return ReasoningConfig(
+            enabled=True,
+            effort=effort,
+            budget_tokens=budget_tokens,
+            thinking_level=thinking_level,
+        )
+
+    def _resolve_provider_names_for_run(self, provider_preferences: Any) -> list[str]:
+        """Resolve the provider list that should actually execute this run."""
+
+        candidates = self._candidate_provider_names()
+        if provider_preferences is None:
+            return candidates
+
+        excluded = set(provider_preferences.exclude)
+        candidates = [
+            provider_name
+            for provider_name in candidates
+            if self._provider_identity(provider_name) not in excluded
+        ]
+
+        preferred = self._match_provider_preferences(candidates, provider_preferences.preferred)
+        if preferred:
+            return preferred
+
+        fallback = self._match_provider_preferences(candidates, provider_preferences.fallback)
+        if fallback:
+            return fallback
+
+        return candidates
+
+    def _candidate_provider_names(self) -> list[str]:
+        """Return configured provider names after model expansion, before filtering."""
+
+        models = self._config.models
+        if models is None and is_multi_model_enabled():
+            models = get_council_models()
+
+        if models and len(models) > 1 and self._configured_provider_names == ["openrouter"]:
+            return list(models)
+
+        return list(self._configured_provider_names)
+
+    def _match_provider_preferences(
+        self, candidates: list[str], preferences: list[str]
+    ) -> list[str]:
+        """Return candidates that match a preference list, preserving preference order."""
+
+        matched: list[str] = []
+        seen: set[str] = set()
+        for preferred_provider in preferences:
+            for provider_name in candidates:
+                if provider_name in seen:
+                    continue
+                if self._provider_identity(provider_name) == preferred_provider:
+                    matched.append(provider_name)
+                    seen.add(provider_name)
+        return matched
+
+    async def _ensure_usable_providers(self) -> None:
+        """Run health checks when needed and auto-fallback from dead defaults."""
+
+        if not self._providers:
+            return
+
+        should_health_check = (
+            self._config.enable_health_check or self._should_attempt_provider_auto_fallback()
+        )
+        if not should_health_check:
+            return
+
+        usable_providers, health_report = await preflight_check(
+            self._providers,
+            timeout=10.0,
+            skip_on_failure=True,
+        )
+        self._health_report = health_report
+
+        if usable_providers:
+            self._apply_provider_resolution(usable_providers)
+            logger.info(
+                "Health check: %d/%d providers usable",
+                health_report.usable_count,
+                health_report.total_count,
+            )
+            return
+
+        if not self._should_attempt_provider_auto_fallback():
+            self._providers = {}
+            return
+
+        fallback_names = self._fallback_provider_candidates()
+        fallback_providers, fallback_errors = self._instantiate_providers(fallback_names)
+        self._provider_init_errors.update(fallback_errors)
+        if not fallback_providers:
+            self._providers = {}
+            return
+
+        fallback_usable, fallback_report = await preflight_check(
+            fallback_providers,
+            timeout=10.0,
+            skip_on_failure=True,
+        )
+        if not fallback_usable:
+            self._health_report = fallback_report
+            self._providers = {}
+            return
+
+        self._health_report = fallback_report
+        self._apply_provider_resolution(
+            fallback_usable,
+            auto_fallback_from=list(self._provider_names),
+        )
+        logger.info(
+            "Provider auto-fallback selected %s",
+            ", ".join(self._provider_names),
+        )
+
+    def _should_attempt_provider_auto_fallback(self) -> bool:
+        """Return True when dead default providers should fall back to configured direct providers."""
+
+        return self._provider_names == ["openrouter"] and bool(self._fallback_provider_candidates())
+
+    def _fallback_provider_candidates(self) -> list[str]:
+        """Return direct provider names from user config that can replace the dead default path."""
+
+        candidates: list[str] = []
+        for name in self._config.provider_configs:
+            identity = self._provider_identity(name)
+            if identity == "openrouter":
+                continue
+            if name not in candidates:
+                candidates.append(name)
+        return candidates
+
+    def _apply_provider_resolution(
+        self,
+        providers: dict[str, ProviderAdapter],
+        *,
+        auto_fallback_from: list[str] | None = None,
+    ) -> None:
+        """Adopt a resolved provider set and recompute model overrides."""
+
+        self._providers = providers
+        self._provider_names = list(providers.keys())
+        self._resolved_model_overrides = self._resolve_model_overrides()
+
+        if self._execution_plan is not None:
+            self._execution_plan["providers"] = list(self._provider_names)
+            self._execution_plan["model_overrides"] = dict(self._resolved_model_overrides)
+            if auto_fallback_from:
+                self._execution_plan["provider_auto_fallback"] = {
+                    "from": list(auto_fallback_from),
+                    "to": list(self._provider_names),
+                }
+
+    def _instantiate_providers(
+        self, provider_names: list[str], *, treat_as_models: bool = False
+    ) -> tuple[dict[str, ProviderAdapter], dict[str, str]]:
+        """Instantiate a set of providers without mutating run state."""
+
+        from llm_council.providers.openrouter import create_openrouter_for_model
+
+        providers: dict[str, ProviderAdapter] = {}
+        init_errors: dict[str, str] = {}
+        for name in provider_names:
+            try:
+                if treat_as_models or ("/" in name and name != "openrouter"):
+                    providers[name] = create_openrouter_for_model(name)
+                    continue
+                kwargs = self._config.provider_configs.get(name, {})
+                providers[name] = self._registry.get_provider(name, **kwargs)
+            except Exception as exc:
+                init_errors[name] = str(exc)
+        return providers, init_errors
+
+    def _provider_identity(self, provider_name: str) -> str:
+        """Map a provider or virtual provider name to its canonical identity."""
+
+        if "/" in provider_name and provider_name != "openrouter":
+            return provider_name.split("/", 1)[0]
+        return provider_name
+
+    def _resolve_model_overrides(self) -> dict[str, str]:
+        """Resolve effective model overrides for the active provider set."""
+
+        overrides = dict(self._config.model_overrides)
+        subagent_overrides = get_model_overrides(self._subagent_config or {}, self._resolved_mode)
+        subagent_data = (
+            subagent_overrides.model_dump(exclude_none=True) if subagent_overrides else {}
+        )
+
+        for provider_name in self._provider_names:
+            if "/" in provider_name and provider_name != "openrouter":
+                continue
+
+            identity = self._provider_identity(provider_name)
+            if provider_name in overrides:
+                continue
+            if identity in overrides:
+                overrides[provider_name] = overrides[identity]
+                continue
+            explicit_default_model = self._configured_default_model_for_provider(provider_name)
+            if explicit_default_model:
+                overrides[provider_name] = explicit_default_model
+                continue
+            if self._config.model_pack is not None:
+                default_model = self._default_model_for_provider(identity)
+                if default_model:
+                    overrides[provider_name] = default_model
+                    continue
+            if identity in subagent_data:
+                overrides[provider_name] = subagent_data[identity]
+                continue
+
+            default_model = self._default_model_for_provider(identity)
+            if default_model:
+                overrides[provider_name] = default_model
+
+        return overrides
+
+    def _configured_default_model_for_provider(self, provider_name: str) -> str | None:
+        """Return an explicit user-configured default model for a provider, if any."""
+
+        identity = self._provider_identity(provider_name)
+        for key in (provider_name, identity):
+            config = self._config.provider_configs.get(key)
+            if not isinstance(config, dict):
+                continue
+            default_model = config.get("default_model")
+            if isinstance(default_model, str) and default_model.strip():
+                return default_model.strip()
+        return None
+
+    def _default_model_for_provider(self, provider_name: str) -> str | None:
+        """Resolve a default model override from subagent model packs when safe."""
+
+        if self._subagent_config is None:
+            return None
+
+        if provider_name == "openrouter":
+            if self._config.models and len(self._config.models) == 1:
+                return self._config.models[0]
+            return get_model_for_subagent(
+                self._subagent_config,
+                self._resolved_mode,
+                model_pack=self._resolved_model_pack,
+            )
+
+        model_id = get_model_for_subagent(
+            self._subagent_config,
+            self._resolved_mode,
+            model_pack=self._resolved_model_pack,
+        )
+        if "/" not in model_id:
+            return None
+
+        model_provider, provider_model = model_id.split("/", 1)
+        if model_provider == provider_name:
+            return provider_model
+
+        return None
+
+    def _phase_temperature(self, default: float) -> float:
+        """Return phase temperature, honoring global override when set."""
+
+        return self._config.temperature if self._config.temperature is not None else default
+
+    def _provider_request_timeout_seconds(self, phase: str) -> float:
+        """Return a provider request timeout that settles just before the outer run timeout."""
+
+        base_timeout = max(float(self._config.timeout) - 1.0, 1.0)
+        if self._config.runtime_profile == RuntimeProfile.BOUNDED:
+            bounded_caps = {
+                "draft": 15.0,
+                "critique": 10.0,
+                "synthesis": 15.0,
+            }
+            return max(min(base_timeout, bounded_caps.get(phase, base_timeout)), 1.0)
+
+        return base_timeout
+
+    def _provider_retry_budget(self) -> int:
+        """Return the provider-level retry budget for degradation handling."""
+
+        if self._config.runtime_profile == RuntimeProfile.BOUNDED:
+            return 0
+        return 2
+
+    def _phase_max_tokens(self, default: int, *, phase: str) -> int:
+        """Return phase token limit, honoring runtime and global overrides."""
+
+        if self._config.max_tokens is not None:
+            return self._config.max_tokens
+
+        if self._config.runtime_profile == RuntimeProfile.BOUNDED:
+            bounded_caps = {
+                "draft": 2000,
+                "critique": 1200,
+                "synthesis": 3000,
+            }
+            return min(default, bounded_caps.get(phase, default))
+
+        return default
+
+    async def _collect_evidence_for_run(self) -> EvidenceBundle:
+        """Collect local evidence for capability-backed runs."""
+
+        if self._task is None or self._subagent_name is None or self._capability_plan is None:
+            return EvidenceBundle()
+        if self._config.disable_local_evidence:
+            return EvidenceBundle(
+                executed_capabilities=[],
+                pending_capabilities=list(self._capability_plan.required_capabilities),
+                items=[],
+            )
+
+        bundle = await collect_capability_evidence(
+            self._task,
+            self._subagent_name,
+            self._resolved_mode,
+            self._capability_plan,
+        )
+
+        if self._execution_plan is not None:
+            self._execution_plan["executed_capabilities"] = list(bundle.executed_capabilities)
+            self._execution_plan["pending_capabilities"] = list(bundle.pending_capabilities)
+            self._execution_plan["evidence_items"] = len(bundle.items)
+
+        return bundle
+
+    def _build_evidence_requirements_block(self) -> str:
+        """Build guidance block for non-prompt-only execution profiles."""
+
+        if self._capability_plan is None:
+            return ""
+        if self._capability_plan.execution_profile == "prompt_only":
+            return ""
+        if not self._capability_plan.evidence_requirements:
+            return ""
+
+        requirements = "\n".join(
+            f"- {item}" for item in self._capability_plan.evidence_requirements
+        )
+        return (
+            "## Execution Requirements\n"
+            f"This run is classified as `{self._capability_plan.execution_profile}` "
+            f"with budget `{self._capability_plan.budget_class}`.\n"
+            "Ground high-confidence claims in the provided context. If evidence is missing, "
+            "say so explicitly instead of fabricating support.\n"
+            + (
+                "Local evidence collection is disabled for this run. Use only the provided "
+                "reference material and state any resulting blind spots explicitly.\n"
+                if self._config.disable_local_evidence
+                else ""
+            )
+            + "\n"
+            f"{requirements}"
+        )
+
+    def _build_collected_evidence_block(self) -> str:
+        """Render collected runtime evidence into prompt context."""
+
+        if self._evidence_bundle is None:
+            return ""
+        return self._evidence_bundle.to_prompt_block()
 
     def _record_usage(self, provider: str, usage: Mapping[str, int] | None) -> None:
         """Accumulate token usage and call counts for cost estimation."""
@@ -613,6 +1301,42 @@ class Orchestrator:
                 return ValidationResult(ok=False, errors=errors, raw=raw_text)
 
         return ValidationResult(ok=True, data=parsed, raw=raw_text)
+
+    def _fallback_synthesis_from_drafts(
+        self, drafts: Mapping[str, str], phase_error: Exception
+    ) -> tuple[ValidationResult, int]:
+        """Attempt to recover a final result from any successful draft output."""
+
+        reason = self._format_exception_chain(phase_error)
+        fallback_errors: list[str] = []
+
+        for provider_name, draft_text in drafts.items():
+            if not draft_text:
+                continue
+
+            validation = self._validate_response(draft_text)
+            if validation.ok:
+                note = f"Synthesis failed ({reason}); used validated draft output from {provider_name}."
+                self._append_degradation_note(note)
+                self._record_degraded_output("draft", provider_name, reason)
+                return (
+                    ValidationResult(
+                        ok=True,
+                        data=validation.data,
+                        raw=validation.raw,
+                        errors=[*validation.errors, note],
+                    ),
+                    0,
+                )
+
+            fallback_errors.extend(
+                f"Draft fallback {provider_name}: {error}" for error in validation.errors
+            )
+
+        note = f"Synthesis failed ({reason}); no validated draft fallback available."
+        self._append_degradation_note(note)
+        self._record_degraded_output("none", None, reason)
+        return (ValidationResult(ok=False, errors=[note, *fallback_errors]), 0)
 
     def _extract_json(self, text: str) -> dict[str, Any] | None:
         """Extract the first JSON object from a response string.
@@ -715,24 +1439,50 @@ class Orchestrator:
         """Format the draft prompt with task details."""
 
         context_block = self._build_context_block()
+        collected_evidence = self._build_collected_evidence_block()
+        evidence_block = self._build_evidence_requirements_block()
         schema_hint = ""
         if self._schema:
-            schema_hint = "\nReturn a draft that aligns with the JSON schema."
+            if self._config.runtime_profile == RuntimeProfile.BOUNDED:
+                schema_hint = (
+                    "\nReturn a concise draft analysis, not final JSON. Focus on the highest-signal "
+                    "findings with short evidence-backed notes. Keep the draft brief."
+                )
+            else:
+                schema_hint = "\nReturn a draft that aligns with the JSON schema."
         tier_hint = f"\nSummary tier: {self._config.summary_tier.value}"
-        return f"Task:\n{task}\n{context_block}{schema_hint}{tier_hint}\n"
+        return (
+            f"Task:\n{task}\n{context_block}{collected_evidence}{evidence_block}"
+            f"{schema_hint}{tier_hint}\n"
+        )
 
     def _format_critique_prompt(self, task: str, drafts: dict[str, str]) -> str:
         """Format critique prompt with all drafts."""
 
         context_block = self._build_context_block()
+        collected_evidence = self._build_collected_evidence_block()
+        evidence_block = self._build_evidence_requirements_block()
         draft_blocks = "\n\n".join(
-            f"Provider: {name}\nDraft:\n{content}" for name, content in drafts.items()
+            f"Provider: {name}\nDraft:\n{content}"
+            for name, content in drafts.items()
+            if content.strip()
         )
+        if not draft_blocks:
+            draft_blocks = "No successful draft responses available."
         schema_hint = ""
-        if self._schema:
+        if self._schema and self._config.runtime_profile != RuntimeProfile.BOUNDED:
             schema_hint = "\nSchema (JSON):\n" + json.dumps(self._schema, indent=2)
+        elif self._schema:
+            schema_hint = (
+                "\nFocus on correctness and contradictions in the draft analyses. Do not produce final "
+                "JSON; synthesis will handle the schema."
+            )
         tier_hint = f"\nSummary tier: {self._config.summary_tier.value}"
-        return f"Task:\n{task}\n{context_block}{schema_hint}{tier_hint}\n\nDrafts:\n{draft_blocks}"
+        return (
+            f"Task:\n{task}\n{context_block}{collected_evidence}{evidence_block}"
+            f"{schema_hint}{tier_hint}\n\n"
+            f"Drafts:\n{draft_blocks}"
+        )
 
     def _format_synthesis_prompt(
         self,
@@ -745,13 +1495,19 @@ class Orchestrator:
         """Format synthesis prompt."""
 
         context_block = self._build_context_block()
+        collected_evidence = self._build_collected_evidence_block()
+        evidence_block = self._build_evidence_requirements_block()
         draft_blocks = "\n\n".join(
-            f"Provider: {name}\nDraft:\n{content}" for name, content in drafts.items()
+            f"Provider: {name}\nDraft:\n{content}"
+            for name, content in drafts.items()
+            if content.strip()
         )
+        if not draft_blocks:
+            draft_blocks = "No successful draft responses available."
         schema_block = json.dumps(schema, indent=2) if schema else "{}"
         error_block = "\n".join(f"- {err}" for err in errors) if errors else "None"
         return (
-            f"Task:\n{task}\n{context_block}\n"
+            f"Task:\n{task}\n{context_block}{collected_evidence}{evidence_block}\n"
             f"Schema (JSON):\n{schema_block}\n\n"
             f"Summary tier: {self._config.summary_tier.value}\n\n"
             f"Critique:\n{critique}\n\n"
@@ -763,27 +1519,67 @@ class Orchestrator:
     def _model_override(self, provider_name: str) -> str | None:
         """Return the model override for a provider if configured."""
 
-        return self._config.model_overrides.get(provider_name)
+        return self._resolved_model_overrides.get(
+            provider_name
+        ) or self._config.model_overrides.get(provider_name)
 
-    async def _select_provider_for_phase(self, phase: str) -> tuple[str, ProviderAdapter]:
-        """Select a provider adapter for a given phase.
+    async def _candidate_providers_for_phase(self, phase: str) -> list[tuple[str, ProviderAdapter]]:
+        """Return ordered healthy provider candidates for a phase."""
 
-        Selection rules:
-        - For synthesis: prefer a provider that supports structured output (JSON schema).
-        - Otherwise: use the first configured provider that is available.
-        """
-
-        if not self._providers:
-            raise RuntimeError("No providers available for selection.")
+        healthy = [
+            (name, provider)
+            for name, provider in self._providers.items()
+            if name not in self._provider_init_errors
+        ]
+        if not healthy:
+            return []
 
         if phase == "synthesis":
-            for name, provider in self._providers.items():
+            structured = []
+            fallback = []
+            for name, provider in healthy:
                 if await provider.supports("structured_output"):
-                    return name, provider
+                    structured.append((name, provider))
+                else:
+                    fallback.append((name, provider))
+            return structured or fallback
 
-        # Fallback: first available provider.
-        name = next(iter(self._providers.keys()))
-        return name, self._providers[name]
+        return healthy
+
+    def _record_phase_provider_candidates(self, phase: str, provider_names: list[str]) -> None:
+        """Record ordered candidate providers for a phase in the execution plan."""
+
+        if self._execution_plan is None:
+            return
+        phase_candidates = self._execution_plan.setdefault("phase_provider_candidates", {})
+        phase_candidates[phase] = provider_names
+
+    def _record_phase_provider_used(self, phase: str, provider_name: str) -> None:
+        """Record the provider that succeeded for a phase in the execution plan."""
+
+        if self._execution_plan is None:
+            return
+        phase_used = self._execution_plan.setdefault("phase_provider_used", {})
+        phase_used[phase] = provider_name
+
+    def _append_degradation_note(self, note: str) -> None:
+        """Append a human-readable degradation note to the execution plan."""
+
+        if self._execution_plan is None:
+            return
+        notes = self._execution_plan.setdefault("degradation_notes", [])
+        notes.append(note)
+
+    def _record_degraded_output(self, source: str, provider_name: str | None, reason: str) -> None:
+        """Record when the final output came from a degraded fallback path."""
+
+        if self._execution_plan is None:
+            return
+        self._execution_plan["degraded_output"] = {
+            "source": source,
+            "provider": provider_name,
+            "reason": reason,
+        }
 
     async def _timed(
         self, coro_factory: Callable[[], Awaitable[T]], phase: str
@@ -814,7 +1610,7 @@ class Orchestrator:
             except Exception as exc:
                 return name, DoctorResult(ok=False, message=str(exc))
 
-        pairs = await asyncio.gather(*[_check(name) for name in self._provider_names])
+        pairs = await asyncio.gather(*[_check(name) for name in self._configured_provider_names])
         for name, result in pairs:
             results[name] = result.model_dump()
         return results
@@ -826,8 +1622,6 @@ class Orchestrator:
         and only 'openrouter' is in the provider list, this method creates virtual
         providers for each model to enable parallel drafts from different LLMs.
         """
-        from llm_council.providers.openrouter import create_openrouter_for_model
-
         self._providers = {}
         self._provider_init_errors = {}
 
@@ -844,20 +1638,13 @@ class Orchestrator:
                 len(models),
                 ", ".join(models),
             )
-            for model in models:
-                # Use model name as provider name (e.g., "anthropic/claude-3.5-sonnet")
-                try:
-                    self._providers[model] = create_openrouter_for_model(model)
-                except Exception as exc:
-                    self._provider_init_errors[model] = str(exc)
+            self._providers, self._provider_init_errors = self._instantiate_providers(
+                list(models), treat_as_models=True
+            )
         else:
-            # Standard provider initialization
-            for name in self._provider_names:
-                try:
-                    kwargs = self._config.provider_configs.get(name, {})
-                    self._providers[name] = self._registry.get_provider(name, **kwargs)
-                except Exception as exc:
-                    self._provider_init_errors[name] = str(exc)
+            self._providers, self._provider_init_errors = self._instantiate_providers(
+                self._provider_names
+            )
 
         if self._provider_init_errors:
             logger.debug("Provider initialization errors: %s", self._provider_init_errors)
