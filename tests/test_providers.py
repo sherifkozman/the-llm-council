@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -369,7 +371,11 @@ class TestProviderTransportDefaults:
         """OpenAI should use explicit transport timeout and no SDK retries."""
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
-        with patch("openai.AsyncOpenAI") as mock_client:
+        openai_module = ModuleType("openai")
+        mock_client = MagicMock()
+        openai_module.AsyncOpenAI = mock_client
+
+        with patch.dict(sys.modules, {"openai": openai_module}):
             provider = OpenAIProvider()
             provider._get_client()
 
@@ -381,7 +387,17 @@ class TestProviderTransportDefaults:
         """Google provider should clamp SDK timeout and retry attempts."""
         monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
 
-        with patch("google.genai.Client") as mock_client:
+        google_module = ModuleType("google")
+        genai_module = ModuleType("google.genai")
+        mock_client = MagicMock()
+        genai_module.Client = mock_client
+        genai_module.types = SimpleNamespace(
+            HttpOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+            HttpRetryOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+        google_module.genai = genai_module
+
+        with patch.dict(sys.modules, {"google": google_module, "google.genai": genai_module}):
             provider = GoogleProvider()
             provider._get_client()
 
@@ -393,7 +409,17 @@ class TestProviderTransportDefaults:
         """Vertex Gemini client should use the same bounded HTTP settings."""
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
 
-        with patch("google.genai.Client") as mock_client:
+        google_module = ModuleType("google")
+        genai_module = ModuleType("google.genai")
+        mock_client = MagicMock()
+        genai_module.Client = mock_client
+        genai_module.types = SimpleNamespace(
+            HttpOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+            HttpRetryOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+        google_module.genai = genai_module
+
+        with patch.dict(sys.modules, {"google": google_module, "google.genai": genai_module}):
             provider = VertexAIProvider()
             provider._get_gemini_client()
 
