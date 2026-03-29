@@ -57,7 +57,9 @@ $ council run drafter --mode arch "Design a mass hallucination prevention system
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Type checked: mypy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
 
-A Multi-LLM Council Framework that orchestrates multiple LLM backends to enable **adversarial debate**, **cross-validation**, and **structured decision-making**.
+A multi-model orchestration package that runs adversarial council workflows across OpenAI, Anthropic, Google, Vertex, OpenRouter, and local CLIs.
+
+This is not a Claude-only framework. Claude Code is one supported client and one supported provider path among several.
 
 This release also includes a mode-aware execution path with runtime profiles,
 routed handoff, capability planning, and deterministic eval tooling. Those
@@ -131,9 +133,16 @@ pip install the-llm-council[all]
 pip install the-llm-council[dev]
 ```
 
-## Agent Skills (Claude Code, OpenAI Codex, Cursor, etc.)
+## Agent Skills and Plugins
 
-The LLM Council is available as an **Agent Skill** following the open [Agent Skills](https://agentskills.io) standard. This works across Claude Code, OpenAI Codex, Cursor, VS Code, and other skill-compatible agents.
+The LLM Council is available as an **Agent Skill** following the open [Agent Skills](https://agentskills.io) standard. It works across OpenAI Codex, Claude Code, Cursor, VS Code, and other skill-compatible agents.
+
+### OpenAI Codex
+
+```bash
+# Copy skills directory to Codex skills location
+cp -r skills/council ~/.codex/skills/
+```
 
 ### Claude Code
 
@@ -149,13 +158,6 @@ Once installed, the `council` skill is auto-invoked when relevant, or use the `/
 
 ```
 /council drafter --mode impl "Build a login page with OAuth"
-```
-
-### OpenAI Codex
-
-```bash
-# Copy skills directory to Codex skills location
-cp -r skills/council ~/.codex/skills/
 ```
 
 ### Other Agents (Cursor, VS Code, GitHub, etc.)

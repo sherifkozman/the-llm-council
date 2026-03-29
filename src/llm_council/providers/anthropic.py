@@ -54,42 +54,73 @@ STRUCTURED_OUTPUT_MODELS = frozenset(
     }
 )
 
+_SCHEMA_META_FIELDS = frozenset({"$schema", "$id", "$ref", "$comment"})
+_ANTHROPIC_UNSUPPORTED_SCHEMA_FIELDS = frozenset(
+    {
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "format",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "minProperties",
+        "maxProperties",
+        "default",
+        "examples",
+        "const",
+    }
+)
 
-def _strip_schema_meta_fields(schema: dict[str, Any]) -> dict[str, Any]:
-    """Strip meta fields from JSON schema that Anthropic's API doesn't need.
 
-    Removes `$schema` and other JSON Schema meta fields that aren't part
-    of the actual schema definition.
+def _prepare_schema_for_anthropic(schema: dict[str, Any]) -> dict[str, Any]:
+    """Normalize JSON schema for Anthropic structured outputs.
 
-    Args:
-        schema: The original JSON schema.
-
-    Returns:
-        A new schema without meta fields.
+    Anthropic's structured-output API is stricter than our local Draft7 validation:
+    nested object schemas must also declare `additionalProperties: false`.
+    We normalize the schema here so shipped council schemas remain provider-agnostic
+    while Anthropic still receives a strict closed-object schema.
     """
-    result: dict[str, Any] = {}
 
-    for key, value in schema.items():
-        # Skip $schema and other meta fields
-        if key in ("$schema", "$id", "$ref", "$comment"):
-            continue
+    def _normalize(node: Any) -> Any:
+        if isinstance(node, dict):
+            result: dict[str, Any] = {}
 
-        if isinstance(value, dict):
-            # Recursively process nested objects
-            result[key] = _strip_schema_meta_fields(value)
-        elif isinstance(value, list):
-            # Process arrays that might contain schemas
-            result[key] = [
-                _strip_schema_meta_fields(item) if isinstance(item, dict) else item
-                for item in value
-            ]
-        else:
-            result[key] = value
+            for key, value in node.items():
+                if key in _SCHEMA_META_FIELDS or key in _ANTHROPIC_UNSUPPORTED_SCHEMA_FIELDS:
+                    continue
+                result[key] = _normalize(value)
 
-    return result
+            if result.get("type") == "object" and "additionalProperties" not in result:
+                result["additionalProperties"] = False
+
+            return result
+
+        if isinstance(node, list):
+            return [_normalize(item) for item in node]
+
+        return node
+
+    return _normalize(schema)
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_structured_output_schema_error(error: Exception | str) -> bool:
+    """Return True when Anthropic rejects the JSON schema itself."""
+    text = str(error).lower()
+    return (
+        "output_format.schema" in text
+        or "too many optional parameters" in text
+        or "grammar compilation" in text
+        or "not supported" in text and "schema" in text
+    )
 
 
 class AnthropicProvider(ProviderAdapter):
@@ -194,7 +225,7 @@ class AnthropicProvider(ProviderAdapter):
                 # Strip $schema and other meta fields
                 kwargs["output_format"] = {
                     "type": "json_schema",
-                    "schema": _strip_schema_meta_fields(
+                    "schema": _prepare_schema_for_anthropic(
                         dict(request.structured_output.json_schema)
                     ),
                 }
@@ -218,7 +249,7 @@ class AnthropicProvider(ProviderAdapter):
                 if schema:
                     kwargs["output_format"] = {
                         "type": "json_schema",
-                        "schema": dict(schema),
+                        "schema": _prepare_schema_for_anthropic(dict(schema)),
                     }
             # Note: simple json_object mode is not supported by Anthropic API
 
@@ -243,11 +274,33 @@ class AnthropicProvider(ProviderAdapter):
         if request.stream:
             return self._generate_stream(client, kwargs, use_beta=use_beta)
 
+        structured_output_requested = "output_format" in kwargs
+
         if use_beta:
-            response = await client.beta.messages.create(
-                betas=[STRUCTURED_OUTPUTS_BETA],
-                **kwargs,
-            )
+            try:
+                response = await client.beta.messages.create(
+                    betas=[STRUCTURED_OUTPUTS_BETA],
+                    **kwargs,
+                )
+            except Exception as exc:
+                if not structured_output_requested or not _is_structured_output_schema_error(exc):
+                    raise
+
+                logger.warning(
+                    "Anthropic rejected structured output schema; retrying without "
+                    "output_format. Error: %s",
+                    exc,
+                )
+                retry_kwargs = dict(kwargs)
+                retry_kwargs.pop("output_format", None)
+
+                if "thinking" in retry_kwargs:
+                    response = await client.beta.messages.create(
+                        betas=[STRUCTURED_OUTPUTS_BETA],
+                        **retry_kwargs,
+                    )
+                else:
+                    response = await client.messages.create(**retry_kwargs)
         else:
             response = await client.messages.create(**kwargs)
         return self._parse_response(response)

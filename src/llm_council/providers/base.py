@@ -77,6 +77,8 @@ _MODEL_UNAVAILABLE_PATTERNS = (
     "model is not supported when using codex with a chatgpt account",
     "not supported when using codex with a chatgpt account",
     "unsupported model",
+    "publisher model",
+    "project does not have access to it",
 )
 
 _TIMEOUT_PATTERNS = (
@@ -85,6 +87,8 @@ _TIMEOUT_PATTERNS = (
     "read timed out",
     "request timed out",
     "deadline exceeded",
+    "deadline_exceeded",
+    "deadline expired",
 )
 
 _NETWORK_PATTERNS = (

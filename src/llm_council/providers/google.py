@@ -195,39 +195,52 @@ class GoogleProvider(ProviderAdapter):
         )
         self._client: Any = None
 
-    def _get_client(self) -> Any:
-        """Get or create the Google GenAI client."""
-        if self._client is None:
-            try:
-                from google import genai
-            except ImportError as e:
-                raise ImportError(
-                    "The 'google-genai' package is required for the Google provider. "
-                    "Install it with: pip install the-llm-council[google]"
-                ) from e
+    def _client_timeout_ms(self, request: GenerateRequest | None = None) -> int:
+        """Resolve the SDK timeout for a request."""
+        if request and request.timeout_seconds is not None:
+            return max(int(request.timeout_seconds * 1000), 1)
+        return self._timeout_ms
 
-            if not self._api_key:
-                raise ValueError(
-                    "Google AI API key not configured. "
-                    "Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable or pass api_key."
-                )
+    def _build_client(self, *, timeout_ms: int) -> Any:
+        """Build a Google GenAI client with the requested timeout."""
+        try:
+            from google import genai
+        except ImportError as e:
+            raise ImportError(
+                "The 'google-genai' package is required for the Google provider. "
+                "Install it with: pip install the-llm-council[google]"
+            ) from e
 
-            self._client = genai.Client(
-                api_key=self._api_key,
-                http_options=genai.types.HttpOptions(
-                    timeout=self._timeout_ms,
-                    retry_options=genai.types.HttpRetryOptions(
-                        attempts=self._retry_attempts,
-                    ),
-                ),
+        if not self._api_key:
+            raise ValueError(
+                "Google AI API key not configured. "
+                "Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable or pass api_key."
             )
+
+        return genai.Client(
+            api_key=self._api_key,
+            http_options=genai.types.HttpOptions(
+                timeout=timeout_ms,
+                retry_options=genai.types.HttpRetryOptions(
+                    attempts=self._retry_attempts,
+                ),
+            ),
+        )
+
+    def _get_client(self, *, timeout_ms: int | None = None) -> Any:
+        """Get or create the Google GenAI client."""
+        resolved_timeout = timeout_ms or self._timeout_ms
+        if resolved_timeout != self._timeout_ms:
+            return self._build_client(timeout_ms=resolved_timeout)
+        if self._client is None:
+            self._client = self._build_client(timeout_ms=resolved_timeout)
         return self._client
 
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate a response using Google AI API."""
-        client = self._get_client()
+        client = self._get_client(timeout_ms=self._client_timeout_ms(request))
         model = request.model or self._default_model
 
         # Build content - new SDK uses simple string or list format

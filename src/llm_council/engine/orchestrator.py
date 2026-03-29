@@ -20,6 +20,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from contextlib import contextmanager
 from typing import (
     Any,
     TypeVar,
@@ -66,6 +67,11 @@ from llm_council.subagents import (
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_CHUNKING_PROVIDER_IDENTITIES = frozenset({"vertex-ai", "google"})
+_CHUNKING_CONTEXT_CHAR_THRESHOLD = 60_000
+_CHUNKING_TARGET_CHARS = 60_000
+_CHUNKED_DRAFT_MAX_TOKENS = 900
 
 
 class OrchestratorConfig(BaseModel):
@@ -271,6 +277,7 @@ class Orchestrator:
         self._degradation_policy: DegradationPolicy | None = None
         self._health_report: HealthReport | None = None
         self._run_id: str | None = None
+        self._phase_context_override: str | None = None
 
         if self._config.enable_artifacts:
             self._artifact_store = get_store(enabled=True)
@@ -294,6 +301,7 @@ class Orchestrator:
         self._run_id = None
         self._execution_plan = None
         self._evidence_bundle = None
+        self._phase_context_override = None
         phase_timings: list[PhaseTiming] = []
         start_time = time.monotonic()
 
@@ -559,7 +567,11 @@ class Orchestrator:
             "You are an adversarial reviewer. Identify errors, gaps, contradictions, "
             "and schema violations. Provide concrete fixes."
         )
-        user_prompt = self._format_critique_prompt(self._task, drafts)
+        user_prompt = self._format_critique_prompt(
+            self._task,
+            drafts,
+            context_override=self._phase_context_override,
+        )
         last_error: Exception | None = None
 
         for index, (provider_name, adapter) in enumerate(candidates):
@@ -577,6 +589,14 @@ class Orchestrator:
                 ),
                 temperature=self._phase_temperature(self._config.critique_temperature),
                 reasoning=self._reasoning,
+            )
+            self._record_phase_prompt_metrics(
+                "critique",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                provider_name=provider_name,
+                max_tokens=request.max_tokens,
+                timeout_seconds=request.timeout_seconds,
             )
             try:
                 response = await self._call_provider(
@@ -628,6 +648,7 @@ class Orchestrator:
                     critique=critique,
                     schema=schema,
                     errors=errors,
+                    context_override=self._phase_context_override,
                 )
 
                 request = GenerateRequest(
@@ -653,6 +674,16 @@ class Orchestrator:
                         name=self._subagent_name or "council_output",
                         strict=True,
                     )
+                self._record_phase_prompt_metrics(
+                    "synthesis",
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    provider_name=provider_name,
+                    max_tokens=request.max_tokens,
+                    timeout_seconds=request.timeout_seconds,
+                    structured_output=request.structured_output is not None,
+                    attempt=total_attempts,
+                )
 
                 try:
                     response = await self._call_provider(
@@ -702,6 +733,66 @@ class Orchestrator:
             temperature=self._phase_temperature(self._config.draft_temperature),
             reasoning=self._reasoning,
         )
+        chunk_plan = self._draft_chunk_plan(provider_name, system_prompt, user_prompt)
+        if chunk_plan is not None:
+            self._phase_context_override = chunk_plan["prefix"] or None
+            if self._execution_plan is not None:
+                self._execution_plan["draft_execution"] = {
+                    "strategy": "chunked_context",
+                    "chunk_count": chunk_plan["chunk_count"],
+                    "reason": chunk_plan["reason"],
+                    "estimated_input_tokens": chunk_plan["estimated_input_tokens"],
+                    "replayed_context_chars": len(self._phase_context_override or ""),
+                }
+            chunk_results: list[str] = []
+            for index, chunk in enumerate(chunk_plan["chunks"], start=1):
+                chunk_context = self._render_file_context(chunk_plan["prefix"], chunk)
+                chunk_user_prompt = self._format_draft_prompt_with_context(self._task, chunk_context)
+                chunk_user_prompt += (
+                    "\n\nChunking mode constraints:\n"
+                    "- Cover only the files in this slice.\n"
+                    "- Do not repeat generic package-level conclusions across chunks.\n"
+                    "- Return at most 5 concrete findings and keep the response under 450 words.\n"
+                    "- Prefer terse bullets with direct evidence over narrative prose.\n"
+                )
+                chunk_request = request.model_copy(
+                    update={
+                        "messages": [
+                            Message(role="system", content=system_prompt),
+                            Message(role="user", content=chunk_user_prompt),
+                        ],
+                        "max_tokens": min(
+                            request.max_tokens or _CHUNKED_DRAFT_MAX_TOKENS,
+                            _CHUNKED_DRAFT_MAX_TOKENS,
+                        ),
+                    }
+                )
+                self._record_phase_prompt_metrics(
+                    "draft",
+                    system_prompt=system_prompt,
+                    user_prompt=chunk_user_prompt,
+                    provider_name=provider_name,
+                    max_tokens=chunk_request.max_tokens,
+                    timeout_seconds=chunk_request.timeout_seconds,
+                    attempt=index,
+                )
+                response = await self._call_provider(provider_name, adapter, chunk_request)
+                labels = ", ".join(path for path, _content in chunk)
+                chunk_results.append(
+                    f"Chunk {index}/{chunk_plan['chunk_count']} ({labels}):\n{response.text or ''}"
+                )
+            return provider_name, "\n\n".join(chunk_results).strip()
+        self._phase_context_override = None
+        self._record_phase_prompt_metrics(
+            "draft",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            provider_name=provider_name,
+            max_tokens=request.max_tokens,
+            timeout_seconds=request.timeout_seconds,
+        )
+        if self._execution_plan is not None:
+            self._execution_plan["draft_execution"] = {"strategy": "single_run"}
         response = await self._call_provider(provider_name, adapter, request)
         return provider_name, response.text or ""
 
@@ -850,6 +941,7 @@ class Orchestrator:
                     provider_name=self._provider_names[0] if len(self._provider_names) == 1 else None,
                 ),
             },
+            "phase_prompt_metrics": {},
             "model_overrides": dict(self._resolved_model_overrides),
             "reasoning": self._reasoning.model_dump(exclude_none=True) if self._reasoning else None,
             "execution_profile": (
@@ -874,6 +966,7 @@ class Orchestrator:
             ),
             "evidence_items": 0,
         }
+        self._execution_plan["preflight_estimate"] = self._build_preflight_estimate()
 
     def _build_reasoning_config(self, budget: Any) -> ReasoningConfig | None:
         """Convert a reasoning budget config into a provider-agnostic request config."""
@@ -1183,6 +1276,12 @@ class Orchestrator:
                     "critique": 25.0,
                     "synthesis": 40.0,
                 }
+            elif provider_name in {"vertex-ai", "google"}:
+                bounded_caps = {
+                    "draft": 45.0,
+                    "critique": 30.0,
+                    "synthesis": 45.0,
+                }
             return max(min(base_timeout, bounded_caps.get(phase, base_timeout)), 1.0)
 
         return base_timeout
@@ -1282,6 +1381,47 @@ class Orchestrator:
         completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         self._input_tokens[provider] = self._input_tokens.get(provider, 0) + prompt_tokens
         self._output_tokens[provider] = self._output_tokens.get(provider, 0) + completion_tokens
+
+    def _estimate_input_tokens(self, *parts: str) -> int:
+        """Return a lightweight token estimate for prompt diagnostics."""
+
+        total_chars = sum(len(part) for part in parts)
+        if total_chars <= 0:
+            return 0
+        return max((total_chars + 3) // 4, 1)
+
+    def _record_phase_prompt_metrics(
+        self,
+        phase: str,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        provider_name: str,
+        max_tokens: int | None,
+        timeout_seconds: float | None,
+        structured_output: bool = False,
+        attempt: int | None = None,
+    ) -> None:
+        """Record prompt sizing diagnostics for the current phase."""
+
+        if self._execution_plan is None:
+            return
+
+        metrics = self._execution_plan.setdefault("phase_prompt_metrics", {})
+        entries = metrics.setdefault(phase, [])
+        entries.append(
+            {
+                "provider": provider_name,
+                "attempt": attempt or (len(entries) + 1),
+                "system_chars": len(system_prompt),
+                "user_chars": len(user_prompt),
+                "total_chars": len(system_prompt) + len(user_prompt),
+                "estimated_input_tokens": self._estimate_input_tokens(system_prompt, user_prompt),
+                "max_output_tokens": max_tokens,
+                "timeout_seconds": timeout_seconds,
+                "structured_output": structured_output,
+            }
+        )
 
     def _build_cost_estimate(self) -> CostEstimate:
         """Compute a cost estimate from recorded token usage."""
@@ -1437,14 +1577,14 @@ class Orchestrator:
 
         return None
 
-    def _build_context_block(self) -> str:
+    def _build_context_block(self, context_override: str | None = None) -> str:
         """Build a context block from system_context if present.
 
         The context is wrapped in XML delimiters to clearly separate
         user-provided content from system instructions, reducing
         prompt injection risk.
         """
-        ctx = self._config.system_context
+        ctx = self._config.system_context if context_override is None else context_override
         if not ctx:
             return ""
         return (
@@ -1457,6 +1597,163 @@ class Orchestrator:
             f"{ctx}\n"
             "</reference_material>\n"
         )
+
+    def _extract_file_context_blocks(self) -> tuple[str, list[tuple[str, str]]]:
+        """Parse CLI-injected file context blocks from system_context."""
+
+        ctx = self._config.system_context or ""
+        if not ctx:
+            return "", []
+
+        lines = ctx.splitlines(keepends=True)
+        prefix_parts: list[str] = []
+        blocks: list[tuple[str, str]] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith("=== FILE: ") and line.rstrip("\n").endswith(" ==="):
+                path = line.rstrip("\n")[10:-4]
+                i += 1
+                content_parts: list[str] = []
+                end_marker = f"=== END: {path} ==="
+                while i < len(lines) and lines[i].rstrip("\n") != end_marker:
+                    content_parts.append(lines[i])
+                    i += 1
+                if i < len(lines):
+                    blocks.append((path, "".join(content_parts).rstrip("\n")))
+                    i += 1
+                    if i < len(lines) and lines[i] == "\n":
+                        i += 1
+                    continue
+            prefix_parts.append(line)
+            i += 1
+        return "".join(prefix_parts).strip(), blocks
+
+    def _render_file_context(self, prefix: str, blocks: Sequence[tuple[str, str]]) -> str:
+        """Render file context blocks back into the CLI-injected format."""
+
+        parts: list[str] = []
+        if prefix:
+            parts.append(prefix)
+        for path, content in blocks:
+            parts.append(f"=== FILE: {path} ===\n{content}\n=== END: {path} ===")
+        return "\n\n".join(part for part in parts if part)
+
+    def _chunk_file_context_blocks(
+        self, blocks: Sequence[tuple[str, str]], *, target_chars: int
+    ) -> list[list[tuple[str, str]]]:
+        """Greedily group file blocks into bounded context chunks."""
+
+        chunks: list[list[tuple[str, str]]] = []
+        current: list[tuple[str, str]] = []
+        current_chars = 0
+        for path, content in blocks:
+            block_chars = len(path) + len(content) + 32
+            if current and current_chars + block_chars > target_chars:
+                chunks.append(current)
+                current = []
+                current_chars = 0
+            current.append((path, content))
+            current_chars += block_chars
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def _draft_chunk_plan(
+        self, provider_name: str, system_prompt: str, user_prompt: str
+    ) -> dict[str, Any] | None:
+        """Return chunking metadata when a draft prompt should be split."""
+
+        if provider_name not in _CHUNKING_PROVIDER_IDENTITIES:
+            return None
+        if self._config.runtime_profile != RuntimeProfile.BOUNDED:
+            return None
+        prefix, blocks = self._extract_file_context_blocks()
+        if len(blocks) <= 1:
+            return None
+        total_chars = len(system_prompt) + len(user_prompt)
+        if total_chars < _CHUNKING_CONTEXT_CHAR_THRESHOLD:
+            return None
+        chunks = self._chunk_file_context_blocks(blocks, target_chars=_CHUNKING_TARGET_CHARS)
+        if len(chunks) <= 1:
+            return None
+        return {
+            "provider": provider_name,
+            "chunk_count": len(chunks),
+            "prefix": prefix,
+            "chunks": chunks,
+            "estimated_input_tokens": self._estimate_input_tokens(system_prompt, user_prompt),
+            "reason": "large_reference_context",
+        }
+
+    def _build_preflight_estimate(self) -> dict[str, Any]:
+        """Build a rough execution estimate for client-facing planning."""
+
+        provider_name = self._provider_names[0] if len(self._provider_names) == 1 else None
+        prefix, blocks = self._extract_file_context_blocks()
+        has_file_blocks = bool(blocks)
+        request_strategy = "single_run"
+        planned_draft_calls = 1
+        if (
+            provider_name in _CHUNKING_PROVIDER_IDENTITIES
+            and self._config.runtime_profile == RuntimeProfile.BOUNDED
+            and len(blocks) > 1
+        ):
+            total_context_chars = len(self._config.system_context or "")
+            if total_context_chars >= _CHUNKING_CONTEXT_CHAR_THRESHOLD:
+                request_strategy = "chunked_context"
+                planned_draft_calls = len(
+                    self._chunk_file_context_blocks(blocks, target_chars=_CHUNKING_TARGET_CHARS)
+                )
+
+        draft_timeout = self._provider_request_timeout_seconds("draft", provider_name=provider_name)
+        critique_timeout = self._provider_request_timeout_seconds(
+            "critique", provider_name=provider_name
+        )
+        synthesis_timeout = self._provider_request_timeout_seconds(
+            "synthesis", provider_name=provider_name
+        )
+        worst_case_seconds = int(planned_draft_calls * draft_timeout + critique_timeout + synthesis_timeout)
+        average_seconds = int(
+            planned_draft_calls * (draft_timeout * 0.55)
+            + (critique_timeout * 0.5)
+            + (synthesis_timeout * 0.6)
+        )
+        return {
+            "request_strategy": request_strategy,
+            "provider": provider_name,
+            "file_blocks": len(blocks),
+            "prefix_context_chars": len(prefix),
+            "reference_context_chars": len(self._config.system_context or ""),
+            "estimated_input_tokens": self._estimate_input_tokens(self._config.system_context or ""),
+            "planned_call_count": {
+                "draft": planned_draft_calls,
+                "critique": 1,
+                "synthesis": 1,
+                "total": planned_draft_calls + 2,
+            },
+            "estimated_duration_seconds": {
+                "average": average_seconds,
+                "upper_bound": worst_case_seconds,
+            },
+            "chunking": {
+                "enabled": request_strategy == "chunked_context",
+                "target_context_chars": _CHUNKING_TARGET_CHARS,
+                "trigger_context_chars": _CHUNKING_CONTEXT_CHAR_THRESHOLD,
+                "has_file_blocks": has_file_blocks,
+            },
+        }
+
+    @contextmanager
+    def _temporary_context_override(self, context_override: str | None):
+        """Temporarily swap the configured system context for prompt rendering."""
+
+        original_context = self._config.system_context
+        try:
+            self._config.system_context = context_override
+            yield
+        finally:
+            self._config.system_context = original_context
 
     def _format_draft_prompt(self, task: str) -> str:
         """Format the draft prompt with task details."""
@@ -1479,10 +1776,22 @@ class Orchestrator:
             f"{schema_hint}{tier_hint}\n"
         )
 
-    def _format_critique_prompt(self, task: str, drafts: dict[str, str]) -> str:
+    def _format_draft_prompt_with_context(self, task: str, context_override: str | None) -> str:
+        """Format a draft prompt against an alternate reference context."""
+
+        with self._temporary_context_override(context_override):
+            return self._format_draft_prompt(task)
+
+    def _format_critique_prompt(
+        self,
+        task: str,
+        drafts: dict[str, str],
+        *,
+        context_override: str | None = None,
+    ) -> str:
         """Format critique prompt with all drafts."""
 
-        context_block = self._build_context_block()
+        context_block = self._build_context_block(context_override)
         collected_evidence = self._build_collected_evidence_block()
         evidence_block = self._build_evidence_requirements_block()
         draft_blocks = "\n\n".join(
@@ -1514,10 +1823,12 @@ class Orchestrator:
         critique: str,
         schema: dict[str, Any] | None,
         errors: Iterable[str],
+        *,
+        context_override: str | None = None,
     ) -> str:
         """Format synthesis prompt."""
 
-        context_block = self._build_context_block()
+        context_block = self._build_context_block(context_override)
         collected_evidence = self._build_collected_evidence_block()
         evidence_block = self._build_evidence_requirements_block()
         draft_blocks = "\n\n".join(

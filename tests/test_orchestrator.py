@@ -41,11 +41,13 @@ class CaptureProvider(ProviderAdapter):
 
     def __init__(self) -> None:
         self.last_request: GenerateRequest | None = None
+        self.requests: list[GenerateRequest] = []
 
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         self.last_request = request
+        self.requests.append(request)
         return GenerateResponse(text='{"ok": true}')
 
     async def supports(self, capability: str) -> bool:
@@ -53,6 +55,23 @@ class CaptureProvider(ProviderAdapter):
 
     async def doctor(self) -> DoctorResult:
         return DoctorResult(ok=True, message="ok")
+
+
+def build_file_system_context(*, file_count: int = 3, file_chars: int = 35000) -> str:
+    """Build CLI-style file context large enough to trigger chunking tests."""
+
+    blocks = ["Repository: spark-review"]
+    for index in range(1, file_count + 1):
+        blocks.append(
+            "\n".join(
+                [
+                    f"=== FILE: docs/file-{index}.md ===",
+                    f"section-{index}: " + ("x" * file_chars),
+                    f"=== END: docs/file-{index}.md ===",
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
 
 
 class TestOrchestratorConfig:
@@ -381,6 +400,24 @@ class TestOrchestratorValidation:
         assert orch._provider_request_timeout_seconds("draft", provider_name="codex") == 30.0
         assert orch._provider_request_timeout_seconds("critique", provider_name="codex") == 25.0
         assert orch._provider_request_timeout_seconds("synthesis", provider_name="codex") == 40.0
+
+    def test_bounded_runtime_profile_allows_longer_vertex_phase_caps(self):
+        """Vertex/Google get larger bounded caps because 15s is too tight for real review calls."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=60)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["vertex-ai"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="vertex-ai") == 45.0
+        assert (
+            orch._provider_request_timeout_seconds("critique", provider_name="vertex-ai")
+            == 30.0
+        )
+        assert (
+            orch._provider_request_timeout_seconds("synthesis", provider_name="vertex-ai")
+            == 45.0
+        )
 
 
 class TestOrchestratorDoctor:
@@ -742,6 +779,161 @@ class TestOrchestratorRuntimeTruthfulness:
             "vertex-ai",
         ]
         assert orch._execution_plan["phase_provider_used"]["synthesis"] == "vertex-ai"
+
+    @pytest.mark.asyncio
+    async def test_phase_prompt_metrics_capture_prompt_sizes(self):
+        """Execution plan should record prompt sizing diagnostics per phase."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED)
+        provider = CaptureProvider()
+
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = provider
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["vertex-ai"], config=config)
+
+        orch._task = "Review this change"
+        orch._subagent_name = "critic"
+        orch._prepare_run("critic")
+
+        _, draft_text = await orch._generate_draft("vertex-ai", provider)
+        await orch._run_critique({"vertex-ai": draft_text})
+        orch._schema = {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        }
+        await orch._run_synthesis({"vertex-ai": draft_text}, "critique text")
+
+        assert orch._execution_plan is not None
+        metrics = orch._execution_plan["phase_prompt_metrics"]
+        assert set(metrics) == {"draft", "critique", "synthesis"}
+        assert metrics["draft"][0]["provider"] == "vertex-ai"
+        assert metrics["draft"][0]["timeout_seconds"] == 45.0
+        assert metrics["draft"][0]["estimated_input_tokens"] > 0
+        assert metrics["critique"][0]["timeout_seconds"] == 30.0
+        assert metrics["synthesis"][0]["structured_output"] is True
+
+    def test_prepare_run_records_chunked_preflight_estimate_for_large_vertex_context(self):
+        """Large bounded Vertex runs should expose chunked preflight estimates."""
+        config = OrchestratorConfig(
+            runtime_profile=RuntimeProfile.BOUNDED,
+            system_context=build_file_system_context(),
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = MagicMock()
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["vertex-ai"], config=config)
+
+        orch._prepare_run("critic")
+
+        assert orch._execution_plan is not None
+        preflight = orch._execution_plan["preflight_estimate"]
+        assert preflight["request_strategy"] == "chunked_context"
+        assert preflight["provider"] == "vertex-ai"
+        assert preflight["file_blocks"] == 3
+        assert preflight["planned_call_count"]["draft"] == 3
+        assert preflight["planned_call_count"]["total"] == 5
+        assert preflight["estimated_duration_seconds"]["upper_bound"] == 210
+        assert preflight["estimated_duration_seconds"]["average"] == 116
+        assert preflight["chunking"]["enabled"] is True
+
+    def test_prepare_run_chunks_vertex_context_before_downstream_prompts_blow_up(self):
+        """Vertex should chunk once file context is large enough to destabilize later phases."""
+        config = OrchestratorConfig(
+            runtime_profile=RuntimeProfile.BOUNDED,
+            system_context=build_file_system_context(file_chars=22000),
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = MagicMock()
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["vertex-ai"], config=config)
+
+        orch._prepare_run("critic")
+
+        assert orch._execution_plan is not None
+        preflight = orch._execution_plan["preflight_estimate"]
+        assert preflight["request_strategy"] == "chunked_context"
+        assert preflight["planned_call_count"]["draft"] == 2
+        assert preflight["estimated_duration_seconds"]["upper_bound"] == 165
+        assert preflight["estimated_duration_seconds"]["average"] == 91
+
+    @pytest.mark.asyncio
+    async def test_generate_draft_chunks_large_vertex_context(self):
+        """Large bounded Vertex drafts should split file context into multiple calls."""
+        config = OrchestratorConfig(
+            runtime_profile=RuntimeProfile.BOUNDED,
+            system_context=build_file_system_context(),
+        )
+        provider = CaptureProvider()
+
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = provider
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["vertex-ai"], config=config)
+
+        orch._task = "Review this change"
+        orch._subagent_name = "critic"
+        orch._prepare_run("critic")
+
+        _, draft_text = await orch._generate_draft("vertex-ai", provider)
+
+        assert len(provider.requests) == 3
+        assert draft_text.count("Chunk ") == 3
+        assert orch._execution_plan is not None
+        assert orch._execution_plan["draft_execution"]["strategy"] == "chunked_context"
+        assert orch._execution_plan["draft_execution"]["chunk_count"] == 3
+        assert orch._execution_plan["draft_execution"]["replayed_context_chars"] == len(
+            "Repository: spark-review"
+        )
+        assert orch._phase_context_override == "Repository: spark-review"
+        for request in provider.requests:
+            assert request.messages is not None
+            assert request.max_tokens == 900
+            user_prompt = request.messages[1].content
+            assert user_prompt.count("=== FILE:") == 1
+            assert "Chunking mode constraints:" in user_prompt
+
+    @pytest.mark.asyncio
+    async def test_chunked_vertex_later_phases_do_not_replay_raw_file_context(self):
+        """Critique and synthesis should drop raw file blocks after chunked drafts."""
+        config = OrchestratorConfig(
+            runtime_profile=RuntimeProfile.BOUNDED,
+            system_context=build_file_system_context(),
+        )
+        provider = CaptureProvider()
+
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = provider
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["vertex-ai"], config=config)
+
+        orch._task = "Review this change"
+        orch._subagent_name = "critic"
+        orch._prepare_run("critic")
+
+        _, draft_text = await orch._generate_draft("vertex-ai", provider)
+        await orch._run_critique({"vertex-ai": draft_text})
+        orch._schema = {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        }
+        await orch._run_synthesis({"vertex-ai": draft_text}, "critique text")
+
+        critique_prompt = provider.requests[3].messages[1].content
+        synthesis_prompt = provider.requests[4].messages[1].content
+
+        assert "Repository: spark-review" in critique_prompt
+        assert "Repository: spark-review" in synthesis_prompt
+        assert "=== FILE:" not in critique_prompt
+        assert "=== FILE:" not in synthesis_prompt
+        assert orch._execution_plan is not None
+        assert orch._execution_plan["phase_prompt_metrics"]["synthesis"][0]["structured_output"] is True
 
     @pytest.mark.asyncio
     async def test_run_continues_without_critique_when_critique_fails(self):

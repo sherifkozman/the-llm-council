@@ -13,6 +13,7 @@ from llm_council.providers.anthropic import (
 )
 from llm_council.providers.anthropic import (
     AnthropicProvider,
+    _prepare_schema_for_anthropic,
 )
 from llm_council.providers.base import (
     DoctorResult,
@@ -21,6 +22,7 @@ from llm_council.providers.base import (
     GenerateResponse,
     Message,
     ProviderCapabilities,
+    StructuredOutputConfig,
     classify_error,
 )
 from llm_council.providers.cli.claude_code import ClaudeCodeCLIProvider
@@ -243,6 +245,10 @@ class TestErrorClassification:
         assert classify_error("The operation did not complete (read timed out)") == (
             ErrorType.TIMEOUT
         )
+        assert classify_error("504 DEADLINE_EXCEEDED") == ErrorType.TIMEOUT
+        assert classify_error("Deadline expired before operation could complete.") == (
+            ErrorType.TIMEOUT
+        )
 
     def test_invalid_request_error_is_not_treated_as_auth(self):
         """Generic invalid request errors should not be mislabeled as auth failures."""
@@ -255,6 +261,135 @@ class TestErrorClassification:
         assert classify_error(
             "The 'gpt-5.4-codex' model is not supported when using Codex with a ChatGPT account."
         ) == ErrorType.MODEL_UNAVAILABLE
+
+    def test_vertex_model_not_found_is_model_unavailable(self):
+        """Vertex publisher model access failures should classify as model availability issues."""
+        assert classify_error(
+            "404 NOT_FOUND. Publisher Model was not found or your project does not have access to it."
+        ) == ErrorType.MODEL_UNAVAILABLE
+
+
+class TestAnthropicStructuredSchemaNormalization:
+    """Tests for Anthropic structured-output schema preparation."""
+
+    def test_prepare_schema_for_anthropic_strips_meta_and_closes_nested_objects(self):
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "decision_context": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "properties": {
+                        "question": {"type": "string"},
+                        "metadata": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "string", "minLength": 1},
+                            },
+                        },
+                    },
+                },
+                "criteria": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "maxLength": 20},
+                            "score": {"type": "number", "minimum": 0, "maximum": 10},
+                        },
+                    },
+                },
+            },
+        }
+
+        normalized = _prepare_schema_for_anthropic(schema)
+
+        assert "$schema" not in normalized
+        assert "minProperties" not in normalized["properties"]["decision_context"]
+        assert (
+            "minLength"
+            not in normalized["properties"]["decision_context"]["properties"]["metadata"][
+                "properties"
+            ]["source"]
+        )
+        assert "minItems" not in normalized["properties"]["criteria"]
+        assert normalized["additionalProperties"] is False
+        assert normalized["properties"]["decision_context"]["additionalProperties"] is False
+        assert (
+            normalized["properties"]["decision_context"]["properties"]["metadata"][
+                "additionalProperties"
+            ]
+            is False
+        )
+        assert normalized["properties"]["criteria"]["items"]["additionalProperties"] is False
+        assert "maximum" not in normalized["properties"]["criteria"]["items"]["properties"]["score"]
+
+    def test_prepare_schema_for_anthropic_preserves_existing_additional_properties(self):
+        schema = {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                }
+            },
+        }
+
+        normalized = _prepare_schema_for_anthropic(schema)
+
+        assert normalized["additionalProperties"] is True
+        assert normalized["properties"]["payload"]["additionalProperties"] == {"type": "string"}
+
+
+class TestAnthropicStructuredOutputFallback:
+    """Tests for Anthropic structured-output fallback behavior."""
+
+    @pytest.mark.asyncio
+    async def test_generate_retries_without_output_format_on_schema_rejection(self):
+        provider = AnthropicProvider(api_key="test-key")
+        client = AsyncMock()
+        provider._client = client
+
+        structured_error = RuntimeError(
+            "output_format.schema: For 'number' type, properties maximum, minimum are not supported"
+        )
+        beta_response = SimpleNamespace(
+            content=[SimpleNamespace(text='{"review_summary":"ok"}')],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+
+        client.beta.messages.create = AsyncMock(side_effect=[structured_error])
+        client.messages.create = AsyncMock(return_value=beta_response)
+
+        request = GenerateRequest(
+            messages=[Message(role="user", content="Return JSON")],
+            model="claude-opus-4-6",
+            structured_output=StructuredOutputConfig(
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "number", "minimum": 0, "maximum": 10},
+                    },
+                    "required": ["score"],
+                    "additionalProperties": False,
+                }
+            ),
+        )
+
+        response = await provider.generate(request)
+
+        assert response.text == '{"review_summary":"ok"}'
+        assert client.beta.messages.create.await_count == 1
+        assert client.messages.create.await_count == 1
+        first_kwargs = client.beta.messages.create.await_args_list[0].kwargs
+        second_kwargs = client.messages.create.await_args_list[0].kwargs
+        assert "output_format" in first_kwargs
+        assert "output_format" not in second_kwargs
 
 
 class TestMockProvider:

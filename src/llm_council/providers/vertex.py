@@ -29,9 +29,9 @@ from llm_council.providers.anthropic import (
     STRUCTURED_OUTPUTS_BETA,
 )
 
-# Import shared schema stripping from anthropic provider
+# Import shared schema normalization from anthropic provider
 from llm_council.providers.anthropic import (
-    _strip_schema_meta_fields as _strip_anthropic_schema_fields,
+    _prepare_schema_for_anthropic,
 )
 from llm_council.providers.base import (
     DoctorResult,
@@ -185,42 +185,52 @@ class VertexAIProvider(ProviderAdapter):
         """Check if a model is a Claude model."""
         return any(model.startswith(prefix) for prefix in CLAUDE_MODEL_PREFIXES)
 
-    def _get_gemini_client(self) -> Any:
-        """Get or create the Gemini Vertex AI client."""
-        if self._gemini_client is None:
-            try:
-                from google import genai
-            except ImportError as e:
-                raise ImportError(
-                    "The 'google-genai' package is required for Gemini on Vertex AI. "
-                    "Install it with: pip install the-llm-council[vertex]"
-                ) from e
+    def _client_timeout_ms(self, request: GenerateRequest | None = None) -> int:
+        """Resolve the SDK timeout for a request."""
+        if request and request.timeout_seconds is not None:
+            return max(int(request.timeout_seconds * 1000), 1)
+        return self._timeout_ms
 
-            if not self._project:
-                raise ValueError(
-                    "Google Cloud project not configured for Gemini. "
-                    "Set GOOGLE_CLOUD_PROJECT environment variable or pass project parameter."
-                )
+    def _build_gemini_client(self, *, timeout_ms: int) -> Any:
+        """Build a Gemini Vertex AI client with the requested timeout."""
+        try:
+            from google import genai
+        except ImportError as e:
+            raise ImportError(
+                "The 'google-genai' package is required for Gemini on Vertex AI. "
+                "Install it with: pip install the-llm-council[vertex]"
+            ) from e
 
-            # Load credentials if not provided
-            credentials = self._credentials
-            if credentials is None:
-                credentials = self._load_credentials()
-
-            # Create client with Vertex AI backend
-            self._gemini_client = genai.Client(
-                vertexai=True,
-                project=self._project,
-                location=self._location,
-                credentials=credentials,
-                http_options=genai.types.HttpOptions(
-                    timeout=self._timeout_ms,
-                    retry_options=genai.types.HttpRetryOptions(
-                        attempts=self._retry_attempts,
-                    ),
-                ),
+        if not self._project:
+            raise ValueError(
+                "Google Cloud project not configured for Gemini. "
+                "Set GOOGLE_CLOUD_PROJECT environment variable or pass project parameter."
             )
 
+        credentials = self._credentials
+        if credentials is None:
+            credentials = self._load_credentials()
+
+        return genai.Client(
+            vertexai=True,
+            project=self._project,
+            location=self._location,
+            credentials=credentials,
+            http_options=genai.types.HttpOptions(
+                timeout=timeout_ms,
+                retry_options=genai.types.HttpRetryOptions(
+                    attempts=self._retry_attempts,
+                ),
+            ),
+        )
+
+    def _get_gemini_client(self, *, timeout_ms: int | None = None) -> Any:
+        """Get or create the Gemini Vertex AI client."""
+        resolved_timeout = timeout_ms or self._timeout_ms
+        if resolved_timeout != self._timeout_ms:
+            return self._build_gemini_client(timeout_ms=resolved_timeout)
+        if self._gemini_client is None:
+            self._gemini_client = self._build_gemini_client(timeout_ms=resolved_timeout)
         return self._gemini_client
 
     def _get_claude_client(self) -> Any:
@@ -285,7 +295,7 @@ class VertexAIProvider(ProviderAdapter):
         self, request: GenerateRequest, model: str
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate response using Gemini via google-genai SDK."""
-        client = self._get_gemini_client()
+        client = self._get_gemini_client(timeout_ms=self._client_timeout_ms(request))
 
         # Build content - same format as GoogleProvider
         contents: str | list[dict[str, Any]]
@@ -444,7 +454,7 @@ class VertexAIProvider(ProviderAdapter):
                 use_beta = True
                 kwargs["output_format"] = {
                     "type": "json_schema",
-                    "schema": _strip_anthropic_schema_fields(
+                    "schema": _prepare_schema_for_anthropic(
                         dict(request.structured_output.json_schema)
                     ),
                 }
