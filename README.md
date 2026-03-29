@@ -96,17 +96,20 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 |-------------|---------|
 | **Python** | 3.10, 3.11, or 3.12 |
 | **OS** | macOS, Linux, Windows (native or WSL) |
-| **API Key** | At least one provider key (see below) |
+| **Credentials** | At least one provider credential or authenticated local CLI (see below) |
 
 ### Supported Providers
 
-| Provider | Environment Variable | Notes |
-|----------|---------------------|-------|
+| Provider | Environment Variable / Auth | Notes |
+|----------|-----------------------------|-------|
 | OpenRouter | `OPENROUTER_API_KEY` | **Recommended** - single key for all models |
-| OpenAI | `OPENAI_API_KEY` | Direct GPT access |
-| Anthropic | `ANTHROPIC_API_KEY` | Direct Claude access |
-| Gemini API | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
+| OpenAI | `OPENAI_API_KEY` | Direct OpenAI API access (GPT models) |
+| Anthropic | `ANTHROPIC_API_KEY` | Direct Anthropic API access (Claude models) |
+| Gemini API | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini API access |
 | Vertex AI | `GOOGLE_CLOUD_PROJECT` or `ANTHROPIC_VERTEX_PROJECT_ID` + ADC | Enterprise GCP - Gemini + Claude |
+| Claude Code | Local `claude` CLI login | CLI subprocess provider |
+| Codex CLI | Local `codex` CLI login | CLI subprocess provider |
+| Gemini CLI | Local `gemini` CLI login | CLI subprocess provider |
 
 ## Installation
 

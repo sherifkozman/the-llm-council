@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-03-28
+
+### Changed
+- tightened provider/model wording in the README and direct-API quickstart so API providers, model families, and CLI providers are named explicitly
+- reframed CLI provider docs around local CLI tooling and CLI-managed auth instead of implying those flows are inherently offline
+- refreshed the direct-API pricing table to current March 2026 provider pricing and updated the Gemini fast-model reference to `Gemini 3 Flash Preview`
+
 ## [0.7.4] - 2026-03-28
 
 ### Changed

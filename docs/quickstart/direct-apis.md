@@ -9,14 +9,14 @@ While OpenRouter is recommended for most users, direct APIs may be preferable wh
 - You need features only available in native SDKs
 - You want guaranteed model versions without routing
 - You have enterprise agreements with specific providers
-- You're developing offline with local models
+- You want direct provider integrations without an extra routing layer
 
 ## Prerequisites
 
 Install provider-specific dependencies:
 
 ```bash
-# For Anthropic (Claude)
+# For Anthropic API (Claude models)
 pip install the-llm-council[anthropic]
 
 # For OpenAI (GPT)
@@ -32,7 +32,7 @@ pip install the-llm-council[vertex]
 pip install the-llm-council[all]
 ```
 
-## Anthropic (Claude)
+## Anthropic API (Claude models)
 
 ### Setup
 
@@ -550,17 +550,17 @@ This checks:
 
 ## Cost Comparison
 
-Approximate costs per 1M tokens (as of 2026):
+Approximate costs per 1M tokens (verified against provider pricing pages in March 2026):
 
 | Provider | Model | Input | Output |
 |----------|-------|-------|--------|
-| Anthropic | Claude Sonnet 4.6 | $3 | $15 |
-| Anthropic | Claude Opus 4.6 | $15 | $75 |
-| Anthropic | Claude Haiku 4.5 | $0.25 | $1.25 |
-| OpenAI | GPT-5.4 | $5 | $15 |
-| OpenAI | GPT-5.4 Mini | $0.50 | $1.50 |
-| Gemini API | Gemini 3.1 Pro | $3.50 | $10.50 |
-| Gemini API | Gemini 2.5 Flash | $0.35 | $1.05 |
+| Anthropic | Claude Sonnet 4.6 | $3.00 | $15.00 |
+| Anthropic | Claude Opus 4.6 | $5.00 | $25.00 |
+| Anthropic | Claude Haiku 4.5 | $1.00 | $5.00 |
+| OpenAI | GPT-5.4 | $2.50 | $15.00 |
+| OpenAI | GPT-5.4 Mini | $0.75 | $4.50 |
+| Gemini API | Gemini 3 Pro Preview (`<=200k` / `>200k` prompts) | $2.00 / $4.00 | $12.00 / $18.00 |
+| Gemini API | Gemini 3 Flash Preview | $0.50 | $3.00 |
 
 Track your costs:
 
@@ -573,9 +573,10 @@ if result.cost_estimate:
     print(f"Output tokens: {result.cost_estimate.total_output_tokens}")
 ```
 
-## CLI Providers (Offline/Local)
+## CLI Providers (Local CLI Tooling)
 
-For local or offline use, LLM Council supports CLI-based providers:
+For teams that prefer local CLI tooling and CLI-managed auth, LLM Council also
+supports CLI-based providers:
 
 ### Codex CLI
 
@@ -599,9 +600,10 @@ council run researcher "AI safety research" --providers gemini-cli
 for, such as Gemini API key or Vertex AI. Council preserves that CLI auth
 choice instead of overriding it.
 
-CLI providers execute local commands instead of making API calls, useful for:
-- Air-gapped environments
-- Local model inference
+CLI providers execute local commands instead of calling provider SDKs directly,
+useful for:
+- Local CLI-managed authentication
+- Existing CLI-based workflows
 - Custom LLM wrappers
 
 ## Next Steps
