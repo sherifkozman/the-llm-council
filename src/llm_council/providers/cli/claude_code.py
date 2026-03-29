@@ -19,7 +19,7 @@ import logging
 import os
 import shutil
 from collections.abc import AsyncIterator
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -46,6 +46,69 @@ _ENV_ALLOWLIST = {
     "LANG",
     "LC_ALL",
 }
+
+
+def _extract_text_payload(payload: Any) -> str:
+    """Extract text from Claude Code JSON envelopes."""
+
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        text = payload.get("text")
+        if isinstance(text, str):
+            return text
+        for key in ("result", "response", "message", "content"):
+            nested = _extract_text_payload(payload.get(key))
+            if nested:
+                return nested
+        return ""
+    if isinstance(payload, list):
+        parts: list[str] = []
+        seen: set[str] = set()
+        for item in payload:
+            text = _extract_text_payload(item).strip()
+            if text and text not in seen:
+                seen.add(text)
+                parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
+def _normalize_usage(raw_usage: Any) -> dict[str, int] | None:
+    """Normalize Claude Code usage payloads to council's usage shape."""
+
+    if not isinstance(raw_usage, dict):
+        return None
+    input_tokens = int(raw_usage.get("input_tokens", 0) or 0) + int(
+        raw_usage.get("cache_read_input_tokens", 0) or 0
+    )
+    output_tokens = int(raw_usage.get("output_tokens", 0) or 0)
+    return {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
+def _extract_usage_payload(payload: Any) -> dict[str, int] | None:
+    """Find a Claude Code usage block in nested JSON payloads."""
+
+    if isinstance(payload, dict):
+        usage = _normalize_usage(payload.get("usage"))
+        if usage is not None:
+            return usage
+        for key in ("result", "response", "message", "content"):
+            nested = _extract_usage_payload(payload.get(key))
+            if nested is not None:
+                return nested
+    elif isinstance(payload, list):
+        for item in reversed(payload):
+            nested = _extract_usage_payload(item)
+            if nested is not None:
+                return nested
+    return None
 
 
 class ClaudeCodeCLIProvider(ProviderAdapter):
@@ -176,25 +239,16 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             else:
                 raise RuntimeError(f"CLI failed ({error_type.value}): {stderr_text}")
 
-        # Parse JSON output from --output-format json
+        # Parse JSON output from --output-format json.
         output = ""
         usage = None
         try:
             data = json.loads(stdout_text)
-            if data.get("is_error"):
-                raise RuntimeError(f"Claude Code error: {data.get('result', 'Unknown error')}")
-            output = data.get("result", "")
-            raw_usage = data.get("usage", {})
-            if raw_usage:
-                input_tokens = raw_usage.get("input_tokens", 0) + raw_usage.get(
-                    "cache_read_input_tokens", 0
-                )
-                output_tokens = raw_usage.get("output_tokens", 0)
-                usage = {
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
-                }
+            if isinstance(data, dict) and data.get("is_error"):
+                error_text = _extract_text_payload(data.get("result")) or "Unknown error"
+                raise RuntimeError(f"Claude Code error: {error_text}")
+            output = _extract_text_payload(data)
+            usage = _extract_usage_payload(data)
         except json.JSONDecodeError:
             # Fall back to raw text if JSON parsing fails
             output = stdout_text
@@ -207,6 +261,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             text=output,
             content=output,
             usage=usage,
+            raw={"stdout": stdout_text, "stderr": stderr_text},
         )
 
     async def supports(self, capability: str) -> bool:

@@ -154,7 +154,7 @@ def get_billing_help_url(provider: str) -> str:
     """Get the billing help URL for a provider.
 
     Args:
-        provider: Provider name (e.g., "openai", "anthropic", "google")
+        provider: Provider name (e.g., "openai", "anthropic", "gemini")
 
     Returns:
         URL to the provider's billing page

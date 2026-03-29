@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from llm_council.config.models import (
     ModelPack,
@@ -61,9 +61,22 @@ class ModelOverrides(BaseModel):
         default=None,
         description="Anthropic model to use (e.g., 'claude-opus-4-6').",
     )
-    google: str | None = Field(
+    gemini: str | None = Field(
         default=None,
-        description="Google model to use (e.g., 'gemini-3-flash-preview').",
+        validation_alias=AliasChoices("gemini", "google"),
+        description="Gemini API model to use (e.g., 'gemini-3-flash-preview').",
+    )
+    gemini_cli: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("gemini_cli", "gemini-cli"),
+        serialization_alias="gemini-cli",
+        description="Gemini CLI model to use (e.g., 'gemini-3-flash-preview').",
+    )
+    vertex_ai: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("vertex_ai", "vertex-ai"),
+        serialization_alias="vertex-ai",
+        description="Vertex AI model to use (e.g., 'gemini-3.1-pro-preview').",
     )
     openrouter: str | None = Field(
         default=None,
@@ -72,7 +85,10 @@ class ModelOverrides(BaseModel):
 
     def get_for_provider(self, provider_name: str) -> str | None:
         """Get model override for a specific provider."""
-        return getattr(self, provider_name, None)
+        normalized = provider_name.replace("-", "_")
+        if provider_name == "google":
+            normalized = "gemini"
+        return getattr(self, normalized, None)
 
 
 class ReasoningBudget(BaseModel):

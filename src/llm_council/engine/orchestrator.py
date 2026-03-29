@@ -49,6 +49,7 @@ from llm_council.providers.base import (
     ReasoningConfig,
     StructuredOutputConfig,
 )
+from llm_council.providers.concurrency import provider_call_slot
 from llm_council.providers.registry import get_registry
 from llm_council.schemas import load_schema
 from llm_council.storage.artifacts import ArtifactStore, ArtifactType, get_store
@@ -68,7 +69,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-_CHUNKING_PROVIDER_IDENTITIES = frozenset({"vertex-ai", "google"})
+_CHUNKING_PROVIDER_IDENTITIES = frozenset({"vertex-ai", "gemini", "gemini-cli"})
 _CHUNKING_CONTEXT_CHAR_THRESHOLD = 60_000
 _CHUNKING_TARGET_CHARS = 60_000
 _CHUNKED_DRAFT_MAX_TOKENS = 900
@@ -603,6 +604,7 @@ class Orchestrator:
                     provider_name,
                     adapter,
                     request,
+                    phase="critique",
                     remaining_providers=max(len(candidates) - index - 1, 0),
                 )
             except Exception as exc:
@@ -690,6 +692,7 @@ class Orchestrator:
                         provider_name,
                         adapter,
                         request,
+                        phase="synthesis",
                         remaining_providers=max(len(candidates) - provider_index - 1, 0),
                     )
                 except Exception as exc:
@@ -776,7 +779,12 @@ class Orchestrator:
                     timeout_seconds=chunk_request.timeout_seconds,
                     attempt=index,
                 )
-                response = await self._call_provider(provider_name, adapter, chunk_request)
+                response = await self._call_provider(
+                    provider_name,
+                    adapter,
+                    chunk_request,
+                    phase="draft",
+                )
                 labels = ", ".join(path for path, _content in chunk)
                 chunk_results.append(
                     f"Chunk {index}/{chunk_plan['chunk_count']} ({labels}):\n{response.text or ''}"
@@ -793,7 +801,7 @@ class Orchestrator:
         )
         if self._execution_plan is not None:
             self._execution_plan["draft_execution"] = {"strategy": "single_run"}
-        response = await self._call_provider(provider_name, adapter, request)
+        response = await self._call_provider(provider_name, adapter, request, phase="draft")
         return provider_name, response.text or ""
 
     async def _call_provider(
@@ -802,6 +810,7 @@ class Orchestrator:
         adapter: ProviderAdapter,
         request: GenerateRequest,
         *,
+        phase: str | None = None,
         remaining_providers: int | None = None,
     ) -> GenerateResponse:
         """Execute a provider request with timeout and usage tracking."""
@@ -818,15 +827,25 @@ class Orchestrator:
 
         while True:
             try:
-                result = await asyncio.wait_for(
-                    adapter.generate(request), timeout=self._config.timeout
-                )
-                if isinstance(result, GenerateResponse):
-                    response = result
-                else:
-                    response = await asyncio.wait_for(
-                        _consume_stream(result), timeout=self._config.timeout
+                slot_timeout = request.timeout_seconds or float(self._config.timeout)
+                async with provider_call_slot(
+                    provider_name,
+                    timeout_seconds=max(float(slot_timeout), 1.0),
+                ) as queue_wait_ms:
+                    self._record_provider_queue_wait(
+                        phase=phase,
+                        provider_name=provider_name,
+                        wait_ms=queue_wait_ms,
                     )
+                    result = await asyncio.wait_for(
+                        adapter.generate(request), timeout=self._config.timeout
+                    )
+                    if isinstance(result, GenerateResponse):
+                        response = result
+                    else:
+                        response = await asyncio.wait_for(
+                            _consume_stream(result), timeout=self._config.timeout
+                        )
 
                 self._record_usage(provider_name, response.usage)
                 return response
@@ -902,6 +921,7 @@ class Orchestrator:
         self._initialize_providers()
 
         self._resolved_model_overrides = self._resolve_model_overrides()
+        provider_timeout_map = self._provider_request_timeout_map()
         self._execution_plan = {
             "subagent": subagent,
             "mode": self._resolved_mode,
@@ -927,20 +947,17 @@ class Orchestrator:
                     phase="synthesis",
                 ),
             },
-            "provider_request_timeouts": {
-                "draft": self._provider_request_timeout_seconds(
-                    "draft",
-                    provider_name=self._provider_names[0] if len(self._provider_names) == 1 else None,
-                ),
-                "critique": self._provider_request_timeout_seconds(
-                    "critique",
-                    provider_name=self._provider_names[0] if len(self._provider_names) == 1 else None,
-                ),
-                "synthesis": self._provider_request_timeout_seconds(
-                    "synthesis",
-                    provider_name=self._provider_names[0] if len(self._provider_names) == 1 else None,
-                ),
-            },
+            "provider_request_timeouts": (
+                provider_timeout_map[self._provider_names[0]]
+                if len(self._provider_names) == 1
+                else {
+                    "draft": self._provider_request_timeout_seconds("draft"),
+                    "critique": self._provider_request_timeout_seconds("critique"),
+                    "synthesis": self._provider_request_timeout_seconds("synthesis"),
+                }
+            ),
+            "provider_request_timeouts_by_provider": provider_timeout_map,
+            "provider_queue_wait_ms": {},
             "phase_prompt_metrics": {},
             "model_overrides": dict(self._resolved_model_overrides),
             "reasoning": self._reasoning.model_dump(exclude_none=True) if self._reasoning else None,
@@ -1276,15 +1293,73 @@ class Orchestrator:
                     "critique": 25.0,
                     "synthesis": 40.0,
                 }
-            elif provider_name in {"vertex-ai", "google"}:
+            elif provider_name == "claude":
                 bounded_caps = {
                     "draft": 45.0,
                     "critique": 30.0,
                     "synthesis": 45.0,
                 }
+            elif provider_name in {"openai", "anthropic"}:
+                bounded_caps = {
+                    "draft": 30.0,
+                    "critique": 20.0,
+                    "synthesis": 35.0,
+                }
+            elif provider_name == "vertex-ai":
+                bounded_caps = {
+                    "draft": 45.0,
+                    "critique": 30.0,
+                    "synthesis": 45.0,
+                }
+            elif provider_name == "gemini":
+                bounded_caps = {
+                    "draft": 45.0,
+                    "critique": 30.0,
+                    "synthesis": 45.0,
+                }
+            elif provider_name == "gemini-cli":
+                bounded_caps = {
+                    "draft": 60.0,
+                    "critique": 45.0,
+                    "synthesis": 90.0,
+                }
             return max(min(base_timeout, bounded_caps.get(phase, base_timeout)), 1.0)
 
         return base_timeout
+
+    def _provider_request_timeout_map(self) -> dict[str, dict[str, float]]:
+        """Return provider-specific phase timeout caps for the current run."""
+
+        return {
+            provider_name: {
+                "draft": self._provider_request_timeout_seconds(
+                    "draft", provider_name=provider_name
+                ),
+                "critique": self._provider_request_timeout_seconds(
+                    "critique", provider_name=provider_name
+                ),
+                "synthesis": self._provider_request_timeout_seconds(
+                    "synthesis", provider_name=provider_name
+                ),
+            }
+            for provider_name in self._provider_names
+        }
+
+    def _preflight_duration_basis_provider(self) -> str | None:
+        """Choose the provider whose phase caps should anchor preflight ETA."""
+
+        if not self._provider_names:
+            return None
+        timeout_map = self._provider_request_timeout_map()
+        return max(
+            self._provider_names,
+            key=lambda provider_name: (
+                timeout_map[provider_name]["draft"],
+                timeout_map[provider_name]["critique"],
+                timeout_map[provider_name]["synthesis"],
+                provider_name in _CHUNKING_PROVIDER_IDENTITIES,
+            ),
+        )
 
     def _provider_retry_budget(self) -> int:
         """Return the provider-level retry budget for degradation handling."""
@@ -1422,6 +1497,22 @@ class Orchestrator:
                 "structured_output": structured_output,
             }
         )
+
+    def _record_provider_queue_wait(
+        self,
+        *,
+        phase: str | None,
+        provider_name: str,
+        wait_ms: float,
+    ) -> None:
+        """Record how long a provider call waited for a shared cross-process slot."""
+
+        if self._execution_plan is None:
+            return
+
+        waits = self._execution_plan.setdefault("provider_queue_wait_ms", {})
+        entries = waits.setdefault(phase or "unknown", [])
+        entries.append({"provider": provider_name, "wait_ms": round(wait_ms, 1)})
 
     def _build_cost_estimate(self) -> CostEstimate:
         """Compute a cost estimate from recorded token usage."""
@@ -1689,7 +1780,7 @@ class Orchestrator:
     def _build_preflight_estimate(self) -> dict[str, Any]:
         """Build a rough execution estimate for client-facing planning."""
 
-        provider_name = self._provider_names[0] if len(self._provider_names) == 1 else None
+        provider_name = self._preflight_duration_basis_provider()
         prefix, blocks = self._extract_file_context_blocks()
         has_file_blocks = bool(blocks)
         request_strategy = "single_run"

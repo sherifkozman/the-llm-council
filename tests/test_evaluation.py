@@ -313,7 +313,7 @@ cases:
                 "name": "providers",
                 "variants": [
                     {"name": "openai", "providers": ["openai"]},
-                    {"name": "dual", "providers": ["openai", "google"]},
+                    {"name": "dual", "providers": ["openai", "gemini"]},
                 ],
             }
         )

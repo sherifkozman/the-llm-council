@@ -34,7 +34,7 @@ modes:
     models:
       anthropic: claude-opus-4-6
       openai: o3-mini
-      google: gemini-3-pro
+      gemini: gemini-3-pro
 
 default_mode: review
 calls: 3-5

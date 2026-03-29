@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,12 +29,12 @@ from llm_council.providers.base import (
 )
 from llm_council.providers.cli.claude_code import ClaudeCodeCLIProvider
 from llm_council.providers.cli.codex import CodexCLIProvider
-from llm_council.providers.cli.gemini import GeminiCLIProvider
-from llm_council.providers.google import (
-    DEFAULT_MODEL as GOOGLE_DEFAULT_MODEL,
+from llm_council.providers.cli.gemini_cli import GeminiCLIProvider
+from llm_council.providers.gemini import (
+    DEFAULT_MODEL as GEMINI_DEFAULT_MODEL,
 )
-from llm_council.providers.google import (
-    GoogleProvider,
+from llm_council.providers.gemini import (
+    GeminiProvider,
 )
 from llm_council.providers.openai import (
     DEFAULT_MODEL as OPENAI_DEFAULT_MODEL,
@@ -208,12 +210,13 @@ class TestProviderRegistry:
             registry.get_provider("nonexistent")
 
     def test_aliases_resolve_to_cli_providers(self, mock_registry):
-        """Friendly aliases should resolve to canonical CLI-backed provider names."""
+        """Friendly aliases should resolve to canonical provider names."""
         assert mock_registry.resolve_name("codex") == "codex"
         assert mock_registry.resolve_name("gemini") == "gemini"
         assert mock_registry.resolve_name("claude") == "claude"
+        assert mock_registry.resolve_name("google") == "gemini"
         assert mock_registry.resolve_name("codex-cli") == "codex"
-        assert mock_registry.resolve_name("gemini-cli") == "gemini"
+        assert mock_registry.resolve_name("gemini-cli") == "gemini-cli"
         assert mock_registry.resolve_name("claude-code") == "claude"
 
     def test_list_providers(self, mock_registry):
@@ -530,8 +533,8 @@ class TestProviderTransportDefaults:
         assert kwargs["timeout"] == 15.0
         assert kwargs["max_retries"] == 0
 
-    def test_google_client_uses_bounded_http_options(self, monkeypatch):
-        """Google provider should clamp SDK timeout and retry attempts."""
+    def test_gemini_client_uses_bounded_http_options(self, monkeypatch):
+        """Gemini provider should clamp SDK timeout and retry attempts."""
         monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
 
         google_module = ModuleType("google")
@@ -545,7 +548,7 @@ class TestProviderTransportDefaults:
         google_module.genai = genai_module
 
         with patch.dict(sys.modules, {"google": google_module, "google.genai": genai_module}):
-            provider = GoogleProvider()
+            provider = GeminiProvider()
             provider._get_client()
 
         http_options = mock_client.call_args.kwargs["http_options"]
@@ -599,25 +602,34 @@ class TestAnthropicProviderEnvModel:
         assert provider._default_model == "claude-sonnet-4-5"
 
 
-class TestGoogleProviderEnvModel:
-    """Tests for GOOGLE_MODEL env var fallback in GoogleProvider."""
+class TestGeminiProviderEnvModel:
+    """Tests for GEMINI_MODEL env var fallback in GeminiProvider."""
 
     def test_default_model_used_when_no_arg_no_env(self, monkeypatch):
         """DEFAULT_MODEL is used when neither arg nor env var is set."""
+        monkeypatch.delenv("GEMINI_MODEL", raising=False)
         monkeypatch.delenv("GOOGLE_MODEL", raising=False)
-        provider = GoogleProvider()
-        assert provider._default_model == GOOGLE_DEFAULT_MODEL
+        provider = GeminiProvider()
+        assert provider._default_model == GEMINI_DEFAULT_MODEL
 
     def test_env_var_used_when_no_arg(self, monkeypatch):
-        """GOOGLE_MODEL env var is used when no default_model arg is passed."""
-        monkeypatch.setenv("GOOGLE_MODEL", "gemini-2.0-flash")
-        provider = GoogleProvider()
-        assert provider._default_model == "gemini-2.0-flash"
+        """GEMINI_MODEL env var is used when no default_model arg is passed."""
+        monkeypatch.setenv("GEMINI_MODEL", "gemini-3-flash-preview")
+        provider = GeminiProvider()
+        assert provider._default_model == "gemini-3-flash-preview"
+
+    def test_legacy_google_model_env_still_works(self, monkeypatch):
+        """Legacy GOOGLE_MODEL env var is still accepted for compatibility."""
+        monkeypatch.delenv("GEMINI_MODEL", raising=False)
+        monkeypatch.setenv("GOOGLE_MODEL", "gemini-3-flash-preview")
+        provider = GeminiProvider()
+        assert provider._default_model == "gemini-3-flash-preview"
 
     def test_arg_takes_precedence_over_env_var(self, monkeypatch):
-        """default_model arg overrides GOOGLE_MODEL env var."""
-        monkeypatch.setenv("GOOGLE_MODEL", "gemini-2.0-flash")
-        provider = GoogleProvider(default_model="gemini-3.1-pro-preview")
+        """default_model arg overrides GEMINI_MODEL env var."""
+        monkeypatch.setenv("GEMINI_MODEL", "gemini-3-flash-preview")
+        monkeypatch.setenv("GOOGLE_MODEL", "gemini-3-flash-preview")
+        provider = GeminiProvider(default_model="gemini-3.1-pro-preview")
         assert provider._default_model == "gemini-3.1-pro-preview"
 
 
@@ -634,6 +646,25 @@ class TestGeminiCLIProviderDoctor:
         result = await provider.doctor()
 
         assert result.ok is True
+
+    @pytest.mark.asyncio
+    async def test_vertex_auth_settings_are_enough_for_doctor(self, monkeypatch):
+        """Gemini CLI doctor should honor selected vertex-ai auth without API keys."""
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "the-jarvis-brain")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+        provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
+
+        with patch.object(
+            GeminiCLIProvider,
+            "_load_existing_auth_settings",
+            return_value={"selectedType": "vertex-ai"},
+        ):
+            result = await provider.doctor()
+
+        assert result.ok is True
+        assert "vertex-ai" in result.message
 
     def test_legacy_gemini_approval_modes_are_normalized(self):
         """Legacy Gemini approval aliases should map to current CLI values."""
@@ -701,6 +732,10 @@ class TestCLIProviderTimeouts:
         request = GenerateRequest(prompt="test", timeout_seconds=17)
         assert provider._request_timeout(request) == 17.0
 
+    def test_gemini_cli_defaults_to_supported_fast_model(self):
+        provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
+        assert provider._default_model == "gemini-3-flash-preview"
+
     def test_claude_code_cli_uses_request_timeout(self):
         provider = ClaudeCodeCLIProvider(cli_path="/Users/kozman/.local/bin/claude")
         request = GenerateRequest(prompt="test", timeout_seconds=23)
@@ -710,7 +745,7 @@ class TestCLIProviderTimeouts:
     async def test_gemini_cli_starts_new_session(self):
         provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
         process = AsyncMock()
-        process.communicate.return_value = (b"ok", b"")
+        process.communicate.return_value = (b'{"response":"ok"}', b"")
         process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
@@ -802,6 +837,179 @@ class TestCLIProviderTimeouts:
 
         assert response.text == "ok"
         assert mock_exec.await_args.kwargs["start_new_session"] is True
+
+    @pytest.mark.asyncio
+    async def test_claude_cli_parses_list_envelopes(self):
+        provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b'[{"type":"assistant","message":{"content":[{"type":"text","text":"READY"}]}},'
+                b'{"type":"result","usage":{"input_tokens":11,"output_tokens":7}}]'
+            ),
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        assert response.text == "READY"
+        assert response.usage == {
+            "prompt_tokens": 11,
+            "completion_tokens": 7,
+            "total_tokens": 18,
+        }
+
+    @pytest.mark.asyncio
+    async def test_gemini_cli_uses_documented_json_prompt_mode(self):
+        provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b'{"response":"READY","stats":{"inputTokenCount":5,"outputTokenCount":3}}',
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        assert response.text == "READY"
+        assert response.usage == {
+            "prompt_tokens": 5,
+            "completion_tokens": 3,
+            "total_tokens": 8,
+        }
+        assert mock_exec.await_args.args[:5] == (
+            "/opt/homebrew/bin/gemini",
+            "-p",
+            "test",
+            "--approval-mode",
+            "default",
+        )
+        assert "-m" in mock_exec.await_args.args
+        assert "--output-format" in mock_exec.await_args.args
+
+    @pytest.mark.asyncio
+    async def test_gemini_cli_uses_isolated_home_and_preserves_auth_settings(self):
+        provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
+        process = AsyncMock()
+        process.communicate.return_value = (b'{"response":"READY"}', b"")
+        process.returncode = 0
+        captured_settings: dict[str, object] = {}
+
+        def _fake_exec(*args, **kwargs):
+            env = kwargs["env"]
+            settings_path = Path(env["GEMINI_CLI_HOME"]) / ".gemini" / "settings.json"
+            captured_settings["payload"] = json.loads(settings_path.read_text(encoding="utf-8"))
+            return process
+
+        with (
+            patch.dict("os.environ", {"GOOGLE_API_KEY": "test-google-key"}, clear=True),
+            patch.object(
+                GeminiCLIProvider,
+                "_load_existing_auth_settings",
+                return_value={"selectedType": "vertex-ai"},
+            ),
+            patch("asyncio.create_subprocess_exec", side_effect=_fake_exec) as mock_exec,
+        ):
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        env = mock_exec.await_args.kwargs["env"]
+
+        assert response.text == "READY"
+        assert env["GOOGLE_API_KEY"] == "test-google-key"
+        assert "GEMINI_API_KEY" not in env
+        assert captured_settings["payload"] == {
+            "admin": {
+                "extensions": {"enabled": False},
+                "mcp": {"enabled": False},
+            },
+            "security": {
+                "auth": {"selectedType": "vertex-ai"},
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_gemini_cli_vertex_auth_drops_conflicting_google_api_key_when_project_is_set(self):
+        provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
+        process = AsyncMock()
+        process.communicate.return_value = (b'{"response":"READY"}', b"")
+        process.returncode = 0
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "GOOGLE_API_KEY": "test-google-key",
+                    "GOOGLE_CLOUD_PROJECT": "the-jarvis-brain",
+                    "GOOGLE_CLOUD_LOCATION": "global",
+                    "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/adc.json",
+                },
+                clear=False,
+            ),
+            patch.object(
+                GeminiCLIProvider,
+                "_load_existing_auth_settings",
+                return_value={"selectedType": "vertex-ai"},
+            ),
+            patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec,
+        ):
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        env = mock_exec.await_args.kwargs["env"]
+
+        assert response.text == "READY"
+        assert env["GOOGLE_CLOUD_PROJECT"] == "the-jarvis-brain"
+        assert env["GOOGLE_CLOUD_LOCATION"] == "global"
+        assert env["GOOGLE_APPLICATION_CREDENTIALS"] == "/tmp/adc.json"
+        assert "GOOGLE_API_KEY" not in env
+
+    @pytest.mark.asyncio
+    async def test_gemini_cli_parses_json_after_stdout_warnings(self):
+        provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b"Both GOOGLE_API_KEY and GEMINI_API_KEY are set. Using GOOGLE_API_KEY.\n"
+                b'{\n  "session_id": "abc",\n  "response": "READY",\n'
+                b'  "stats": {"inputTokenCount": 5, "outputTokenCount": 2}\n}\n'
+            ),
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        assert response.text == "READY"
+        assert response.usage == {
+            "prompt_tokens": 5,
+            "completion_tokens": 2,
+            "total_tokens": 7,
+        }
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_reads_last_message_file(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (b"", b"")
+        process.returncode = 0
+        captured_output_path: dict[str, str] = {}
+
+        def _fake_exec(*args, **kwargs):
+            output_index = args.index("-o")
+            output_path = args[output_index + 1]
+            Path(output_path).write_text("READY\n", encoding="utf-8")
+            captured_output_path["path"] = output_path
+            return process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec) as mock_exec:
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        assert response.text == "READY\n"
+        assert "-o" in mock_exec.await_args.args
+        assert not Path(captured_output_path["path"]).exists()
 
 
 class TestOpenRouterProviderEnvModel:

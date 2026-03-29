@@ -41,15 +41,15 @@ from llm_council.providers.base import (
     ProviderCapabilities,
 )
 
-# Import shared schema stripping logic from google provider
-from llm_council.providers.google import (
+# Import shared schema stripping logic from Gemini API provider
+from llm_council.providers.gemini import (
     LEGACY_MODEL_PREFIXES,
     STRUCTURED_OUTPUT_MODEL_PREFIXES,
     _strip_schema_meta_fields,
 )
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
-DEFAULT_LOCATION = "us-central1"
+DEFAULT_LOCATION = "global"
 DEFAULT_CLAUDE_REGION = "global"
 DEFAULT_TIMEOUT_MS = 15000
 DEFAULT_RETRY_ATTEMPTS = 1
@@ -73,7 +73,7 @@ class VertexAIProvider(ProviderAdapter):
 
     Enterprise access to Gemini and Claude models via Google Cloud's Vertex AI platform.
     Automatically routes to the appropriate SDK based on model type:
-    - Gemini models: Uses google-genai SDK (region: us-central1)
+    - Gemini models: Uses google-genai SDK (region: global)
     - Claude models: Uses anthropic[vertex] SDK (region: global)
 
     Authentication (in order of priority):
@@ -83,7 +83,7 @@ class VertexAIProvider(ProviderAdapter):
 
     Environment variables for Gemini:
         GOOGLE_CLOUD_PROJECT: Required. Your GCP project ID.
-        GOOGLE_CLOUD_LOCATION: Optional. Region (default: us-central1).
+        GOOGLE_CLOUD_LOCATION: Optional. Region (default: global).
         VERTEX_AI_MODEL: Optional. Default Gemini model ID.
 
     Environment variables for Claude:
@@ -100,7 +100,7 @@ class VertexAIProvider(ProviderAdapter):
     Usage:
         # Gemini models
         export GOOGLE_CLOUD_PROJECT=my-project
-        export VERTEX_AI_MODEL=gemini-2.5-pro
+        export VERTEX_AI_MODEL=gemini-3-flash-preview
         council run drafter --mode arch "Design a cache" --providers vertex-ai
 
         # Claude models
@@ -131,7 +131,7 @@ class VertexAIProvider(ProviderAdapter):
 
         Args:
             project: GCP project ID. Falls back to GOOGLE_CLOUD_PROJECT env var.
-            location: GCP region. Falls back to GOOGLE_CLOUD_LOCATION or 'us-central1'.
+            location: GCP region. Falls back to GOOGLE_CLOUD_LOCATION or 'global'.
             credentials: Optional google.auth.credentials.Credentials object.
                         If not provided, uses ADC or GOOGLE_APPLICATION_CREDENTIALS.
             default_model: Default model to use if not specified in request.
@@ -297,7 +297,7 @@ class VertexAIProvider(ProviderAdapter):
         """Generate response using Gemini via google-genai SDK."""
         client = self._get_gemini_client(timeout_ms=self._client_timeout_ms(request))
 
-        # Build content - same format as GoogleProvider
+        # Build content - same format as GeminiProvider
         contents: str | list[dict[str, Any]]
         if request.messages:
             contents = []

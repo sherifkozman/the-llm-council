@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-03-28
+
+### Changed
+- renamed the direct Google Gemini API surface to `gemini` and the Gemini CLI surface to `gemini-cli`, while keeping `google` as a compatibility alias
+- refreshed packaged docs, skills, and Claude plugin metadata to the current provider naming and `0.7.4` package version
+- Vertex Gemini now defaults to the `global` location instead of the stale `us-central1` default
+- large bounded review runs now expose preflight timing, prompt metrics, provider-specific timeout caps, and provider queue wait data
+
+### Fixed
+- Claude Code CLI parsing now handles list-style JSON envelopes from the CLI instead of assuming a single dict payload
+- Codex CLI handling now follows the current headless contract and better preserves real stderr causes when calls fail
+- Gemini CLI auth now respects the CLI's configured auth mode and avoids overriding it from council
+- same-provider council calls are throttled across concurrent processes to reduce timeout cascades during overlapping doctor and review runs
+
+### Known Issues
+- `gemini-cli` deep doctor now passes on the local Vertex-authenticated setup, but review-mode smoke remains unstable and can overrun timeout budgets or return empty non-JSON output under council orchestration
+
 ## [0.7.2] - 2026-03-28
 
 ### Changed

@@ -28,18 +28,18 @@ class TestCouncilInit:
     def test_init_with_config(self):
         """Test Council with config object."""
         config = CouncilConfig(
-            providers=["google"],
+            providers=["gemini"],
             timeout=60,
             max_retries=5,
         )
         with patch("llm_council.council.Orchestrator"):
             council = Council(config=config)
-            assert council.providers == ["google"]
+            assert council.providers == ["gemini"]
             assert council.config.timeout == 60
 
     def test_init_provider_argument_overrides_config_providers(self):
         """Explicit providers should become the effective provider list."""
-        config = CouncilConfig(providers=["google"])
+        config = CouncilConfig(providers=["gemini"])
         with patch("llm_council.council.Orchestrator"):
             council = Council(providers=["openai"], config=config)
 

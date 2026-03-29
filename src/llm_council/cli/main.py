@@ -38,6 +38,7 @@ from llm_council.evaluation import (
     run_eval_dataset,
 )
 from llm_council.protocol.types import ReasoningProfile, RuntimeProfile
+from llm_council.providers.concurrency import provider_call_slot
 
 if TYPE_CHECKING:
     from llm_council.protocol.types import CouncilConfig
@@ -208,13 +209,13 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
         providers:
           - name: openai
             default_model: gpt-5.4
-          - name: google
+          - name: gemini
             default_model: gemini-3.1-pro-preview
 
     Returns::
 
         {"openai": {"default_model": "gpt-5.4"},
-         "google": {"default_model": "gemini-3.1-pro-preview"}}
+         "gemini": {"default_model": "gemini-3.1-pro-preview"}}
     """
     config = _load_config()
     providers_list = config.get("providers", [])
@@ -749,18 +750,19 @@ def doctor(
     # Load per-provider config so doctor shows configured models
     provider_cfgs = _load_provider_configs()
 
-    async def _run_deep_probe(provider: Any) -> dict[str, Any]:
+    async def _run_deep_probe(name: str, provider: Any) -> dict[str, Any]:
         from time import perf_counter
 
         from llm_council.providers.base import GenerateRequest
 
         start = perf_counter()
-        response = await provider.generate(
-            GenerateRequest(
-                prompt="Reply with OK and nothing else.",
-                timeout_seconds=probe_timeout,
+        async with provider_call_slot(name, timeout_seconds=max(float(probe_timeout), 1.0)):
+            response = await provider.generate(
+                GenerateRequest(
+                    prompt="Reply with OK and nothing else.",
+                    timeout_seconds=probe_timeout,
+                )
             )
-        )
         latency_ms = round((perf_counter() - start) * 1000, 1)
         text = (response.text if hasattr(response, "text") else str(response)).strip()
         return {
@@ -783,7 +785,7 @@ def doctor(
             if deep:
                 if result.ok:
                     try:
-                        payload.update(await _run_deep_probe(provider))
+                        payload.update(await _run_deep_probe(name, provider))
                     except Exception as e:
                         payload.update(
                             {
@@ -819,6 +821,11 @@ def doctor(
             return payload
 
     async def _run_all_checks() -> list[dict[str, Any]]:
+        if deep:
+            results: list[dict[str, Any]] = []
+            for name in provider_names:
+                results.append(await _check_provider(name))
+            return results
         return await asyncio.gather(*[_check_provider(n) for n in provider_names])
 
     results = asyncio.run(_run_all_checks())

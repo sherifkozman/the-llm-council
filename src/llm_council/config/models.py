@@ -7,6 +7,9 @@ Models can be configured via environment variables or passed directly.
 Environment Variables:
     COUNCIL_MODELS: Comma-separated list of OpenRouter model IDs
         Example: "anthropic/claude-3.5-sonnet,openai/gpt-4o,google/gemini-pro"
+        These are model IDs, not council provider names. The canonical
+        provider names are `openrouter`, `openai`, `anthropic`, `gemini`,
+        `gemini-cli`, `vertex-ai`, `claude`, and `codex`.
 
     Model pack overrides (optional):
         COUNCIL_MODEL_FAST: Fast model for quick tasks (default: claude-haiku-4-5)

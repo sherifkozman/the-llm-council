@@ -50,8 +50,8 @@ JSON Schema validation with automatic retry ensures structured outputs conform t
 ### Provider Agnostic
 Swap between providers seamlessly:
 - **OpenRouter** - Single API key for 100+ models (recommended)
-- **Direct APIs** - Anthropic, OpenAI, Google native SDKs
-- **CLI Providers** - `codex`, `gemini`, and `claude` via local CLIs
+- **Direct APIs** - Anthropic, OpenAI, and Gemini API native SDKs
+- **CLI Providers** - `codex`, `gemini-cli`, and `claude` via local CLIs
 - **Custom Providers** - Plugin architecture via Python entry points
 
 ### Deep Doctor
@@ -85,7 +85,7 @@ With specific providers:
 pip install the-llm-council
 
 # Direct APIs
-pip install the-llm-council[anthropic,openai,google]
+pip install the-llm-council[anthropic,openai,gemini]
 
 # All providers
 pip install the-llm-council[all]
@@ -107,7 +107,7 @@ council doctor
 
 # Verify actual non-interactive generation readiness
 # May incur API/CLI usage.
-council doctor --deep --provider claude --provider gemini --provider codex
+council doctor --deep --provider claude --provider gemini-cli --provider codex
 
 # Router handoff: classify, then run the chosen subagent/mode
 council run router "Assess whether we should adopt a hosted vector store" --route
@@ -260,7 +260,7 @@ llm_council/
 │   ├── openrouter.py    # OpenRouter adapter
 │   ├── anthropic.py     # Anthropic adapter
 │   ├── openai.py        # OpenAI adapter
-│   ├── google.py        # Google Gemini adapter
+│   ├── gemini.py       # Gemini API adapter
 │   └── cli/             # CLI-based providers
 ├── subagents/           # Subagent prompt + schema definitions
 ├── schemas/             # JSON Schema definitions
@@ -273,7 +273,7 @@ llm_council/
 - [Capability-Augmented Council](architecture/capability-augmented-council.md) - Kickoff spec for mode-native capabilities, staged execution, and per-mode evaluation
 - [Eval Datasets](../evals/README.md) - Baseline datasets and usage for `council eval`
 - [OpenRouter Quickstart](quickstart/openrouter.md) - Recommended setup with single API key
-- [Direct APIs Quickstart](quickstart/direct-apis.md) - Using Anthropic, OpenAI, Google directly
+- [Direct APIs Quickstart](quickstart/direct-apis.md) - Using Anthropic, OpenAI, and Gemini API directly
 - [Creating Custom Providers](providers/creating-providers.md) - Build your own provider adapters
 
 ## Support

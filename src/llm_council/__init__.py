@@ -20,7 +20,7 @@ try:
 
     __version__ = _pkg_version("the-llm-council")
 except Exception:
-    __version__ = "0.7.3"  # fallback
+    __version__ = "0.7.4"  # fallback
 
 __all__ = [
     "__version__",

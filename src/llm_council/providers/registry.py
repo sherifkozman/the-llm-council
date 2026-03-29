@@ -18,7 +18,7 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "vertex": "vertex-ai",
     "claude-code": "claude",
     "codex-cli": "codex",
-    "gemini-cli": "gemini",
+    "google": "gemini",
 }
 
 

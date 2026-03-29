@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.7.1)
+# LLM Council Skill (v0.7.4)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -16,14 +16,14 @@ Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.7.1'
+pip install 'the-llm-council>=0.7.4'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,google]>=0.7.1'
-pip install 'the-llm-council[vertex]>=0.7.1'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.7.4'
+pip install 'the-llm-council[vertex]>=0.7.4'
 ```
 
 Configure at least one provider key:
@@ -33,7 +33,7 @@ Configure at least one provider key:
 | OpenRouter | `OPENROUTER_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
-| Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
+| Gemini API | `GOOGLE_API_KEY` or `GEMINI_API_KEY` |
 | Vertex AI | `GOOGLE_CLOUD_PROJECT` or `ANTHROPIC_VERTEX_PROJECT_ID` + ADC |
 
 Verify what is usable in the current shell:
@@ -118,10 +118,10 @@ Canonical provider names:
 - `openrouter`
 - `openai`
 - `anthropic`
-- `google`
+- `gemini`
+- `gemini-cli`
 - `vertex-ai`
 - `claude`
-- `gemini`
 - `codex`
 
 User-selected providers and models should be respected. Health checks and deep

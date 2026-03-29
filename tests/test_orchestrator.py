@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -401,8 +402,8 @@ class TestOrchestratorValidation:
         assert orch._provider_request_timeout_seconds("critique", provider_name="codex") == 25.0
         assert orch._provider_request_timeout_seconds("synthesis", provider_name="codex") == 40.0
 
-    def test_bounded_runtime_profile_allows_longer_vertex_phase_caps(self):
-        """Vertex/Google get larger bounded caps because 15s is too tight for real review calls."""
+    def test_bounded_runtime_profile_allows_longer_vertex_and_gemini_phase_caps(self):
+        """Vertex and Gemini API get larger bounded caps because 15s is too tight."""
         config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=60)
         with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
             mock_reg.return_value = MagicMock()
@@ -418,6 +419,36 @@ class TestOrchestratorValidation:
             orch._provider_request_timeout_seconds("synthesis", provider_name="vertex-ai")
             == 45.0
         )
+        assert orch._provider_request_timeout_seconds("draft", provider_name="gemini") == 45.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="gemini") == 30.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="gemini") == 45.0
+
+    def test_bounded_runtime_profile_allows_longer_gemini_cli_phase_caps(self):
+        """Gemini CLI needs longer caps than the direct API provider in bounded mode."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=120)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["gemini-cli"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="gemini-cli") == 60.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="gemini-cli") == 45.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="gemini-cli") == 90.0
+
+    def test_bounded_runtime_profile_allows_longer_openai_and_claude_caps(self):
+        """OpenAI and Claude need more than the generic bounded caps on heavy review workloads."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=60)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["openai", "claude"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="openai") == 30.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="openai") == 20.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="openai") == 35.0
+        assert orch._provider_request_timeout_seconds("draft", provider_name="claude") == 45.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="claude") == 30.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="claude") == 45.0
 
 
 class TestOrchestratorDoctor:
@@ -478,6 +509,33 @@ class TestOrchestratorDoctor:
         mock_sleep.assert_awaited()
 
     @pytest.mark.asyncio
+    async def test_call_provider_records_provider_queue_wait(self):
+        """Provider calls should record shared-slot wait time for diagnostics."""
+        config = OrchestratorConfig()
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["mock"], config=config)
+
+        orch._execution_plan = {"provider_queue_wait_ms": {}}
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(return_value=GenerateResponse(text='{"ok": true}'))
+        request = GenerateRequest(prompt="hello", timeout_seconds=12)
+
+        @asynccontextmanager
+        async def fake_slot(_provider_name: str, *, timeout_seconds: float | None = None):
+            assert timeout_seconds == 12
+            yield 42.5
+
+        with patch("llm_council.engine.orchestrator.provider_call_slot", fake_slot):
+            response = await orch._call_provider("mock", adapter, request, phase="draft")
+
+        assert response.text == '{"ok": true}'
+        assert orch._execution_plan["provider_queue_wait_ms"] == {
+            "draft": [{"provider": "mock", "wait_ms": 42.5}]
+        }
+
+    @pytest.mark.asyncio
     async def test_doctor_with_failure(self, failing_provider):
         """Test doctor when a provider fails."""
         config = OrchestratorConfig()
@@ -525,7 +583,50 @@ class TestOrchestratorRuntimeTruthfulness:
             "critique": 10.0,
             "synthesis": 15.0,
         }
+        assert orch._execution_plan["provider_request_timeouts_by_provider"] == {
+            "openrouter": {
+                "draft": 15.0,
+                "critique": 10.0,
+                "synthesis": 15.0,
+            }
+        }
         assert "diff-review" in orch._execution_plan["required_capabilities"]
+
+    def test_prepare_run_records_provider_specific_timeout_map_for_multi_provider_runs(self):
+        """Multi-provider execution plans should expose per-provider phase caps explicitly."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = MagicMock()
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["openai", "claude", "vertex-ai"], config=config)
+
+        orch._prepare_run("critic")
+
+        assert orch._execution_plan is not None
+        assert orch._execution_plan["provider_request_timeouts"] == {
+            "draft": 15.0,
+            "critique": 10.0,
+            "synthesis": 15.0,
+        }
+        assert orch._execution_plan["provider_request_timeouts_by_provider"] == {
+            "openai": {
+                "draft": 30.0,
+                "critique": 20.0,
+                "synthesis": 35.0,
+            },
+            "claude": {
+                "draft": 45.0,
+                "critique": 30.0,
+                "synthesis": 45.0,
+            },
+            "vertex-ai": {
+                "draft": 45.0,
+                "critique": 30.0,
+                "synthesis": 45.0,
+            },
+        }
+        assert orch._execution_plan["preflight_estimate"]["provider"] == "vertex-ai"
 
     def test_prepare_run_applies_mode_prompt(self):
         """Planner assess mode adds the assess-specific prompt block."""
@@ -1051,7 +1152,7 @@ class TestOrchestratorRuntimeTruthfulness:
             mock_registry = MagicMock()
             mock_registry.get_provider.return_value = MagicMock()
             mock_reg.return_value = mock_registry
-            orch = Orchestrator(providers=["anthropic", "openai", "google"], config=config)
+            orch = Orchestrator(providers=["anthropic", "openai", "gemini"], config=config)
 
         orch._prepare_run("critic")
 

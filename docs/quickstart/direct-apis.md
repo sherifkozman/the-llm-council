@@ -1,6 +1,6 @@
 # Direct APIs Quickstart
 
-This guide shows how to use LLM Council with direct API access to Anthropic, OpenAI, and Google, instead of going through OpenRouter.
+This guide shows how to use LLM Council with direct API access to Anthropic, OpenAI, and Gemini API, instead of going through OpenRouter.
 
 ## Why Use Direct APIs?
 
@@ -22,8 +22,8 @@ pip install the-llm-council[anthropic]
 # For OpenAI (GPT)
 pip install the-llm-council[openai]
 
-# For Google (Gemini)
-pip install the-llm-council[google]
+# For Gemini API
+pip install the-llm-council[gemini]
 
 # For Vertex AI (Enterprise GCP)
 pip install the-llm-council[vertex]
@@ -157,15 +157,17 @@ Available models:
 - `gpt-5.4-codex` - Code-optimized
 - `gpt-5.4-mini` - Fast and affordable
 
-## Google (Gemini)
+## Gemini API
 
 ### Setup
 
-1. Get an API key from [makersuite.google.com](https://makersuite.google.com)
+1. Get an API key from [Google AI Studio](https://aistudio.google.com/apikey)
 2. Set environment variable:
 
 ```bash
-export GOOGLE_API_KEY="..."
+export GEMINI_API_KEY="..."
+# Legacy env name still works:
+# export GOOGLE_API_KEY="..."
 ```
 
 3. Verify setup:
@@ -179,7 +181,7 @@ council doctor
 CLI:
 
 ```bash
-council run planner "Add payment processing to my app" --providers google
+council run planner "Add payment processing to my app" --providers gemini
 ```
 
 Python:
@@ -189,7 +191,7 @@ import asyncio
 from llm_council import Council
 
 async def main():
-    council = Council(providers=["google"])
+    council = Council(providers=["gemini"])
 
     result = await council.run(
         task="Create a test plan for an e-commerce checkout flow",
@@ -209,22 +211,21 @@ Override via config:
 
 ```yaml
 providers:
-  - name: google
-    api_key: ${GOOGLE_API_KEY}
+  - name: gemini
+    api_key: ${GEMINI_API_KEY}
     default_model: gemini-3.1-pro-preview
 ```
 
 Available models:
 - `gemini-3.1-pro-preview` - Most capable (recommended)
-- `gemini-2.5-flash` - Fast and affordable
-- `gemini-2.0-flash` - Previous generation
+- `gemini-3-flash-preview` - Fast and affordable
 
 ## Vertex AI (Enterprise GCP)
 
 Vertex AI provides enterprise access to Gemini and Claude models through Google Cloud with unified billing and IAM.
 
 The Vertex AI provider automatically routes to the appropriate SDK based on the model:
-- **Gemini models**: Uses google-genai SDK (region: us-central1)
+- **Gemini models**: Uses google-genai SDK (region: global)
 - **Claude models**: Uses anthropic[vertex] SDK (region: global)
 
 ### Setup
@@ -247,8 +248,8 @@ For Gemini models:
 
 ```bash
 export GOOGLE_CLOUD_PROJECT="your-project-id"
-export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
-export VERTEX_AI_MODEL="gemini-2.5-pro"     # optional, default: gemini-2.0-flash
+export GOOGLE_CLOUD_LOCATION="global"  # optional
+export VERTEX_AI_MODEL="gemini-3-flash-preview"  # optional, default: gemini-3.1-pro-preview
 ```
 
 For Claude models:
@@ -296,9 +297,8 @@ asyncio.run(main())
 ### Model Selection
 
 **Gemini Models** (via `VERTEX_AI_MODEL`):
-- `gemini-2.0-flash` - Fast and capable (default)
-- `gemini-2.5-pro` - Most capable Gemini
-- `gemini-2.5-flash` - Balanced performance
+- `gemini-3.1-pro-preview` - Most capable Gemini (default)
+- `gemini-3-flash-preview` - Fast Gemini option
 
 **Claude Models** (via `ANTHROPIC_MODEL`):
 - `claude-opus-4-6@20260301` - Most capable Claude
@@ -329,7 +329,7 @@ from llm_council import Council
 
 async def main():
     # Requires all three API keys to be set
-    council = Council(providers=["anthropic", "openai", "google"])
+    council = Council(providers=["anthropic", "openai", "gemini"])
 
     result = await council.run(
         task="Design a distributed caching system",
@@ -337,7 +337,7 @@ async def main():
     )
 
     # Result contains:
-    # - drafts: Dict with keys "anthropic", "openai", "google"
+    # - drafts: Dict with keys "anthropic", "openai", "gemini"
     # - critique: Analysis of all three drafts
     # - output: Synthesized final result
     print(result.output)
@@ -362,7 +362,7 @@ Each provider has unique capabilities:
 ```python
 from llm_council.providers.anthropic import AnthropicProvider
 from llm_council.providers.openai import OpenAIProvider
-from llm_council.providers.google import GoogleProvider
+from llm_council.providers.gemini import GeminiProvider
 
 # Check capabilities
 anthropic = AnthropicProvider()
@@ -395,8 +395,10 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export OPENAI_ORG_ID="org-..."  # Optional
 
-# Google
-export GOOGLE_API_KEY="..."
+# Gemini API
+export GEMINI_API_KEY="..."
+# Legacy env name still works:
+# export GOOGLE_API_KEY="..."
 ```
 
 ### Config File
@@ -413,8 +415,8 @@ providers:
     api_key: ${OPENAI_API_KEY}
     default_model: gpt-5.4
 
-  - name: google
-    api_key: ${GOOGLE_API_KEY}
+  - name: gemini
+    api_key: ${GEMINI_API_KEY}
     default_model: gemini-3.1-pro-preview
 
 defaults:
@@ -513,7 +515,7 @@ export GOOGLE_API_KEY="..."
 **Solution**: Install provider-specific dependencies:
 
 ```bash
-pip install the-llm-council[anthropic,openai,google]
+pip install the-llm-council[anthropic,openai,gemini]
 ```
 
 ### Issue: "Rate limit exceeded"
@@ -521,7 +523,7 @@ pip install the-llm-council[anthropic,openai,google]
 **Solution**: Each provider has rate limits. Check limits at:
 - Anthropic: [console.anthropic.com](https://console.anthropic.com)
 - OpenAI: [platform.openai.com/account/limits](https://platform.openai.com/account/limits)
-- Google: [makersuite.google.com](https://makersuite.google.com)
+- Gemini API: [Google AI Studio](https://aistudio.google.com/apikey)
 
 Implement exponential backoff or reduce request rate.
 
@@ -530,7 +532,7 @@ Implement exponential backoff or reduce request rate.
 **Solution**: Verify model name matches provider's current offerings:
 - Anthropic models: [docs.anthropic.com/claude/docs/models-overview](https://docs.anthropic.com/claude/docs/models-overview)
 - OpenAI models: [platform.openai.com/docs/models](https://platform.openai.com/docs/models)
-- Google models: [ai.google.dev/models](https://ai.google.dev/models)
+- Gemini models: [ai.google.dev/models](https://ai.google.dev/models)
 
 ### Issue: Provider-specific errors
 
@@ -557,8 +559,8 @@ Approximate costs per 1M tokens (as of 2026):
 | Anthropic | Claude Haiku 4.5 | $0.25 | $1.25 |
 | OpenAI | GPT-5.4 | $5 | $15 |
 | OpenAI | GPT-5.4 Mini | $0.50 | $1.50 |
-| Google | Gemini 3.1 Pro | $3.50 | $10.50 |
-| Google | Gemini 2.5 Flash | $0.35 | $1.05 |
+| Gemini API | Gemini 3.1 Pro | $3.50 | $10.50 |
+| Gemini API | Gemini 2.5 Flash | $0.35 | $1.05 |
 
 Track your costs:
 
@@ -590,8 +592,12 @@ you can still opt in via `providers[].default_model`.
 
 ```bash
 # Requires gemini CLI to be installed
-council run researcher "AI safety research" --providers gemini
+council run researcher "AI safety research" --providers gemini-cli
 ```
+
+`gemini-cli` uses whatever auth mode the local Gemini CLI is already configured
+for, such as Gemini API key or Vertex AI. Council preserves that CLI auth
+choice instead of overriding it.
 
 CLI providers execute local commands instead of making API calls, useful for:
 - Air-gapped environments

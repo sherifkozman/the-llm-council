@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import shlex
 import shutil
+import tempfile
 import warnings
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import ClassVar
 
 from llm_council.providers.base import (
@@ -86,7 +89,14 @@ class CodexCLIProvider(ProviderAdapter):
         self._login_status_checked = False
         self._login_status_cache: str | None = None
 
-    def _build_command(self, request: GenerateRequest, *, model: str) -> list[str]:
+    def _build_command(
+        self,
+        request: GenerateRequest,
+        *,
+        model: str,
+        output_last_message_path: str | None = None,
+        output_schema_path: str | None = None,
+    ) -> list[str]:
         """Build the CLI command as argument list (safe from injection)."""
         if not self._cli_path:
             raise RuntimeError("Codex CLI not found.")
@@ -94,6 +104,10 @@ class CodexCLIProvider(ProviderAdapter):
         cmd = [self._cli_path, "exec"]
         cmd.extend(shlex.split(self._default_flags))
         cmd.extend(["-m", model])
+        if output_schema_path:
+            cmd.extend(["--output-schema", output_schema_path])
+        if output_last_message_path:
+            cmd.extend(["-o", output_last_message_path])
 
         prompt = ""
         if request.messages:
@@ -197,63 +211,89 @@ class CodexCLIProvider(ProviderAdapter):
 
         self._check_unsafe_flags()
         model = await self._resolve_model(request)
-        cmd = self._build_command(request, model=model)
-
-        # Safe: uses argument list, no shell; minimal environment
-        proc = await asyncio.create_subprocess_exec(
-            cmd[0],
-            *cmd[1:],
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._get_minimal_env(),
-            start_new_session=True,
+        output_fd, output_path = tempfile.mkstemp(
+            prefix="llm-council-codex-last-message-", suffix=".txt"
+        )
+        os.close(output_fd)
+        schema_path: str | None = None
+        if request.structured_output:
+            schema_fd, schema_path = tempfile.mkstemp(
+                prefix="llm-council-codex-schema-", suffix=".json"
+            )
+            with os.fdopen(schema_fd, "w", encoding="utf-8") as schema_file:
+                json.dump(dict(request.structured_output.json_schema), schema_file)
+        cmd = self._build_command(
+            request,
+            model=model,
+            output_last_message_path=output_path,
+            output_schema_path=schema_path,
         )
 
-        timeout = self._request_timeout(request)
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            await terminate_process_tree(proc)
-            raise RuntimeError(
-                f"Codex CLI timed out after {timeout}s. "
-                "Consider increasing timeout or simplifying the task."
+            # Safe: uses argument list, no shell; minimal environment
+            proc = await asyncio.create_subprocess_exec(
+                cmd[0],
+                *cmd[1:],
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._get_minimal_env(),
+                start_new_session=True,
             )
 
-        if proc.returncode != 0:
-            stderr_text = stderr.decode("utf-8", errors="replace")
-            error_details = self._error_details(stderr_text)
-            error_type = classify_error(error_details or stderr_text, proc.returncode or 0)
-
-            # Provide actionable error messages based on error type
-            if error_type == ErrorType.BILLING:
-                billing_url = get_billing_help_url("codex")
+            timeout = self._request_timeout(request)
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await terminate_process_tree(proc)
                 raise RuntimeError(
-                    f"BILLING ERROR: OpenAI credits exhausted. "
-                    f"Add credits at {billing_url}\n"
-                    f"Details: {error_details}"
+                    f"Codex CLI timed out after {timeout}s. "
+                    "Consider increasing timeout or simplifying the task."
                 )
-            elif error_type == ErrorType.AUTH:
-                raise RuntimeError(
-                    f"AUTH ERROR: Invalid or missing API key. "
-                    f"Check OPENAI_API_KEY environment variable.\n"
-                    f"Details: {error_details}"
-                )
-            elif error_type == ErrorType.MODEL_UNAVAILABLE:
-                raise RuntimeError(f"MODEL UNAVAILABLE: {error_details}")
-            elif error_type == ErrorType.RATE_LIMIT:
-                raise RuntimeError(
-                    f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {error_details}"
-                )
-            else:
-                raise RuntimeError(f"CLI failed ({error_type.value}): {error_details}")
 
-        output = stdout.decode("utf-8", errors="replace")
+            if proc.returncode != 0:
+                stderr_text = stderr.decode("utf-8", errors="replace")
+                error_details = self._error_details(stderr_text)
+                error_type = classify_error(error_details or stderr_text, proc.returncode or 0)
 
-        # Warn if output is empty on success
-        if not output.strip():
-            logger.warning("Codex CLI returned success but empty output")
+                # Provide actionable error messages based on error type
+                if error_type == ErrorType.BILLING:
+                    billing_url = get_billing_help_url("codex")
+                    raise RuntimeError(
+                        f"BILLING ERROR: OpenAI credits exhausted. "
+                        f"Add credits at {billing_url}\n"
+                        f"Details: {error_details}"
+                    )
+                elif error_type == ErrorType.AUTH:
+                    raise RuntimeError(
+                        f"AUTH ERROR: Invalid or missing API key. "
+                        f"Check OPENAI_API_KEY environment variable.\n"
+                        f"Details: {error_details}"
+                    )
+                elif error_type == ErrorType.MODEL_UNAVAILABLE:
+                    raise RuntimeError(f"MODEL UNAVAILABLE: {error_details}")
+                elif error_type == ErrorType.RATE_LIMIT:
+                    raise RuntimeError(
+                        f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {error_details}"
+                    )
+                else:
+                    raise RuntimeError(f"CLI failed ({error_type.value}): {error_details}")
 
-        return GenerateResponse(text=output, content=output)
+            output = ""
+            with contextlib.suppress(OSError):
+                output = Path(output_path).read_text(encoding="utf-8")
+            if not output:
+                output = stdout.decode("utf-8", errors="replace")
+
+            # Warn if output is empty on success
+            if not output.strip():
+                logger.warning("Codex CLI returned success but empty output")
+
+            return GenerateResponse(text=output, content=output)
+        finally:
+            for temp_path in (output_path, schema_path):
+                if temp_path:
+                    with contextlib.suppress(OSError):
+                        os.unlink(temp_path)
 
     async def supports(self, capability: str) -> bool:
         if not self.supports_capability_name(capability):

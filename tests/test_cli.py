@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
@@ -126,10 +128,10 @@ class TestCLIDoctor:
             patch("llm_council.providers.registry.get_registry") as mock_reg,
         ):
             mock_registry = MagicMock()
-            mock_registry.list_providers.return_value = ["claude", "codex", "gemini"]
+            mock_registry.list_providers.return_value = ["claude", "codex", "gemini", "gemini-cli"]
             mock_registry.resolve_name.side_effect = {
                 "codex": "codex",
-                "gemini": "gemini",
+                "gemini-cli": "gemini-cli",
                 "claude": "claude",
             }.get
 
@@ -152,14 +154,14 @@ class TestCLIDoctor:
                     "--provider",
                     "codex",
                     "--provider",
-                    "gemini,claude",
+                    "gemini-cli,claude",
                     "--json",
                 ],
             )
 
             assert result.exit_code == 0
             assert '"name": "codex"' in result.stdout
-            assert '"name": "gemini"' in result.stdout
+            assert '"name": "gemini-cli"' in result.stdout
             assert '"name": "claude"' in result.stdout
 
     def test_doctor_deep_probe_reports_generation_readiness(self):
@@ -220,6 +222,67 @@ class TestCLIDoctor:
             assert '"probe_ok": false' in result.stdout
             assert "Skipped because base doctor failed" in result.stdout
             provider.generate.assert_not_called()
+
+    def test_doctor_deep_probe_serializes_live_probes(self):
+        """Deep doctor should not fan out multiple live probes at once."""
+        with (
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "json"},
+            ),
+            patch("llm_council.providers.registry.get_registry") as mock_reg,
+        ):
+            mock_registry = MagicMock()
+            mock_registry.list_providers.return_value = ["openai", "claude"]
+            mock_registry.resolve_name.side_effect = {"openai": "openai", "claude": "claude"}.get
+
+            def _provider(name: str) -> MagicMock:
+                provider = MagicMock()
+                doctor_result = MagicMock()
+                doctor_result.ok = True
+                doctor_result.message = f"{name} ok"
+                doctor_result.latency_ms = 1.0
+                provider.doctor = AsyncMock(return_value=doctor_result)
+
+                async def _generate(_request):
+                    await asyncio.sleep(0.01)
+                    return GenerateResponse(text="OK", content="OK")
+
+                provider.generate = AsyncMock(side_effect=_generate)
+                return provider
+
+            providers = {"openai": _provider("openai"), "claude": _provider("claude")}
+            mock_registry.get_provider.side_effect = lambda name, **_kwargs: providers[name]
+            mock_reg.return_value = mock_registry
+
+            state = {"active": 0, "max_active": 0}
+
+            @asynccontextmanager
+            async def fake_slot(_name: str, *, timeout_seconds: float | None = None):
+                assert timeout_seconds == 5.0
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+                try:
+                    yield 0.0
+                finally:
+                    state["active"] -= 1
+
+            with patch("llm_council.cli.main.provider_call_slot", fake_slot):
+                result = runner.invoke(
+                    app,
+                    [
+                        "doctor",
+                        "--provider",
+                        "openai",
+                        "--provider",
+                        "claude",
+                        "--deep",
+                        "--json",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            assert state["max_active"] == 1
 
 
 class TestCLIConfig:
@@ -680,7 +743,7 @@ class TestProviderConfigLoading:
         config_data = {
             "providers": [
                 {"name": "openai", "default_model": "gpt-5.2"},
-                {"name": "google", "default_model": "gemini-3.1-pro"},
+                {"name": "gemini", "default_model": "gemini-3.1-pro"},
             ],
             "defaults": {},
         }
@@ -692,7 +755,7 @@ class TestProviderConfigLoading:
             result = _load_provider_configs()
             assert result == {
                 "openai": {"default_model": "gpt-5.2"},
-                "google": {"default_model": "gemini-3.1-pro"},
+                "gemini": {"default_model": "gemini-3.1-pro"},
             }
 
     def test_load_provider_configs_ignores_invalid(self):

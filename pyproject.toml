@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-llm-council"
-version = "0.7.3"
+version = "0.7.4"
 description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
 readme = "README.md"
 license = "MIT"
@@ -55,10 +55,11 @@ dev = [
 ]
 anthropic = ["anthropic>=0.18"]
 openai = ["openai>=1.0"]
+gemini = ["google-genai>=1.0"]
 google = ["google-genai>=1.0"]
 vertex = ["google-genai>=1.0", "google-auth>=2.0", "anthropic[vertex]>=0.18"]
 all = [
-    "the-llm-council[anthropic,openai,google,vertex]"
+    "the-llm-council[anthropic,openai,gemini,vertex]"
 ]
 
 [project.scripts]
@@ -68,11 +69,11 @@ council = "llm_council.cli.main:app"
 openrouter = "llm_council.providers.openrouter:OpenRouterProvider"
 openai = "llm_council.providers.openai:OpenAIProvider"
 anthropic = "llm_council.providers.anthropic:AnthropicProvider"
-google = "llm_council.providers.google:GoogleProvider"
+gemini = "llm_council.providers.gemini:GeminiProvider"
 vertex-ai = "llm_council.providers.vertex:VertexAIProvider"
 claude-code = "llm_council.providers.cli.claude_code:ClaudeCodeCLIProvider"
 codex-cli = "llm_council.providers.cli.codex:CodexCLIProvider"
-gemini-cli = "llm_council.providers.cli.gemini:GeminiCLIProvider"
+gemini-cli = "llm_council.providers.cli.gemini_cli:GeminiCLIProvider"
 
 [project.urls]
 Homepage = "https://github.com/sherifkozman/the-llm-council"

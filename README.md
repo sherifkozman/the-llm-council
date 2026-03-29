@@ -105,7 +105,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 | OpenRouter | `OPENROUTER_API_KEY` | **Recommended** - single key for all models |
 | OpenAI | `OPENAI_API_KEY` | Direct GPT access |
 | Anthropic | `ANTHROPIC_API_KEY` | Direct Claude access |
-| Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
+| Gemini API | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Direct Gemini access |
 | Vertex AI | `GOOGLE_CLOUD_PROJECT` or `ANTHROPIC_VERTEX_PROJECT_ID` + ADC | Enterprise GCP - Gemini + Claude |
 
 ## Installation
@@ -121,7 +121,7 @@ With specific providers:
 pip install the-llm-council
 
 # Direct APIs
-pip install the-llm-council[anthropic,openai,google]
+pip install the-llm-council[anthropic,openai,gemini]
 
 # Vertex AI (Enterprise GCP)
 pip install the-llm-council[vertex]
@@ -183,6 +183,9 @@ council run drafter --mode arch "Design a caching layer" \
 export COUNCIL_MODELS="anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.1-pro-preview"
 council run drafter "Build a login page"
 
+# OpenRouter model IDs keep vendor namespaces like google/... .
+# Those model IDs are separate from council provider names such as gemini or gemini-cli.
+
 # Code review with security analysis
 council run critic --mode review "Review auth changes" --verbose
 
@@ -227,7 +230,7 @@ council doctor
 
 # Verify actual non-interactive generation readiness
 # May incur API/CLI usage.
-council doctor --deep --provider claude --provider gemini --provider codex
+council doctor --deep --provider claude --provider gemini-cli --provider codex
 ```
 
 ### Run Deterministic Evals
@@ -378,11 +381,11 @@ myprovider = "my_package.providers:MyProvider"
 | OpenRouter | HTTP API | `src/llm_council/providers/openrouter.py` |
 | Anthropic | Native SDK | `src/llm_council/providers/anthropic.py` |
 | OpenAI | Native SDK | `src/llm_council/providers/openai.py` |
-| Google | Native SDK | `src/llm_council/providers/google.py` |
+| Gemini API | Native SDK | `src/llm_council/providers/gemini.py` |
 | Vertex AI | Native SDK | `src/llm_council/providers/vertex.py` |
 | Claude Code | CLI subprocess | `src/llm_council/providers/cli/claude_code.py` |
 | Codex CLI | CLI subprocess | `src/llm_council/providers/cli/codex.py` |
-| Gemini CLI | CLI subprocess | `src/llm_council/providers/cli/gemini.py` |
+| Gemini CLI | CLI subprocess | `src/llm_council/providers/cli/gemini_cli.py` |
 
 ## Configuration
 
@@ -399,7 +402,7 @@ export GOOGLE_API_KEY="..."
 
 # Vertex AI - Gemini (Enterprise GCP)
 export GOOGLE_CLOUD_PROJECT="your-project-id"
-export GOOGLE_CLOUD_LOCATION="us-central1"  # optional
+export GOOGLE_CLOUD_LOCATION="global"  # optional, default for Gemini on Vertex
 export VERTEX_AI_MODEL="gemini-3.1-pro-preview"  # optional
 
 # Vertex AI - Claude (Enterprise GCP)
@@ -416,7 +419,7 @@ export COUNCIL_MODELS="anthropic/claude-opus-4-6,openai/gpt-5.4,google/gemini-3.
 # Per-provider model override (v0.7.0+)
 export OPENAI_MODEL="gpt-5.4"               # Override OpenAI default
 export ANTHROPIC_MODEL="claude-opus-4-6"     # Override Anthropic default
-export GOOGLE_MODEL="gemini-3.1-pro-preview" # Override Google default
+export GEMINI_MODEL="gemini-3.1-pro-preview" # Override Gemini API default
 export OPENROUTER_MODEL="anthropic/claude-opus-4-6"  # Override OpenRouter default
 
 # Model pack overrides for specific task types
@@ -441,13 +444,13 @@ model_pack: harsh_critic
 providers:
   preferred: [anthropic, openai]
   fallback: [openrouter]
-  exclude: [google]
+  exclude: [gemini]
 
 # Model overrides per provider
 models:
   anthropic: claude-opus-4-6
   openai: o3-mini
-  google: gemini-3-pro
+  gemini: gemini-3-pro
 
 # Extended reasoning/thinking configuration
 reasoning:
@@ -461,7 +464,7 @@ reasoning:
 |----------|-----------|--------|-------------|
 | OpenAI | `effort` | low/medium/high | Reasoning effort for o-series models |
 | Anthropic | `budget_tokens` | 1024-128000 | Extended thinking token budget |
-| Google | `thinking_level` | minimal/low/medium/high | Gemini 3.x thinking level |
+| Gemini API | `thinking_level` | minimal/low/medium/high | Gemini 3.x thinking level |
 
 #### Default Reasoning Tiers (v0.4.0+)
 
@@ -482,7 +485,7 @@ providers:
     default_model: anthropic/claude-opus-4-6
   - name: openai
     default_model: gpt-5.4
-  - name: google
+  - name: gemini
     default_model: gemini-3.1-pro-preview
 
 defaults:

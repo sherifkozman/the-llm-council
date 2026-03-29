@@ -140,12 +140,11 @@ if request.structured_output:
 ```
 
 **Supported Models:**
-- Gemini 3.x family (gemini-3-pro, gemini-3-flash, gemini-3-preview)
-- Gemini 2.5 family (gemini-2.5-pro, gemini-2.5-flash)
-- Gemini 2.0 family (gemini-2.0-flash, gemini-2.0-pro)
+- Gemini 3.x family (gemini-3.1-pro-preview, gemini-3-flash-preview, gemini-3-preview)
 - Experimental models (gemini-exp-*)
 
-**Legacy Models (JSON mode only, no schema enforcement):**
+**Legacy/compatibility models (JSON mode only, no schema enforcement):**
+- Older Gemini 2.x families when still exposed by the provider
 - Gemini 1.5 family (gemini-1.5-pro, gemini-1.5-flash)
 - Gemini 1.0 family
 - Original gemini-pro
@@ -527,7 +526,7 @@ if request.reasoning and request.reasoning.enabled:
 |----------|-------|--------|
 | OpenAI | `reasoning_effort` | `"low"`, `"medium"`, `"high"` |
 | Anthropic | `thinking` | `{type: "enabled", budget_tokens: N}` + beta API |
-| Google | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: N}` |
+| Gemini API | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: N}` |
 
 ## Provider Implementation Checklist
 
@@ -553,7 +552,7 @@ See existing implementations:
 - `src/llm_council/providers/openrouter.py` - HTTP API with streaming, OpenAI-compatible format
 - `src/llm_council/providers/openai.py` - OpenAI native SDK with GPT-5.4 support
 - `src/llm_council/providers/anthropic.py` - Anthropic SDK with beta header for Claude 4.x
-- `src/llm_council/providers/google.py` - Google Generative AI with Gemini 2.x/3.x support
+- `src/llm_council/providers/gemini.py` - Gemini API adapter with Gemini 2.x/3.x support
 
 ## API Format Quick Reference
 
@@ -573,7 +572,7 @@ See existing implementations:
 | OpenAI | `reasoning_effort` | `"low"`, `"medium"`, `"high"` (o-series models) |
 | OpenRouter | `reasoning_effort` | Pass-through to underlying provider |
 | Anthropic | `thinking` | `{type: "enabled", budget_tokens: 1024-128000}` + beta API |
-| Google | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: 0-24576}` |
+| Gemini API | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: 0-24576}` |
 
 ## Next Steps
 
