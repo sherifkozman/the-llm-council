@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.7.6)
+# LLM Council Skill (v0.7.7)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 

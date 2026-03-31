@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-03-31
+
+### Fixed
+- Increased bounded runtime timeout caps across all providers to prevent degradation from provider lock contention and API latency
+- Bounded retry budget raised from 0 to 1 so transient timeouts get one retry instead of immediate skip
+- Added `openrouter` to bounded timeout caps (was falling through to the minimal default)
+- Added `codex-cli` and `claude-code` aliases to bounded timeout caps
+- Fixed pre-existing line-length lint violations in orchestrator
+
 ## [0.7.6] - 2026-03-31
 
 ### Fixed
