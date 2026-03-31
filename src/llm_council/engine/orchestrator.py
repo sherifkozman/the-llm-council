@@ -750,7 +750,9 @@ class Orchestrator:
             chunk_results: list[str] = []
             for index, chunk in enumerate(chunk_plan["chunks"], start=1):
                 chunk_context = self._render_file_context(chunk_plan["prefix"], chunk)
-                chunk_user_prompt = self._format_draft_prompt_with_context(self._task, chunk_context)
+                chunk_user_prompt = self._format_draft_prompt_with_context(
+                    self._task, chunk_context
+                )
                 chunk_user_prompt += (
                     "\n\nChunking mode constraints:\n"
                     "- Cover only the files in this slice.\n"
@@ -1126,7 +1128,7 @@ class Orchestrator:
         )
 
     def _should_attempt_provider_auto_fallback(self) -> bool:
-        """Return True when dead default providers should fall back to configured direct providers."""
+        """Check if dead default providers should fall back to direct providers."""
 
         return self._provider_names == ["openrouter"] and bool(self._fallback_provider_candidates())
 
@@ -1283,45 +1285,45 @@ class Orchestrator:
         base_timeout = max(float(self._config.timeout) - 1.0, 1.0)
         if self._config.runtime_profile == RuntimeProfile.BOUNDED:
             bounded_caps = {
-                "draft": 15.0,
-                "critique": 10.0,
-                "synthesis": 15.0,
+                "draft": 30.0,
+                "critique": 20.0,
+                "synthesis": 30.0,
             }
-            if provider_name == "codex":
+            if provider_name in {"codex", "codex-cli"}:
                 bounded_caps = {
-                    "draft": 30.0,
-                    "critique": 25.0,
-                    "synthesis": 40.0,
+                    "draft": 90.0,
+                    "critique": 60.0,
+                    "synthesis": 90.0,
                 }
-            elif provider_name == "claude":
-                bounded_caps = {
-                    "draft": 45.0,
-                    "critique": 30.0,
-                    "synthesis": 45.0,
-                }
-            elif provider_name in {"openai", "anthropic"}:
-                bounded_caps = {
-                    "draft": 30.0,
-                    "critique": 20.0,
-                    "synthesis": 35.0,
-                }
-            elif provider_name == "vertex-ai":
-                bounded_caps = {
-                    "draft": 45.0,
-                    "critique": 30.0,
-                    "synthesis": 45.0,
-                }
-            elif provider_name == "gemini":
-                bounded_caps = {
-                    "draft": 45.0,
-                    "critique": 30.0,
-                    "synthesis": 45.0,
-                }
-            elif provider_name == "gemini-cli":
+            elif provider_name in {"claude", "claude-code"}:
                 bounded_caps = {
                     "draft": 60.0,
                     "critique": 45.0,
-                    "synthesis": 90.0,
+                    "synthesis": 60.0,
+                }
+            elif provider_name in {"openai", "anthropic", "openrouter"}:
+                bounded_caps = {
+                    "draft": 45.0,
+                    "critique": 30.0,
+                    "synthesis": 45.0,
+                }
+            elif provider_name == "vertex-ai":
+                bounded_caps = {
+                    "draft": 60.0,
+                    "critique": 45.0,
+                    "synthesis": 60.0,
+                }
+            elif provider_name == "gemini":
+                bounded_caps = {
+                    "draft": 60.0,
+                    "critique": 45.0,
+                    "synthesis": 60.0,
+                }
+            elif provider_name == "gemini-cli":
+                bounded_caps = {
+                    "draft": 90.0,
+                    "critique": 60.0,
+                    "synthesis": 120.0,
                 }
             return max(min(base_timeout, bounded_caps.get(phase, base_timeout)), 1.0)
 
@@ -1365,7 +1367,7 @@ class Orchestrator:
         """Return the provider-level retry budget for degradation handling."""
 
         if self._config.runtime_profile == RuntimeProfile.BOUNDED:
-            return 0
+            return 1
         return 2
 
     def _phase_max_tokens(self, default: int, *, phase: str) -> int:
@@ -1570,7 +1572,10 @@ class Orchestrator:
 
             validation = self._validate_response(draft_text)
             if validation.ok:
-                note = f"Synthesis failed ({reason}); used validated draft output from {provider_name}."
+                note = (
+                    f"Synthesis failed ({reason}); "
+                    f"used validated draft output from {provider_name}."
+                )
                 self._append_degradation_note(note)
                 self._record_degraded_output("draft", provider_name, reason)
                 return (
@@ -1804,7 +1809,9 @@ class Orchestrator:
         synthesis_timeout = self._provider_request_timeout_seconds(
             "synthesis", provider_name=provider_name
         )
-        worst_case_seconds = int(planned_draft_calls * draft_timeout + critique_timeout + synthesis_timeout)
+        worst_case_seconds = int(
+            planned_draft_calls * draft_timeout + critique_timeout + synthesis_timeout
+        )
         average_seconds = int(
             planned_draft_calls * (draft_timeout * 0.55)
             + (critique_timeout * 0.5)
@@ -1816,7 +1823,9 @@ class Orchestrator:
             "file_blocks": len(blocks),
             "prefix_context_chars": len(prefix),
             "reference_context_chars": len(self._config.system_context or ""),
-            "estimated_input_tokens": self._estimate_input_tokens(self._config.system_context or ""),
+            "estimated_input_tokens": self._estimate_input_tokens(
+                self._config.system_context or ""
+            ),
             "planned_call_count": {
                 "draft": planned_draft_calls,
                 "critique": 1,
@@ -1856,8 +1865,9 @@ class Orchestrator:
         if self._schema:
             if self._config.runtime_profile == RuntimeProfile.BOUNDED:
                 schema_hint = (
-                    "\nReturn a concise draft analysis, not final JSON. Focus on the highest-signal "
-                    "findings with short evidence-backed notes. Keep the draft brief."
+                    "\nReturn a concise draft analysis, not final JSON. "
+                    "Focus on the highest-signal findings with short "
+                    "evidence-backed notes. Keep the draft brief."
                 )
             else:
                 schema_hint = "\nReturn a draft that aligns with the JSON schema."
@@ -1897,8 +1907,9 @@ class Orchestrator:
             schema_hint = "\nSchema (JSON):\n" + json.dumps(self._schema, indent=2)
         elif self._schema:
             schema_hint = (
-                "\nFocus on correctness and contradictions in the draft analyses. Do not produce final "
-                "JSON; synthesis will handle the schema."
+                "\nFocus on correctness and contradictions in the "
+                "draft analyses. Do not produce final JSON; "
+                "synthesis will handle the schema."
             )
         tier_hint = f"\nSummary tier: {self._config.summary_tier.value}"
         return (
