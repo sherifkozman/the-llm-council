@@ -119,7 +119,8 @@ def _is_structured_output_schema_error(error: Exception | str) -> bool:
         "output_format.schema" in text
         or "too many optional parameters" in text
         or "grammar compilation" in text
-        or "not supported" in text and "schema" in text
+        or "not supported" in text
+        and "schema" in text
     )
 
 
@@ -270,6 +271,23 @@ class AnthropicProvider(ProviderAdapter):
                 "type": "enabled",
                 "budget_tokens": budget,
             }
+            # Anthropic requires temperature=1 when thinking is enabled
+            if "temperature" in kwargs and kwargs["temperature"] != 1:
+                logger.debug(
+                    "Forcing temperature=1 for Anthropic extended thinking (was %.2f)",
+                    kwargs["temperature"],
+                )
+                kwargs["temperature"] = 1
+            # max_tokens must exceed budget_tokens for extended thinking
+            max_tokens = kwargs.get("max_tokens") or 4096
+            if max_tokens <= budget:
+                kwargs["max_tokens"] = budget + max_tokens
+                logger.debug(
+                    "Bumped max_tokens from %d to %d (must exceed budget_tokens=%d)",
+                    max_tokens,
+                    kwargs["max_tokens"],
+                    budget,
+                )
 
         if request.stream:
             return self._generate_stream(client, kwargs, use_beta=use_beta)
