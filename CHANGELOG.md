@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-03-31
+
+### Fixed
+- Anthropic provider now forces `temperature=1` when extended thinking is enabled
+- Anthropic provider now ensures `max_tokens` exceeds `budget_tokens` for extended thinking
+
 ## [0.7.5] - 2026-03-28
 
 ### Changed
