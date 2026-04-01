@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-04-01
+
+### Changed
+- Refreshed the packaged README, docs, Claude plugin metadata, and council skill to the `0.7.9` release surface
+
+### Fixed
+- Codex CLI doctor now preserves the ambient Codex runtime environment and reports real login status instead of false healthy results from an over-sanitized subprocess env
+- Codex CLI generation now streams JSONL events incrementally and can return as soon as a completed answer arrives, instead of waiting only on subprocess shutdown
+- Nested Codex runs now fail fast after `turn.started` if no answer ever arrives, which avoids burning the entire request timeout on known stalled subprocesses
+
 ## [0.7.8] - 2026-04-01
 
 ### Changed
@@ -554,7 +564,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.8...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.9...HEAD
+[0.7.9]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.8...v0.7.9
 [0.7.8]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.7...v0.7.8
 [0.7.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.0...v0.7.1
