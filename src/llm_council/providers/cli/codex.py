@@ -17,10 +17,12 @@ import json
 import logging
 import os
 import shlex
+import signal
 import shutil
 import tempfile
 import warnings
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -34,7 +36,6 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
-from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +52,14 @@ _UNSAFE_WARNING = (
     "This is unsafe with untrusted inputs. Ensure you trust the task source."
 )
 
-# Minimal environment allowlist for subprocess
-_ENV_ALLOWLIST = {
-    "PATH",
-    "HOME",
-    "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY",
-    "TERM",
-    "LANG",
-    "LC_ALL",
-}
+# Codex CLI panics under an aggressively stripped environment when launched
+# from nested council subprocesses. Preserve the ambient runtime and strip only
+# telemetry variables that can destabilize or leak outer-session tracing.
+_ENV_DENYLIST_PREFIXES = (
+    "OTEL_",
+    "LANGSMITH_",
+    "LANGCHAIN_",
+)
 
 
 def _extract_usage_payload(stdout_text: str) -> dict[str, int] | None:
@@ -175,6 +174,136 @@ def _extract_error_message(stdout_text: str) -> str:
     return ""
 
 
+@dataclass
+class _LiveCodexState:
+    """Incremental subprocess state for Codex CLI calls."""
+
+    stdout_parts: list[str] = field(default_factory=list)
+    stderr_parts: list[str] = field(default_factory=list)
+    agent_message: str = ""
+    error_message: str = ""
+    usage: dict[str, int] | None = None
+    saw_turn_started: bool = False
+    saw_turn_completed: bool = False
+    turn_started_at: float | None = None
+    last_stdout_at: float | None = None
+
+
+def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
+    """Update live state from a single Codex JSONL stdout line."""
+
+    state.stdout_parts.append(line)
+    stripped = line.strip()
+    if not stripped:
+        return
+
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return
+
+    if not isinstance(payload, dict):
+        return
+
+    event_type = payload.get("type")
+    if event_type == "turn.started":
+        state.saw_turn_started = True
+    elif event_type == "item.completed":
+        item = payload.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message":
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                state.agent_message = text
+    elif event_type == "turn.completed":
+        state.saw_turn_completed = True
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            prompt_tokens = int(usage.get("input_tokens", 0) or 0) + int(
+                usage.get("cached_input_tokens", 0) or 0
+            )
+            completion_tokens = int(usage.get("output_tokens", 0) or 0)
+            state.usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+    elif event_type == "error":
+        message = payload.get("message")
+        if isinstance(message, str):
+            state.error_message = message
+
+
+async def _read_codex_stdout(
+    stream: asyncio.StreamReader | None, state: _LiveCodexState
+) -> None:
+    """Consume Codex stdout incrementally."""
+
+    if stream is None:
+        return
+
+    while True:
+        line = await stream.readline()
+        if not line:
+            return
+        _ingest_codex_stdout_line(line.decode("utf-8", errors="replace"), state)
+        now = asyncio.get_running_loop().time()
+        state.last_stdout_at = now
+        if state.saw_turn_started and state.turn_started_at is None:
+            state.turn_started_at = now
+
+
+async def _read_codex_stderr(
+    stream: asyncio.StreamReader | None, state: _LiveCodexState
+) -> None:
+    """Consume Codex stderr incrementally."""
+
+    if stream is None:
+        return
+
+    while True:
+        line = await stream.readline()
+        if not line:
+            return
+        state.stderr_parts.append(line.decode("utf-8", errors="replace"))
+
+
+async def _drain_reader_tasks(*tasks: asyncio.Task[None]) -> None:
+    """Wait briefly for stream reader tasks to finish, then cancel if needed."""
+
+    pending = [task for task in tasks if task is not None]
+    if not pending:
+        return
+
+    try:
+        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=1.0)
+    except asyncio.TimeoutError:
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def _terminate_live_process(
+    proc: asyncio.subprocess.Process, grace_seconds: float = 1.0
+) -> None:
+    """Terminate a live subprocess without re-reading already-consumed streams."""
+
+    if proc.returncode is None:
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:  # pragma: no cover - Windows fallback
+                proc.kill()
+        except ProcessLookupError:
+            pass
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace_seconds)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+
+
 class CodexCLIProvider(ProviderAdapter):
     """Codex CLI provider adapter."""
 
@@ -242,9 +371,14 @@ class CodexCLIProvider(ProviderAdapter):
                 warnings.warn(_UNSAFE_WARNING, UserWarning, stacklevel=3)
                 break
 
-    def _get_minimal_env(self) -> dict[str, str]:
-        """Get minimal environment with only allowlisted variables."""
-        return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
+    def _get_subprocess_env(self) -> dict[str, str]:
+        """Get a Codex-safe subprocess environment."""
+
+        return {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(_ENV_DENYLIST_PREFIXES)
+        }
 
     def _copy_isolated_runtime_state(self, codex_dir: Path) -> None:
         """Copy only the auth material needed for isolated Codex subprocesses."""
@@ -261,8 +395,11 @@ class CodexCLIProvider(ProviderAdapter):
         """Create an isolated HOME so nested Codex runs do not inherit tools/plugins."""
 
         base_dir = Path.home() / ".codex" / ".tmp"
-        base_dir.mkdir(parents=True, exist_ok=True)
-        cli_home = Path(tempfile.mkdtemp(prefix="llm-council-codex-home-", dir=base_dir))
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+            cli_home = Path(tempfile.mkdtemp(prefix="llm-council-codex-home-", dir=base_dir))
+        except OSError:
+            cli_home = Path(tempfile.mkdtemp(prefix="llm-council-codex-home-"))
         codex_dir = cli_home / ".codex"
         codex_dir.mkdir(parents=True, exist_ok=True)
         self._copy_isolated_runtime_state(codex_dir)
@@ -274,6 +411,11 @@ class CodexCLIProvider(ProviderAdapter):
         return (
             float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
         )
+
+    def _stall_after_turn_started_seconds(self, request_timeout: float) -> float:
+        """Return the max silent interval after `turn.started` before fast-failing."""
+
+        return min(45.0, max(15.0, request_timeout * 0.33))
 
     async def _login_status_text(self) -> str | None:
         """Return cached Codex login status output when available."""
@@ -292,7 +434,7 @@ class CodexCLIProvider(ProviderAdapter):
                 "status",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self._get_minimal_env(),
+                env=self._get_subprocess_env(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
         except Exception:  # pragma: no cover - defensive path
@@ -301,8 +443,7 @@ class CodexCLIProvider(ProviderAdapter):
         output = stdout.decode("utf-8", errors="replace").strip()
         error_output = stderr.decode("utf-8", errors="replace").strip()
         status_text = output or error_output or f"CLI returned exit code {proc.returncode}"
-        if proc.returncode == 0:
-            self._login_status_cache = status_text
+        self._login_status_cache = status_text
         return self._login_status_cache
 
     async def _resolve_model(self, request: GenerateRequest) -> str:
@@ -373,7 +514,7 @@ class CodexCLIProvider(ProviderAdapter):
                 output_last_message_path=output_path,
                 output_schema_path=schema_path,
             )
-            env = self._get_minimal_env()
+            env = self._get_subprocess_env()
             env["HOME"] = cli_home
             # Safe: uses argument list, no shell; minimal environment
             proc = await asyncio.create_subprocess_exec(
@@ -386,18 +527,127 @@ class CodexCLIProvider(ProviderAdapter):
             )
 
             timeout = self._request_timeout(request)
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
-                await terminate_process_tree(proc)
-                raise RuntimeError(
-                    f"Codex CLI timed out after {timeout}s. "
-                    "Consider increasing timeout or simplifying the task."
+            if (
+                not isinstance(proc.stdout, asyncio.StreamReader)
+                or not isinstance(proc.stderr, asyncio.StreamReader)
+                or not hasattr(proc, "wait")
+            ):
+                try:
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    await _terminate_live_process(proc)
+                    raise RuntimeError(
+                        f"Codex CLI timed out after {timeout}s. "
+                        "Consider increasing timeout or simplifying the task."
+                    )
+
+                stdout_text = stdout.decode("utf-8", errors="replace")
+                stderr_text = stderr.decode("utf-8", errors="replace")
+                if proc.returncode != 0:
+                    error_text = stderr_text or _extract_error_message(stdout_text)
+                    error_details = self._error_details(error_text)
+                    error_type = classify_error(error_details or stderr_text, proc.returncode or 0)
+
+                    if error_type == ErrorType.BILLING:
+                        billing_url = get_billing_help_url("codex")
+                        raise RuntimeError(
+                            f"BILLING ERROR: OpenAI credits exhausted. "
+                            f"Add credits at {billing_url}\n"
+                            f"Details: {error_details}"
+                        )
+                    elif error_type == ErrorType.AUTH:
+                        raise RuntimeError(
+                            f"AUTH ERROR: Invalid or missing API key. "
+                            f"Check OPENAI_API_KEY environment variable.\n"
+                            f"Details: {error_details}"
+                        )
+                    elif error_type == ErrorType.MODEL_UNAVAILABLE:
+                        raise RuntimeError(f"MODEL UNAVAILABLE: {error_details}")
+                    elif error_type == ErrorType.RATE_LIMIT:
+                        raise RuntimeError(
+                            f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {error_details}"
+                        )
+                    else:
+                        raise RuntimeError(f"CLI failed ({error_type.value}): {error_details}")
+
+                output = ""
+                with contextlib.suppress(OSError):
+                    if output_path:
+                        output = Path(output_path).read_text(encoding="utf-8")
+                if not output:
+                    output = _extract_agent_message(stdout_text)
+                if not output.strip():
+                    logger.warning("Codex CLI returned success but empty output")
+
+                return GenerateResponse(
+                    text=output,
+                    content=output,
+                    usage=_extract_usage_payload(stdout_text),
+                    raw={"stdout": stdout_text},
                 )
 
-            stdout_text = stdout.decode("utf-8", errors="replace")
-            if proc.returncode != 0:
-                stderr_text = stderr.decode("utf-8", errors="replace")
+            state = _LiveCodexState()
+            stdout_task = asyncio.create_task(_read_codex_stdout(proc.stdout, state))
+            stderr_task = asyncio.create_task(_read_codex_stderr(proc.stderr, state))
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            completion_started_at: float | None = None
+            terminated_after_output = False
+            output = ""
+
+            while True:
+                with contextlib.suppress(OSError):
+                    if output_path:
+                        file_output = Path(output_path).read_text(encoding="utf-8")
+                        if file_output:
+                            output = file_output
+
+                if not output and state.agent_message:
+                    output = state.agent_message
+
+                now = loop.time()
+                if output and completion_started_at is None:
+                    completion_started_at = now
+
+                if proc.returncode is not None:
+                    break
+
+                if completion_started_at is not None and (
+                    state.saw_turn_completed or now - completion_started_at >= 1.0
+                ):
+                    terminated_after_output = True
+                    await _terminate_live_process(proc)
+                    break
+
+                if (
+                    state.turn_started_at is not None
+                    and not output
+                    and now - state.turn_started_at
+                    >= self._stall_after_turn_started_seconds(timeout)
+                ):
+                    await _terminate_live_process(proc)
+                    await _drain_reader_tasks(stdout_task, stderr_task)
+                    raise RuntimeError(
+                        "Codex CLI stalled after turn.started without producing any answer. "
+                        "This looks like a nested `codex exec` failure rather than a normal "
+                        "slow response."
+                    )
+
+                if now >= deadline:
+                    await _terminate_live_process(proc)
+                    await _drain_reader_tasks(stdout_task, stderr_task)
+                    raise RuntimeError(
+                        f"Codex CLI timed out after {timeout}s. "
+                        "Consider increasing timeout or simplifying the task."
+                    )
+
+                await asyncio.sleep(0.05)
+
+            await _drain_reader_tasks(stdout_task, stderr_task)
+
+            stdout_text = "".join(state.stdout_parts)
+            stderr_text = "".join(state.stderr_parts)
+            if proc.returncode != 0 and not terminated_after_output:
                 error_text = stderr_text or _extract_error_message(stdout_text)
                 error_details = self._error_details(error_text)
                 error_type = classify_error(error_details or stderr_text, proc.returncode or 0)
@@ -425,9 +675,6 @@ class CodexCLIProvider(ProviderAdapter):
                 else:
                     raise RuntimeError(f"CLI failed ({error_type.value}): {error_details}")
 
-            output = ""
-            with contextlib.suppress(OSError):
-                output = Path(output_path).read_text(encoding="utf-8")
             if not output:
                 output = _extract_agent_message(stdout_text)
 
@@ -438,7 +685,7 @@ class CodexCLIProvider(ProviderAdapter):
             return GenerateResponse(
                 text=output,
                 content=output,
-                usage=_extract_usage_payload(stdout_text),
+                usage=state.usage or _extract_usage_payload(stdout_text),
                 raw={"stdout": stdout_text},
             )
         finally:
@@ -472,7 +719,7 @@ class CodexCLIProvider(ProviderAdapter):
             return DoctorResult(ok=False, message=status_text)
         if "logged in" in lowered:
             return DoctorResult(ok=True, message=status_text)
-        return DoctorResult(ok=True, message=f"CLI available ({status_text})")
+        return DoctorResult(ok=False, message=status_text)
 
 
 def _register() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import sys
@@ -719,6 +720,22 @@ class TestCodexCLIProviderDoctor:
         assert result.ok is False
         assert "Not logged in" in result.message
 
+    @pytest.mark.asyncio
+    async def test_codex_doctor_reports_login_status_subprocess_failure(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b"",
+            b"thread 'main' panicked at Attempted to create a NULL object.\n",
+        )
+        process.returncode = 101
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            result = await provider.doctor()
+
+        assert result.ok is False
+        assert "Attempted to create a NULL object" in result.message
+
 
 class TestCLIProviderTimeouts:
     """Tests for CLI provider request timeout overrides."""
@@ -1070,7 +1087,15 @@ class TestCLIProviderTimeouts:
         process.returncode = 0
 
         with (
-            patch.dict("os.environ", {"OPENAI_API_KEY": "test-openai-key"}, clear=False),
+            patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "test-openai-key",
+                    "CODEX_THREAD_ID": "thread-123",
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://telemetry.invalid",
+                },
+                clear=False,
+            ),
             patch.object(provider, "_create_isolated_cli_home", return_value="/tmp/codex-home"),
             patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec,
         ):
@@ -1081,6 +1106,8 @@ class TestCLIProviderTimeouts:
         assert response.text == "READY"
         assert env["HOME"] == "/tmp/codex-home"
         assert env["OPENAI_API_KEY"] == "test-openai-key"
+        assert env["CODEX_THREAD_ID"] == "thread-123"
+        assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in env
 
     @pytest.mark.asyncio
     async def test_codex_cli_falls_back_to_jsonl_agent_message_when_output_file_is_empty(self):
@@ -1106,6 +1133,91 @@ class TestCLIProviderTimeouts:
             "completion_tokens": 4,
             "total_tokens": 14,
         }
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_returns_after_completed_agent_message_without_process_exit(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        class HangingCodexProcess:
+            def __init__(self) -> None:
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.returncode: int | None = None
+
+            async def wait(self) -> int:
+                while self.returncode is None:
+                    await asyncio.sleep(0)
+                return self.returncode
+
+        process = HangingCodexProcess()
+
+        async def _emit_stdout() -> None:
+            process.stdout.feed_data(b'{"type":"thread.started","thread_id":"abc"}\n')
+            await asyncio.sleep(0.01)
+            process.stdout.feed_data(
+                b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}\n'
+            )
+
+        async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
+            process.returncode = -9
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value="/tmp/codex-home"),
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch(
+                "llm_council.providers.cli.codex._terminate_live_process",
+                side_effect=_fake_terminate,
+            ) as mock_terminate,
+        ):
+            asyncio.create_task(_emit_stdout())
+            response = await provider.generate(GenerateRequest(prompt="test", timeout_seconds=5))
+
+        assert response.text == "READY"
+        mock_terminate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_fast_fails_when_turn_starts_but_no_answer_arrives(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        class HangingCodexProcess:
+            def __init__(self) -> None:
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.returncode: int | None = None
+
+            async def wait(self) -> int:
+                while self.returncode is None:
+                    await asyncio.sleep(0)
+                return self.returncode
+
+        process = HangingCodexProcess()
+
+        async def _emit_stdout() -> None:
+            process.stdout.feed_data(b'{"type":"thread.started","thread_id":"abc"}\n')
+            await asyncio.sleep(0.01)
+            process.stdout.feed_data(b'{"type":"turn.started"}\n')
+
+        async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
+            process.returncode = -9
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value="/tmp/codex-home"),
+            patch.object(provider, "_stall_after_turn_started_seconds", return_value=0.02),
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch(
+                "llm_council.providers.cli.codex._terminate_live_process",
+                side_effect=_fake_terminate,
+            ) as mock_terminate,
+            pytest.raises(RuntimeError, match="stalled after turn.started"),
+        ):
+            asyncio.create_task(_emit_stdout())
+            await provider.generate(GenerateRequest(prompt="test", timeout_seconds=5))
+
+        mock_terminate.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_codex_cli_ignores_non_json_stdout_before_jsonl_events(self):

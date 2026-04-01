@@ -592,7 +592,9 @@ you can still opt in via `providers[].default_model`.
 Council also launches nested Codex subprocesses under an isolated temporary
 `HOME` that only includes the Codex auth files. This avoids inheriting MCP
 tools, plugins, or skills from the parent Codex session while keeping the
-existing Codex login usable.
+existing Codex login usable. The adapter preserves the ambient Codex runtime
+environment and can fail fast if a nested `codex exec` stalls after
+`turn.started`, instead of waiting for the full request timeout.
 
 ### Gemini CLI
 

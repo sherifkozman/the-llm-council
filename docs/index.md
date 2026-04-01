@@ -62,7 +62,9 @@ CLI providers and flaky auth or SDK setup.
 For the Codex CLI provider, council runs nested Codex subprocesses under an
 isolated temporary `HOME` that only carries forward the local Codex auth files.
 That prevents parent-agent MCP tools, plugins, or skills from leaking into
-child council runs.
+child council runs. The Codex adapter also preserves the ambient runtime env, so
+doctor checks report real login state instead of a false positive from an
+over-sanitized subprocess environment.
 
 ### Evaluation Tooling
 `council eval`, `council eval-compare`, and `council eval-import-pr` provide a
