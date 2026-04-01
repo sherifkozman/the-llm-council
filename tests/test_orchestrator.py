@@ -378,17 +378,17 @@ class TestOrchestratorValidation:
         assert orch._phase_max_tokens(4000, phase="draft") == 555
 
     def test_bounded_runtime_profile_clamps_provider_timeouts_and_retries(self):
-        """Bounded runtime should shorten provider waits and disable provider retries."""
+        """Bounded runtime should shorten waits while preserving one provider retry."""
         config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=20)
         with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
             mock_reg.return_value = MagicMock()
             mock_reg.return_value.get_provider.return_value = MagicMock()
             orch = Orchestrator(providers=["mock"], config=config)
 
-        assert orch._provider_retry_budget() == 0
-        assert orch._provider_request_timeout_seconds("draft") == 15.0
-        assert orch._provider_request_timeout_seconds("critique") == 10.0
-        assert orch._provider_request_timeout_seconds("synthesis") == 15.0
+        assert orch._provider_retry_budget() == 1
+        assert orch._provider_request_timeout_seconds("draft") == 19.0
+        assert orch._provider_request_timeout_seconds("critique") == 19.0
+        assert orch._provider_request_timeout_seconds("synthesis") == 19.0
 
     def test_bounded_runtime_profile_allows_longer_codex_phase_caps(self):
         """Codex gets larger bounded caps because planner-style prompts exceed generic limits."""
@@ -398,30 +398,30 @@ class TestOrchestratorValidation:
             mock_reg.return_value.get_provider.return_value = MagicMock()
             orch = Orchestrator(providers=["codex"], config=config)
 
-        assert orch._provider_request_timeout_seconds("draft", provider_name="codex") == 30.0
-        assert orch._provider_request_timeout_seconds("critique", provider_name="codex") == 25.0
-        assert orch._provider_request_timeout_seconds("synthesis", provider_name="codex") == 40.0
+        assert orch._provider_request_timeout_seconds("draft", provider_name="codex") == 59.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="codex") == 59.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="codex") == 59.0
 
     def test_bounded_runtime_profile_allows_longer_vertex_and_gemini_phase_caps(self):
-        """Vertex and Gemini API get larger bounded caps because 15s is too tight."""
+        """Vertex and Gemini API get larger bounded caps than the generic bounded defaults."""
         config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=60)
         with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
             mock_reg.return_value = MagicMock()
             mock_reg.return_value.get_provider.return_value = MagicMock()
             orch = Orchestrator(providers=["vertex-ai"], config=config)
 
-        assert orch._provider_request_timeout_seconds("draft", provider_name="vertex-ai") == 45.0
+        assert orch._provider_request_timeout_seconds("draft", provider_name="vertex-ai") == 59.0
         assert (
             orch._provider_request_timeout_seconds("critique", provider_name="vertex-ai")
-            == 30.0
+            == 45.0
         )
         assert (
             orch._provider_request_timeout_seconds("synthesis", provider_name="vertex-ai")
-            == 45.0
+            == 59.0
         )
-        assert orch._provider_request_timeout_seconds("draft", provider_name="gemini") == 45.0
-        assert orch._provider_request_timeout_seconds("critique", provider_name="gemini") == 30.0
-        assert orch._provider_request_timeout_seconds("synthesis", provider_name="gemini") == 45.0
+        assert orch._provider_request_timeout_seconds("draft", provider_name="gemini") == 59.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="gemini") == 45.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="gemini") == 59.0
 
     def test_bounded_runtime_profile_allows_longer_gemini_cli_phase_caps(self):
         """Gemini CLI needs longer caps than the direct API provider in bounded mode."""
@@ -431,24 +431,24 @@ class TestOrchestratorValidation:
             mock_reg.return_value.get_provider.return_value = MagicMock()
             orch = Orchestrator(providers=["gemini-cli"], config=config)
 
-        assert orch._provider_request_timeout_seconds("draft", provider_name="gemini-cli") == 60.0
-        assert orch._provider_request_timeout_seconds("critique", provider_name="gemini-cli") == 45.0
-        assert orch._provider_request_timeout_seconds("synthesis", provider_name="gemini-cli") == 90.0
+        assert orch._provider_request_timeout_seconds("draft", provider_name="gemini-cli") == 90.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="gemini-cli") == 60.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="gemini-cli") == 119.0
 
     def test_bounded_runtime_profile_allows_longer_openai_and_claude_caps(self):
-        """OpenAI and Claude need more than the generic bounded caps on heavy review workloads."""
+        """OpenAI and Claude get larger bounded caps than the generic profile defaults."""
         config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=60)
         with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
             mock_reg.return_value = MagicMock()
             mock_reg.return_value.get_provider.return_value = MagicMock()
             orch = Orchestrator(providers=["openai", "claude"], config=config)
 
-        assert orch._provider_request_timeout_seconds("draft", provider_name="openai") == 30.0
-        assert orch._provider_request_timeout_seconds("critique", provider_name="openai") == 20.0
-        assert orch._provider_request_timeout_seconds("synthesis", provider_name="openai") == 35.0
-        assert orch._provider_request_timeout_seconds("draft", provider_name="claude") == 45.0
-        assert orch._provider_request_timeout_seconds("critique", provider_name="claude") == 30.0
-        assert orch._provider_request_timeout_seconds("synthesis", provider_name="claude") == 45.0
+        assert orch._provider_request_timeout_seconds("draft", provider_name="openai") == 45.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="openai") == 30.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="openai") == 45.0
+        assert orch._provider_request_timeout_seconds("draft", provider_name="claude") == 59.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="claude") == 45.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="claude") == 59.0
 
 
 class TestOrchestratorDoctor:
@@ -572,22 +572,22 @@ class TestOrchestratorRuntimeTruthfulness:
         assert orch._execution_plan["schema_name"] == "reviewer"
         assert orch._execution_plan["execution_profile"] == "light_tools"
         assert orch._execution_plan["runtime_profile"] == "bounded"
-        assert orch._execution_plan["provider_retry_budget"] == 0
+        assert orch._execution_plan["provider_retry_budget"] == 1
         assert orch._execution_plan["phase_token_budgets"] == {
             "draft": 2000,
             "critique": 1200,
             "synthesis": 3000,
         }
         assert orch._execution_plan["provider_request_timeouts"] == {
-            "draft": 15.0,
-            "critique": 10.0,
-            "synthesis": 15.0,
+            "draft": 45.0,
+            "critique": 30.0,
+            "synthesis": 45.0,
         }
         assert orch._execution_plan["provider_request_timeouts_by_provider"] == {
             "openrouter": {
-                "draft": 15.0,
-                "critique": 10.0,
-                "synthesis": 15.0,
+                "draft": 45.0,
+                "critique": 30.0,
+                "synthesis": 45.0,
             }
         }
         assert "diff-review" in orch._execution_plan["required_capabilities"]
@@ -605,25 +605,25 @@ class TestOrchestratorRuntimeTruthfulness:
 
         assert orch._execution_plan is not None
         assert orch._execution_plan["provider_request_timeouts"] == {
-            "draft": 15.0,
-            "critique": 10.0,
-            "synthesis": 15.0,
+            "draft": 30.0,
+            "critique": 20.0,
+            "synthesis": 30.0,
         }
         assert orch._execution_plan["provider_request_timeouts_by_provider"] == {
             "openai": {
-                "draft": 30.0,
-                "critique": 20.0,
-                "synthesis": 35.0,
+                "draft": 45.0,
+                "critique": 30.0,
+                "synthesis": 45.0,
             },
             "claude": {
-                "draft": 45.0,
-                "critique": 30.0,
-                "synthesis": 45.0,
+                "draft": 60.0,
+                "critique": 45.0,
+                "synthesis": 60.0,
             },
             "vertex-ai": {
-                "draft": 45.0,
-                "critique": 30.0,
-                "synthesis": 45.0,
+                "draft": 60.0,
+                "critique": 45.0,
+                "synthesis": 60.0,
             },
         }
         assert orch._execution_plan["preflight_estimate"]["provider"] == "vertex-ai"
@@ -910,9 +910,9 @@ class TestOrchestratorRuntimeTruthfulness:
         metrics = orch._execution_plan["phase_prompt_metrics"]
         assert set(metrics) == {"draft", "critique", "synthesis"}
         assert metrics["draft"][0]["provider"] == "vertex-ai"
-        assert metrics["draft"][0]["timeout_seconds"] == 45.0
+        assert metrics["draft"][0]["timeout_seconds"] == 60.0
         assert metrics["draft"][0]["estimated_input_tokens"] > 0
-        assert metrics["critique"][0]["timeout_seconds"] == 30.0
+        assert metrics["critique"][0]["timeout_seconds"] == 45.0
         assert metrics["synthesis"][0]["structured_output"] is True
 
     def test_prepare_run_records_chunked_preflight_estimate_for_large_vertex_context(self):
@@ -936,8 +936,8 @@ class TestOrchestratorRuntimeTruthfulness:
         assert preflight["file_blocks"] == 3
         assert preflight["planned_call_count"]["draft"] == 3
         assert preflight["planned_call_count"]["total"] == 5
-        assert preflight["estimated_duration_seconds"]["upper_bound"] == 210
-        assert preflight["estimated_duration_seconds"]["average"] == 116
+        assert preflight["estimated_duration_seconds"]["upper_bound"] == 285
+        assert preflight["estimated_duration_seconds"]["average"] == 157
         assert preflight["chunking"]["enabled"] is True
 
     def test_prepare_run_chunks_vertex_context_before_downstream_prompts_blow_up(self):
@@ -958,8 +958,8 @@ class TestOrchestratorRuntimeTruthfulness:
         preflight = orch._execution_plan["preflight_estimate"]
         assert preflight["request_strategy"] == "chunked_context"
         assert preflight["planned_call_count"]["draft"] == 2
-        assert preflight["estimated_duration_seconds"]["upper_bound"] == 165
-        assert preflight["estimated_duration_seconds"]["average"] == 91
+        assert preflight["estimated_duration_seconds"]["upper_bound"] == 225
+        assert preflight["estimated_duration_seconds"]["average"] == 124
 
     @pytest.mark.asyncio
     async def test_generate_draft_chunks_large_vertex_context(self):

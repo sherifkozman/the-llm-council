@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-04-01
+
+### Changed
+- Refreshed the packaged README, docs, Claude plugin metadata, and council skill to the `0.7.8` release surface
+
+### Fixed
+- Codex CLI subprocess runs now execute under an isolated temporary `HOME` with only Codex auth files copied in, so nested council runs do not inherit the parent Codex agent's MCP tools, plugins, or skills
+- Codex CLI parsing now consumes `--json` output for agent messages and usage metadata, and it preserves stdout-only JSONL error payloads instead of assuming meaningful failures always land on stderr
+- Codex structured-output requests now normalize nested object schemas to the stricter validation contract enforced by the current Codex CLI
+- Orchestrator regression tests now match the bounded runtime timeout caps and single-retry budget introduced in `e0e7320`
+
 ## [0.7.7] - 2026-03-31
 
 ### Fixed
@@ -543,7 +554,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.8...HEAD
+[0.7.8]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.7...v0.7.8
 [0.7.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.4...v0.7.0

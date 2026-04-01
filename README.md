@@ -236,6 +236,11 @@ council doctor
 council doctor --deep --provider claude --provider gemini-cli --provider codex
 ```
 
+The Codex CLI adapter runs nested `codex exec` calls under an isolated temporary
+`HOME`, copying only the Codex auth files required for login. That keeps council
+subprocesses from inheriting the parent Codex agent's MCP tools, plugins, or
+skills while preserving your local Codex authentication.
+
 ### Run Deterministic Evals
 
 ```bash

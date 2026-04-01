@@ -22,7 +22,7 @@ import tempfile
 import warnings
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -63,6 +63,118 @@ _ENV_ALLOWLIST = {
 }
 
 
+def _extract_usage_payload(stdout_text: str) -> dict[str, int] | None:
+    """Extract usage stats from Codex JSONL output."""
+
+    for line in reversed(stdout_text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "turn.completed":
+            continue
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        prompt_tokens = int(usage.get("input_tokens", 0) or 0) + int(
+            usage.get("cached_input_tokens", 0) or 0
+        )
+        completion_tokens = int(usage.get("output_tokens", 0) or 0)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+    return None
+
+
+def _prepare_schema_for_codex(schema: dict[str, Any]) -> dict[str, Any]:
+    """Transform a JSON schema for Codex structured output strictness."""
+
+    result: dict[str, Any] = {}
+
+    for key, value in schema.items():
+        if key == "$schema":
+            continue
+        if key == "additionalProperties":
+            continue
+
+        if key == "properties" and isinstance(value, dict):
+            result[key] = {
+                prop_name: _prepare_schema_for_codex(prop_schema)
+                if isinstance(prop_schema, dict) and prop_schema.get("type") == "object"
+                else (
+                    {
+                        **prop_schema,
+                        "items": _prepare_schema_for_codex(prop_schema["items"]),
+                    }
+                    if isinstance(prop_schema, dict)
+                    and prop_schema.get("type") == "array"
+                    and isinstance(prop_schema.get("items"), dict)
+                    and prop_schema["items"].get("type") == "object"
+                    else prop_schema
+                )
+                for prop_name, prop_schema in value.items()
+            }
+            result["required"] = list(value.keys())
+            result["additionalProperties"] = False
+        elif key == "required":
+            continue
+        elif isinstance(value, dict) and value.get("type") == "object":
+            result[key] = _prepare_schema_for_codex(value)
+        else:
+            result[key] = value
+
+    if schema.get("type") == "object" and "additionalProperties" not in result:
+        result["additionalProperties"] = False
+
+    return result
+
+
+def _extract_agent_message(stdout_text: str) -> str:
+    """Extract the last agent message from Codex JSONL output."""
+
+    for line in reversed(stdout_text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "item.completed":
+            continue
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            return text
+    return ""
+
+
+def _extract_error_message(stdout_text: str) -> str:
+    """Extract a Codex error payload from JSONL stdout when stderr is empty."""
+
+    for line in reversed(stdout_text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "error":
+            continue
+        message = payload.get("message")
+        if isinstance(message, str):
+            return message
+    return ""
+
+
 class CodexCLIProvider(ProviderAdapter):
     """Codex CLI provider adapter."""
 
@@ -70,7 +182,7 @@ class CodexCLIProvider(ProviderAdapter):
     capabilities: ClassVar[ProviderCapabilities] = ProviderCapabilities(
         streaming=False,
         tool_use=False,
-        structured_output=False,
+        structured_output=True,
         multimodal=False,
         max_tokens=4096,
     )
@@ -103,6 +215,7 @@ class CodexCLIProvider(ProviderAdapter):
 
         cmd = [self._cli_path, "exec"]
         cmd.extend(shlex.split(self._default_flags))
+        cmd.extend(["--json", "--color", "never"])
         cmd.extend(["-m", model])
         if output_schema_path:
             cmd.extend(["--output-schema", output_schema_path])
@@ -132,6 +245,28 @@ class CodexCLIProvider(ProviderAdapter):
     def _get_minimal_env(self) -> dict[str, str]:
         """Get minimal environment with only allowlisted variables."""
         return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
+
+    def _copy_isolated_runtime_state(self, codex_dir: Path) -> None:
+        """Copy only the auth material needed for isolated Codex subprocesses."""
+
+        source_dir = Path.home() / ".codex"
+        for filename in ("auth.json", ".credentials.json"):
+            source = source_dir / filename
+            target = codex_dir / filename
+            if source.exists():
+                with contextlib.suppress(OSError):
+                    shutil.copy2(source, target)
+
+    def _create_isolated_cli_home(self) -> str:
+        """Create an isolated HOME so nested Codex runs do not inherit tools/plugins."""
+
+        base_dir = Path.home() / ".codex" / ".tmp"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        cli_home = Path(tempfile.mkdtemp(prefix="llm-council-codex-home-", dir=base_dir))
+        codex_dir = cli_home / ".codex"
+        codex_dir.mkdir(parents=True, exist_ok=True)
+        self._copy_isolated_runtime_state(codex_dir)
+        return str(cli_home)
 
     def _request_timeout(self, request: GenerateRequest) -> float:
         """Return the effective timeout for this request."""
@@ -211,32 +346,42 @@ class CodexCLIProvider(ProviderAdapter):
 
         self._check_unsafe_flags()
         model = await self._resolve_model(request)
-        output_fd, output_path = tempfile.mkstemp(
-            prefix="llm-council-codex-last-message-", suffix=".txt"
-        )
-        os.close(output_fd)
+        cli_home: str | None = None
+        output_path: str | None = None
         schema_path: str | None = None
-        if request.structured_output:
-            schema_fd, schema_path = tempfile.mkstemp(
-                prefix="llm-council-codex-schema-", suffix=".json"
-            )
-            with os.fdopen(schema_fd, "w", encoding="utf-8") as schema_file:
-                json.dump(dict(request.structured_output.json_schema), schema_file)
-        cmd = self._build_command(
-            request,
-            model=model,
-            output_last_message_path=output_path,
-            output_schema_path=schema_path,
-        )
 
         try:
+            cli_home = self._create_isolated_cli_home()
+            output_fd, output_path = tempfile.mkstemp(
+                prefix="llm-council-codex-last-message-", suffix=".txt"
+            )
+            os.close(output_fd)
+            if request.structured_output:
+                schema_fd, schema_path = tempfile.mkstemp(
+                    prefix="llm-council-codex-schema-", suffix=".json"
+                )
+                with os.fdopen(schema_fd, "w", encoding="utf-8") as schema_file:
+                    json.dump(
+                        _prepare_schema_for_codex(
+                            dict(request.structured_output.json_schema)
+                        ),
+                        schema_file,
+                    )
+            cmd = self._build_command(
+                request,
+                model=model,
+                output_last_message_path=output_path,
+                output_schema_path=schema_path,
+            )
+            env = self._get_minimal_env()
+            env["HOME"] = cli_home
             # Safe: uses argument list, no shell; minimal environment
             proc = await asyncio.create_subprocess_exec(
                 cmd[0],
                 *cmd[1:],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self._get_minimal_env(),
+                env=env,
                 start_new_session=True,
             )
 
@@ -250,9 +395,11 @@ class CodexCLIProvider(ProviderAdapter):
                     "Consider increasing timeout or simplifying the task."
                 )
 
+            stdout_text = stdout.decode("utf-8", errors="replace")
             if proc.returncode != 0:
                 stderr_text = stderr.decode("utf-8", errors="replace")
-                error_details = self._error_details(stderr_text)
+                error_text = stderr_text or _extract_error_message(stdout_text)
+                error_details = self._error_details(error_text)
                 error_type = classify_error(error_details or stderr_text, proc.returncode or 0)
 
                 # Provide actionable error messages based on error type
@@ -282,18 +429,25 @@ class CodexCLIProvider(ProviderAdapter):
             with contextlib.suppress(OSError):
                 output = Path(output_path).read_text(encoding="utf-8")
             if not output:
-                output = stdout.decode("utf-8", errors="replace")
+                output = _extract_agent_message(stdout_text)
 
             # Warn if output is empty on success
             if not output.strip():
                 logger.warning("Codex CLI returned success but empty output")
 
-            return GenerateResponse(text=output, content=output)
+            return GenerateResponse(
+                text=output,
+                content=output,
+                usage=_extract_usage_payload(stdout_text),
+                raw={"stdout": stdout_text},
+            )
         finally:
             for temp_path in (output_path, schema_path):
                 if temp_path:
                     with contextlib.suppress(OSError):
                         os.unlink(temp_path)
+            if cli_home:
+                shutil.rmtree(cli_home, ignore_errors=True)
 
     async def supports(self, capability: str) -> bool:
         if not self.supports_capability_name(capability):

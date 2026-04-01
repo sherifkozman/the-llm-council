@@ -59,6 +59,11 @@ Swap between providers seamlessly:
 trivial non-interactive prompt right now.” This is useful for diagnosing local
 CLI providers and flaky auth or SDK setup.
 
+For the Codex CLI provider, council runs nested Codex subprocesses under an
+isolated temporary `HOME` that only carries forward the local Codex auth files.
+That prevents parent-agent MCP tools, plugins, or skills from leaking into
+child council runs.
+
 ### Evaluation Tooling
 `council eval`, `council eval-compare`, and `council eval-import-pr` provide a
 public deterministic evaluation harness plus local-only PR-import support for

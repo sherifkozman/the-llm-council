@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import shutil
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -758,19 +759,33 @@ class TestCLIProviderTimeouts:
     async def test_codex_cli_starts_new_session(self):
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
         process = AsyncMock()
-        process.communicate.return_value = (b"ok", b"")
+        process.communicate.return_value = (
+            (
+                b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+                b'"text":"ok"}}\n'
+                b'{"type":"turn.completed","usage":{"input_tokens":5,'
+                b'"cached_input_tokens":2,"output_tokens":3}}'
+            ),
+            b"",
+        )
         process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
             response = await provider.generate(GenerateRequest(prompt="test"))
 
         assert response.text == "ok"
+        assert response.usage == {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+        }
         assert mock_exec.await_args.kwargs["start_new_session"] is True
 
     def test_codex_cli_defaults_to_chatgpt_compatible_model(self):
         """Codex CLI should default to a model that works with ChatGPT auth."""
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
         assert provider._default_model == "gpt-5.4"
+        assert provider.capabilities.structured_output is True
 
     @pytest.mark.asyncio
     async def test_codex_cli_rewrites_codex_model_for_chatgpt_auth(self):
@@ -782,7 +797,14 @@ class TestCLIProviderTimeouts:
         login_process.returncode = 0
 
         exec_process = AsyncMock()
-        exec_process.communicate.return_value = (b"READY\n", b"")
+        exec_process.communicate.return_value = (
+            (
+                b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+                b'"text":"READY"}}\n'
+                b'{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":1}}'
+            ),
+            b"",
+        )
         exec_process.returncode = 0
 
         with patch(
@@ -793,13 +815,14 @@ class TestCLIProviderTimeouts:
                 GenerateRequest(prompt="test", model="gpt-5.4-codex")
             )
 
-        assert response.text == "READY\n"
+        assert response.text == "READY"
         assert mock_exec.await_args_list[1].args[:4] == (
             "/usr/local/bin/codex",
             "exec",
             "--sandbox",
             "read-only",
         )
+        assert "--json" in mock_exec.await_args_list[1].args
         assert "-m" in mock_exec.await_args_list[1].args
         model_index = mock_exec.await_args_list[1].args.index("-m")
         assert mock_exec.await_args_list[1].args[model_index + 1] == "gpt-5.4"
@@ -821,9 +844,34 @@ class TestCLIProviderTimeouts:
         )
         process.returncode = 1
 
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            with pytest.raises(RuntimeError, match="MODEL UNAVAILABLE: ERROR:"):
-                await provider.generate(GenerateRequest(prompt="test"))
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            pytest.raises(RuntimeError, match="MODEL UNAVAILABLE: ERROR:"),
+        ):
+            await provider.generate(GenerateRequest(prompt="test"))
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_extracts_jsonl_error_when_stderr_is_empty(self):
+        """Codex JSONL errors should still classify correctly when stderr is blank."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b'{"type":"thread.started","thread_id":"abc"}\n'
+                b'{"type":"error","message":"{\\"type\\":\\"error\\",\\"error\\":{'
+                b'\\"type\\":\\"invalid_request_error\\",\\"code\\":\\"invalid_json_schema\\",'
+                b'\\"message\\":\\"Invalid schema\\"},\\"status\\":400}"}\n'
+                b'{"type":"turn.failed","error":{"message":"Invalid schema"}}'
+            ),
+            b"",
+        )
+        process.returncode = 1
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            pytest.raises(RuntimeError, match="invalid_json_schema|Invalid schema"),
+        ):
+            await provider.generate(GenerateRequest(prompt="test"))
 
     @pytest.mark.asyncio
     async def test_claude_cli_starts_new_session(self):
@@ -1010,6 +1058,149 @@ class TestCLIProviderTimeouts:
         assert response.text == "READY\n"
         assert "-o" in mock_exec.await_args.args
         assert not Path(captured_output_path["path"]).exists()
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_uses_isolated_home_for_subprocess(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}',
+            b"",
+        )
+        process.returncode = 0
+
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "test-openai-key"}, clear=False),
+            patch.object(provider, "_create_isolated_cli_home", return_value="/tmp/codex-home"),
+            patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec,
+        ):
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        env = mock_exec.await_args.kwargs["env"]
+
+        assert response.text == "READY"
+        assert env["HOME"] == "/tmp/codex-home"
+        assert env["OPENAI_API_KEY"] == "test-openai-key"
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_falls_back_to_jsonl_agent_message_when_output_file_is_empty(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b'{"type":"thread.started","thread_id":"abc"}\n'
+                b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+                b'"text":"{\\"answer\\":\\"READY\\"}"}}\n'
+                b'{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":4}}'
+            ),
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        assert response.text == '{"answer":"READY"}'
+        assert response.usage == {
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+        }
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_ignores_non_json_stdout_before_jsonl_events(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b"WARNING: transient banner\n"
+                b'{"type":"thread.started","thread_id":"abc"}\n'
+                b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}\n'
+                b'{"type":"turn.completed","usage":{"input_tokens":8,"output_tokens":2}}'
+            ),
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            response = await provider.generate(GenerateRequest(prompt="test"))
+
+        assert response.text == "READY"
+        assert response.usage == {
+            "prompt_tokens": 8,
+            "completion_tokens": 2,
+            "total_tokens": 10,
+        }
+
+    def test_codex_cli_isolated_home_tolerates_missing_auth_files(self, tmp_path, monkeypatch):
+        source_home = tmp_path / "source-home"
+        monkeypatch.setattr("llm_council.providers.cli.codex.Path.home", lambda: source_home)
+
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        cli_home = provider._create_isolated_cli_home()
+
+        try:
+            isolated_codex_dir = Path(cli_home) / ".codex"
+            assert isolated_codex_dir.exists()
+            assert list(isolated_codex_dir.iterdir()) == []
+        finally:
+            shutil.rmtree(cli_home, ignore_errors=True)
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_structured_output_normalizes_nested_object_schema(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b'{"type":"item.completed","item":{"type":"agent_message","text":"{\\"ok\\":true}"}}',
+            b"",
+        )
+        process.returncode = 0
+        captured_schema: dict[str, object] = {}
+
+        def _fake_exec(*args, **kwargs):
+            schema_index = args.index("--output-schema")
+            schema_path = args[schema_index + 1]
+            captured_schema["value"] = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+            return process
+
+        request = GenerateRequest(
+            prompt="test",
+            structured_output=StructuredOutputConfig(
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "context": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                        }
+                    },
+                },
+                name="codex_test",
+                strict=True,
+            ),
+        )
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec):
+            await provider.generate(request)
+
+        saved_schema = captured_schema["value"]
+        assert saved_schema["additionalProperties"] is False
+        assert saved_schema["properties"]["context"]["additionalProperties"] is False
+        assert saved_schema["properties"]["context"]["required"] == ["value"]
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_cleans_up_isolated_home_when_command_build_fails(self, tmp_path):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        cli_home = tmp_path / "codex-home"
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value=str(cli_home)),
+            patch.object(provider, "_build_command", side_effect=ValueError("bad request")),
+            pytest.raises(ValueError, match="bad request"),
+        ):
+            await provider.generate(GenerateRequest(prompt="test"))
+
+        assert not cli_home.exists()
 
 
 class TestOpenRouterProviderEnvModel:

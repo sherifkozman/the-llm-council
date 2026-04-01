@@ -166,12 +166,18 @@ class TestCLIDoctor:
 
     def test_doctor_deep_probe_reports_generation_readiness(self):
         """Deep doctor should surface whether a provider can answer a trivial prompt."""
+        @asynccontextmanager
+        async def fake_slot(_name: str, *, timeout_seconds: float | None = None):
+            assert timeout_seconds == 5.0
+            yield 0.0
+
         with (
             patch(
                 "llm_council.cli.main._load_config_defaults",
                 return_value={"output_format": "json"},
             ),
             patch("llm_council.providers.registry.get_registry") as mock_reg,
+            patch("llm_council.cli.main.provider_call_slot", fake_slot),
         ):
             mock_registry = MagicMock()
             mock_registry.list_providers.return_value = ["codex"]

@@ -589,6 +589,11 @@ council run drafter --mode impl "Build a parser" --providers codex
 without extra config. If your local Codex environment supports `*-codex` variants,
 you can still opt in via `providers[].default_model`.
 
+Council also launches nested Codex subprocesses under an isolated temporary
+`HOME` that only includes the Codex auth files. This avoids inheriting MCP
+tools, plugins, or skills from the parent Codex session while keeping the
+existing Codex login usable.
+
 ### Gemini CLI
 
 ```bash
