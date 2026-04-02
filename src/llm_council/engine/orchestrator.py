@@ -839,14 +839,18 @@ class Orchestrator:
                         provider_name=provider_name,
                         wait_ms=queue_wait_ms,
                     )
+                    # Use the provider-specific timeout (bounded caps included),
+                    # minus time already spent waiting for the call-slot lock.
+                    effective_timeout = request.timeout_seconds or float(self._config.timeout)
+                    effective_timeout = max(effective_timeout - (queue_wait_ms / 1000.0), 1.0)
                     result = await asyncio.wait_for(
-                        adapter.generate(request), timeout=self._config.timeout
+                        adapter.generate(request), timeout=effective_timeout
                     )
                     if isinstance(result, GenerateResponse):
                         response = result
                     else:
                         response = await asyncio.wait_for(
-                            _consume_stream(result), timeout=self._config.timeout
+                            _consume_stream(result), timeout=effective_timeout
                         )
 
                 self._record_usage(provider_name, response.usage)

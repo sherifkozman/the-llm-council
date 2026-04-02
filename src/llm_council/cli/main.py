@@ -6,6 +6,7 @@ Commands:
     council eval <dataset>         - Run a dataset-driven evaluation
     council eval-compare           - Compare named runtime variants on one dataset
     council eval-import-pr         - Import PR review material into local-only storage
+    council storage <command>      - Inspect or migrate council artifact storage
     council doctor                  - Check provider status
     council config                  - Manage configuration
 """
@@ -39,6 +40,7 @@ from llm_council.evaluation import (
 )
 from llm_council.protocol.types import ReasoningProfile, RuntimeProfile
 from llm_council.providers.concurrency import provider_call_slot
+from llm_council.storage.artifacts import ArtifactStore
 
 if TYPE_CHECKING:
     from llm_council.protocol.types import CouncilConfig
@@ -89,6 +91,11 @@ app = typer.Typer(
     help="Multi-LLM Council Framework - Orchestrate multiple LLM backends",
     no_args_is_help=True,
 )
+storage_app = typer.Typer(
+    help="Inspect and migrate council artifact storage.",
+    no_args_is_help=True,
+)
+app.add_typer(storage_app, name="storage")
 
 
 @app.callback()
@@ -1294,6 +1301,114 @@ def eval_import_pr(
             ),
             title="[green]PR Import Complete[/green]",
             border_style="green",
+        )
+    )
+
+
+@storage_app.command("status")
+def storage_status(
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output as JSON"),
+    ] = False,
+) -> None:
+    """Show active, default, and legacy council storage locations."""
+    console = _get_console()
+    paths = ArtifactStore.inspect_storage_paths()
+    payload = {
+        "active_artifact_dir": str(paths.active_artifact_dir),
+        "active_db_path": str(paths.active_db_path),
+        "default_artifact_dir": str(paths.default_artifact_dir),
+        "default_db_path": str(paths.default_db_path),
+        "legacy_artifact_dir": str(paths.legacy_artifact_dir),
+        "legacy_db_path": str(paths.legacy_db_path),
+        "using_legacy": paths.using_legacy,
+        "legacy_exists": paths.legacy_artifact_dir.exists() or paths.legacy_db_path.exists(),
+        "default_exists": paths.default_artifact_dir.exists() or paths.default_db_path.exists(),
+    }
+
+    if output_json:
+        print(json.dumps(payload, indent=2))
+        return
+
+    table = Table(title="Council Storage")
+    table.add_column("Setting")
+    table.add_column("Value")
+    table.add_row("Active artifacts", str(paths.active_artifact_dir))
+    table.add_row("Active ledger", str(paths.active_db_path))
+    table.add_row("Default neutral artifacts", str(paths.default_artifact_dir))
+    table.add_row("Default neutral ledger", str(paths.default_db_path))
+    table.add_row("Legacy artifacts", str(paths.legacy_artifact_dir))
+    table.add_row("Legacy ledger", str(paths.legacy_db_path))
+    table.add_row("Using legacy store", "yes" if paths.using_legacy else "no")
+    console.print(table)
+    if paths.using_legacy:
+        console.print(
+            "[yellow]Legacy ~/.claude council storage is active. "
+            "Run `council storage migrate` to copy it into ~/.council.[/yellow]"
+        )
+
+
+@storage_app.command("migrate")
+def storage_migrate(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show what would be copied without changing files"),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite the neutral target if it already exists"),
+    ] = False,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output as JSON"),
+    ] = False,
+) -> None:
+    """Copy legacy ~/.claude council storage into the neutral ~/.council home."""
+    console = _get_console()
+
+    try:
+        result = ArtifactStore.migrate_legacy_storage(dry_run=dry_run, force=force)
+    except Exception as e:
+        if output_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    payload = {
+        "source_artifact_dir": str(result.source_artifact_dir),
+        "source_db_path": str(result.source_db_path),
+        "target_artifact_dir": str(result.target_artifact_dir),
+        "target_db_path": str(result.target_db_path),
+        "dry_run": result.dry_run,
+        "migrated": result.migrated,
+        "copied_files": result.copied_files,
+        "copied_db": result.copied_db,
+        "message": result.message,
+    }
+
+    if output_json:
+        print(json.dumps(payload, indent=2))
+        return
+
+    border_style = "green" if result.migrated else "yellow"
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    result.message,
+                    f"Source artifacts: {result.source_artifact_dir}",
+                    f"Source ledger: {result.source_db_path}",
+                    f"Target artifacts: {result.target_artifact_dir}",
+                    f"Target ledger: {result.target_db_path}",
+                    f"Artifact files copied: {result.copied_files}",
+                    f"Ledger copied: {'yes' if result.copied_db else 'no'}",
+                    "Source data was left untouched.",
+                ]
+            ),
+            title="[green]Council Storage Migration[/green]" if result.migrated else "[yellow]Council Storage Migration[/yellow]",
+            border_style=border_style,
         )
     )
 

@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from llm_council.cli.main import app
 from llm_council.eval_import import ImportedPullRequest
 from llm_council.providers.base import GenerateResponse
+from llm_council.storage.artifacts import ArtifactStore, ArtifactType
 
 runner = CliRunner()
 
@@ -59,6 +60,60 @@ class TestCLIVersion:
         assert result.exit_code == 0
         assert "LLM Council" in result.stdout
         assert __version__ in result.stdout
+
+
+class TestCLIStorage:
+    """Tests for storage commands."""
+
+    def test_storage_status_reports_legacy_usage(self, monkeypatch, tmp_path):
+        """Storage status should show when the legacy store is active."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+        legacy_store = ArtifactStore(
+            artifact_dir=tmp_path / ".claude" / "council-artifacts",
+            db_path=tmp_path / ".claude" / "council-ledger.db",
+        )
+        run = legacy_store.create_run(subagent="test", task="legacy")
+        legacy_store.store_artifact(run.run_id, "legacy content", ArtifactType.DRAFT)
+
+        result = runner.invoke(app, ["storage", "status", "--json"])
+
+        assert result.exit_code == 0
+        assert '"using_legacy": true' in result.stdout
+        assert str(tmp_path / ".claude" / "council-artifacts") in result.stdout
+
+    def test_storage_migrate_dry_run(self, monkeypatch, tmp_path):
+        """Dry-run migration should report what would be copied."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+        legacy_store = ArtifactStore(
+            artifact_dir=tmp_path / ".claude" / "council-artifacts",
+            db_path=tmp_path / ".claude" / "council-ledger.db",
+        )
+        run = legacy_store.create_run(subagent="test", task="legacy")
+        legacy_store.store_artifact(run.run_id, "legacy content", ArtifactType.DRAFT)
+
+        result = runner.invoke(app, ["storage", "migrate", "--dry-run", "--json"])
+
+        assert result.exit_code == 0
+        assert '"dry_run": true' in result.stdout
+        assert '"copied_files": 1' in result.stdout
+        assert not (tmp_path / ".council").exists()
+
+    def test_storage_migrate_copies_legacy_store(self, monkeypatch, tmp_path):
+        """Migration command should copy legacy store into neutral council home."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+        legacy_store = ArtifactStore(
+            artifact_dir=tmp_path / ".claude" / "council-artifacts",
+            db_path=tmp_path / ".claude" / "council-ledger.db",
+        )
+        run = legacy_store.create_run(subagent="test", task="legacy")
+        legacy_store.store_artifact(run.run_id, "legacy content", ArtifactType.DRAFT)
+
+        result = runner.invoke(app, ["storage", "migrate", "--json"])
+
+        assert result.exit_code == 0
+        assert '"migrated": true' in result.stdout
+        assert (tmp_path / ".council" / "ledger.db").exists()
+        assert (tmp_path / ".council" / "artifacts").exists()
 
 
 class TestCLIDoctor:

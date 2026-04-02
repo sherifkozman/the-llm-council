@@ -18,6 +18,97 @@ from llm_council.storage import (
 class TestArtifactStore:
     """Tests for ArtifactStore."""
 
+    def test_default_paths_use_council_home(self, tmp_path, monkeypatch):
+        """Fresh installs should default to ~/.council, not ~/.claude."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+
+        store = ArtifactStore()
+
+        assert store.artifact_dir == tmp_path / ".council" / "artifacts"
+        assert store.db_path == tmp_path / ".council" / "ledger.db"
+
+    def test_default_paths_fall_back_to_legacy_claude_store(self, tmp_path, monkeypatch):
+        """Existing ~/.claude ledger data should keep working during migration."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+        legacy_dir = tmp_path / ".claude"
+        (legacy_dir / "council-artifacts").mkdir(parents=True)
+        (legacy_dir / "council-ledger.db").write_text("", encoding="utf-8")
+
+        store = ArtifactStore()
+
+        assert store.artifact_dir == legacy_dir / "council-artifacts"
+        assert store.db_path == legacy_dir / "council-ledger.db"
+
+    def test_default_paths_honor_council_home_env(self, tmp_path, monkeypatch):
+        """COUNCIL_HOME should override the neutral storage root."""
+        monkeypatch.setenv("COUNCIL_HOME", str(tmp_path / "custom-council-home"))
+
+        store = ArtifactStore()
+
+        assert store.artifact_dir == tmp_path / "custom-council-home" / "artifacts"
+        assert store.db_path == tmp_path / "custom-council-home" / "ledger.db"
+
+    def test_migrate_legacy_storage_dry_run(self, tmp_path, monkeypatch):
+        """Dry-run migration should report work without changing files."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+        legacy_store = ArtifactStore(
+            artifact_dir=tmp_path / ".claude" / "council-artifacts",
+            db_path=tmp_path / ".claude" / "council-ledger.db",
+        )
+        run = legacy_store.create_run(subagent="test", task="legacy")
+        legacy_store.store_artifact(run.run_id, "legacy content", ArtifactType.DRAFT)
+
+        result = ArtifactStore.migrate_legacy_storage(dry_run=True)
+
+        assert result.dry_run is True
+        assert result.migrated is False
+        assert result.copied_files == 1
+        assert result.copied_db is True
+        assert not (tmp_path / ".council").exists()
+
+    def test_migrate_legacy_storage_copies_to_neutral_home(self, tmp_path, monkeypatch):
+        """Explicit migration should copy legacy storage into ~/.council."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+        legacy_store = ArtifactStore(
+            artifact_dir=tmp_path / ".claude" / "council-artifacts",
+            db_path=tmp_path / ".claude" / "council-ledger.db",
+        )
+        run = legacy_store.create_run(subagent="test", task="legacy")
+        legacy_artifact = legacy_store.store_artifact(run.run_id, "legacy content", ArtifactType.DRAFT)
+
+        result = ArtifactStore.migrate_legacy_storage()
+
+        assert result.migrated is True
+        assert result.copied_files == 1
+        assert result.copied_db is True
+        assert (tmp_path / ".council" / "ledger.db").exists()
+        assert (tmp_path / ".council" / "artifacts").exists()
+        migrated_store = ArtifactStore()
+        assert migrated_store.artifact_dir == tmp_path / ".council" / "artifacts"
+        migrated_content = migrated_store.get_artifact_content(legacy_artifact.artifact_id)
+        assert migrated_content == "legacy content"
+
+    def test_migrate_legacy_storage_refuses_existing_target_without_force(
+        self, tmp_path, monkeypatch
+    ):
+        """Migration should not merge into an existing neutral store implicitly."""
+        monkeypatch.setattr("llm_council.storage.artifacts.Path.home", lambda: tmp_path)
+        legacy_store = ArtifactStore(
+            artifact_dir=tmp_path / ".claude" / "council-artifacts",
+            db_path=tmp_path / ".claude" / "council-ledger.db",
+        )
+        run = legacy_store.create_run(subagent="test", task="legacy")
+        legacy_store.store_artifact(run.run_id, "legacy content", ArtifactType.DRAFT)
+        neutral_store = ArtifactStore(
+            artifact_dir=tmp_path / ".council" / "artifacts",
+            db_path=tmp_path / ".council" / "ledger.db",
+        )
+        neutral_run = neutral_store.create_run(subagent="test", task="neutral")
+        neutral_store.store_artifact(neutral_run.run_id, "neutral content", ArtifactType.DRAFT)
+
+        with pytest.raises(RuntimeError, match="Refusing to merge automatically"):
+            ArtifactStore.migrate_legacy_storage()
+
     def test_create_run(self, tmp_path):
         """Test creating a run."""
         store = ArtifactStore(

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-04-02
+
+### Fixed
+- Anthropic provider now uses `thinking.type=adaptive` instead of deprecated `thinking.type=enabled` for claude-4.x models
+- Anthropic structured output schema normalization now promotes all properties to `required`, staying under the 24-optional-parameter grammar compilation limit
+- Orchestrator `asyncio.wait_for` now uses the provider-specific bounded timeout instead of the global 120s config timeout — bounded caps are actually enforced
+- Provider call-slot lock wait time is now subtracted from the asyncio timeout budget so lock contention doesn't silently extend request duration
+- OpenAI provider default client timeout raised from 15s to 60s to prevent SDK-level timeouts before the orchestrator's own timeout fires
+
+- Unknown errors now get one retry before falling through to continue/skip, so transient CLI and API errors are not silently dropped
+- Server error patterns (500, 502, 503, overloaded) are now classified as retryable network errors instead of unknown
+
+### Changed
+- Updated Claude plugin metadata, council skill, and docs to v0.7.10
+
 ## [0.7.9] - 2026-04-01
 
 ### Changed

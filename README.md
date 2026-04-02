@@ -320,6 +320,19 @@ commit imported diffs, copied code, or review fixtures into tracked repo paths.
    └── Store drafts and outputs for context management
 ```
 
+Artifact storage defaults to `~/.council/` (`artifacts/` plus `ledger.db`).
+You can override the root with `COUNCIL_HOME`, or set `COUNCIL_ARTIFACT_DIR`
+and `COUNCIL_DB_PATH` explicitly. Existing legacy `~/.claude/` council stores
+are still picked up automatically during migration.
+
+Inspect or migrate storage explicitly:
+
+```bash
+council storage status
+council storage migrate --dry-run
+council storage migrate
+```
+
 ## Subagents (v0.7.x)
 
 ### Core Agents

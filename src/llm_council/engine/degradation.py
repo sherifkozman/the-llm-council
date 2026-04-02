@@ -330,6 +330,16 @@ class DegradationPolicy:
                 reason=f"Max retries exceeded for {provider}",
             )
 
+        # Unknown errors get one retry before falling through to continue/skip.
+        # CLI providers and transient API issues often produce unrecognized error
+        # messages that are still worth retrying once.
+        if error_type == ErrorType.UNKNOWN and current_retries < min(self._max_retries, 1):
+            return DegradationDecision(
+                action=DegradationAction.RETRY,
+                reason=f"Unknown error, retrying once (attempt {current_retries + 1})",
+                retry_delay_ms=self.BASE_RETRY_DELAY_MS,
+            )
+
         # Default: continue without this provider
         if remaining_providers >= self._min_providers:
             return DegradationDecision(

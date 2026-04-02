@@ -211,7 +211,7 @@ class TestDegradationPolicy:
 
         decision = policy.decide(
             provider="last_provider",
-            error="auth error",
+            error="authentication failed: invalid_api_key",
             phase="synthesis",
             remaining_providers=0,
         )

@@ -101,6 +101,21 @@ _NETWORK_PATTERNS = (
     "etimedout",
 )
 
+# Server/API errors that are typically transient and retryable
+_SERVER_ERROR_PATTERNS = (
+    "500",
+    "502",
+    "503",
+    "504",
+    "internal server error",
+    "bad gateway",
+    "service unavailable",
+    "server error",
+    "overloaded_error",
+    "overloaded",
+    "api_error",
+)
+
 
 def classify_error(error_text: str, return_code: int = -1) -> ErrorType:
     """Classify an error based on error text and return code.
@@ -144,6 +159,11 @@ def classify_error(error_text: str, return_code: int = -1) -> ErrorType:
 
     # Check for network issues (retryable)
     for pattern in _NETWORK_PATTERNS:
+        if pattern in error_lower:
+            return ErrorType.NETWORK
+
+    # Check for server/API errors (transient, retryable like network)
+    for pattern in _SERVER_ERROR_PATTERNS:
         if pattern in error_lower:
             return ErrorType.NETWORK
 
@@ -290,11 +310,16 @@ class GenerateRequest(BaseModel):
     )
     structured_output: StructuredOutputConfig | None = Field(
         default=None,
-        description="Structured output configuration. Each provider transforms this to their native format.",
+        description=(
+            "Structured output configuration. Each provider transforms this to their native format."
+        ),
     )
     reasoning: ReasoningConfig | None = Field(
         default=None,
-        description="Reasoning/thinking configuration. Each provider transforms this to their native format.",
+        description=(
+            "Reasoning/thinking configuration. Each provider transforms this"
+            " to their native format."
+        ),
     )
     metadata: Mapping[str, Any] | None = Field(default=None, description="Arbitrary metadata.")
 
@@ -352,8 +377,10 @@ class ProviderAdapter(ABC):
     - implement async :meth:`generate`, async :meth:`supports`, and async :meth:`doctor`
 
     Capability semantics:
-    - Boolean capabilities (e.g. ``streaming``) are supported when the corresponding flag is ``True``.
-    - ``max_tokens`` is treated as supported when it is not ``None`` (i.e. the provider exposes a known limit).
+    - Boolean capabilities (e.g. ``streaming``) are supported when the
+      corresponding flag is ``True``.
+    - ``max_tokens`` is treated as supported when it is not ``None``
+      (i.e. the provider exposes a known limit).
     """
 
     name: ClassVar[str]

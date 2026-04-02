@@ -26,6 +26,7 @@ from llm_council.providers.base import (
     GenerateResponse,
     Message,
     ProviderCapabilities,
+    ReasoningConfig,
     StructuredOutputConfig,
     classify_error,
 )
@@ -263,15 +264,23 @@ class TestErrorClassification:
 
     def test_chatgpt_codex_model_mismatch_is_model_unavailable(self):
         """ChatGPT-auth Codex model mismatches should classify as model availability issues."""
-        assert classify_error(
-            "The 'gpt-5.4-codex' model is not supported when using Codex with a ChatGPT account."
-        ) == ErrorType.MODEL_UNAVAILABLE
+        assert (
+            classify_error(
+                "The 'gpt-5.4-codex' model is not supported when using"
+                " Codex with a ChatGPT account."
+            )
+            == ErrorType.MODEL_UNAVAILABLE
+        )
 
     def test_vertex_model_not_found_is_model_unavailable(self):
         """Vertex publisher model access failures should classify as model availability issues."""
-        assert classify_error(
-            "404 NOT_FOUND. Publisher Model was not found or your project does not have access to it."
-        ) == ErrorType.MODEL_UNAVAILABLE
+        assert (
+            classify_error(
+                "404 NOT_FOUND. Publisher Model was not found"
+                " or your project does not have access to it."
+            )
+            == ErrorType.MODEL_UNAVAILABLE
+        )
 
 
 class TestAnthropicStructuredSchemaNormalization:
@@ -347,6 +356,68 @@ class TestAnthropicStructuredSchemaNormalization:
 
         assert normalized["additionalProperties"] is True
         assert normalized["properties"]["payload"]["additionalProperties"] == {"type": "string"}
+
+    def test_prepare_schema_for_anthropic_promotes_all_properties_to_required(self):
+        """All properties should be promoted to required to stay under Anthropic's
+        24-optional-parameter limit."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "language": {"type": "string"},
+                            "code": {"type": "string"},
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            "required": ["summary"],
+        }
+
+        normalized = _prepare_schema_for_anthropic(schema)
+
+        # Top-level: both summary and files should be required
+        assert set(normalized["required"]) == {"summary", "files"}
+        # Nested: all three properties should be required
+        item_required = set(normalized["properties"]["files"]["items"]["required"])
+        assert item_required == {"path", "language", "code"}
+
+
+class TestAnthropicThinkingType:
+    """Tests for Anthropic thinking/reasoning configuration."""
+
+    @pytest.mark.asyncio
+    async def test_thinking_type_is_adaptive(self):
+        """Anthropic provider should use thinking.type=adaptive, not enabled."""
+        provider = AnthropicProvider(api_key="test-key")
+        client = AsyncMock()
+        provider._client = client
+
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.beta.messages.create = AsyncMock(return_value=response_obj)
+
+        request = GenerateRequest(
+            messages=[Message(role="user", content="test")],
+            model="claude-opus-4-6",
+            reasoning=ReasoningConfig(enabled=True, budget_tokens=4096),
+        )
+
+        await provider.generate(request)
+
+        call_kwargs = client.beta.messages.create.await_args_list[0].kwargs
+        assert call_kwargs["thinking"]["type"] == "adaptive"
+        assert call_kwargs["thinking"]["budget_tokens"] == 4096
 
 
 class TestAnthropicStructuredOutputFallback:
@@ -532,7 +603,7 @@ class TestProviderTransportDefaults:
             provider._get_client()
 
         kwargs = mock_client.call_args.kwargs
-        assert kwargs["timeout"] == 15.0
+        assert kwargs["timeout"] == 60.0
         assert kwargs["max_retries"] == 0
 
     def test_gemini_client_uses_bounded_http_options(self, monkeypatch):
@@ -854,9 +925,9 @@ class TestCLIProviderTimeouts:
             (
                 b"OpenAI Codex v0.117.0 (research preview)\n"
                 b"model: gpt-5.4-codex\n"
-                b"ERROR: {\"type\":\"error\",\"status\":400,\"error\":{\"type\":"
-                b"\"invalid_request_error\",\"message\":\"The 'gpt-5.4-codex' model is not "
-                b"supported when using Codex with a ChatGPT account.\"}}\n"
+                b'ERROR: {"type":"error","status":400,"error":{"type":'
+                b'"invalid_request_error","message":"The \'gpt-5.4-codex\' model is not '
+                b'supported when using Codex with a ChatGPT account."}}\n'
             ),
         )
         process.returncode = 1
@@ -996,7 +1067,9 @@ class TestCLIProviderTimeouts:
         }
 
     @pytest.mark.asyncio
-    async def test_gemini_cli_vertex_auth_drops_conflicting_google_api_key_when_project_is_set(self):
+    async def test_gemini_cli_vertex_auth_drops_conflicting_google_api_key_when_project_is_set(
+        self,
+    ):
         provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
         process = AsyncMock()
         process.communicate.return_value = (b'{"response":"READY"}', b"")

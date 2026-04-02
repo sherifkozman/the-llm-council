@@ -82,9 +82,13 @@ def _prepare_schema_for_anthropic(schema: dict[str, Any]) -> dict[str, Any]:
     """Normalize JSON schema for Anthropic structured outputs.
 
     Anthropic's structured-output API is stricter than our local Draft7 validation:
-    nested object schemas must also declare `additionalProperties: false`.
-    We normalize the schema here so shipped council schemas remain provider-agnostic
-    while Anthropic still receives a strict closed-object schema.
+    - Nested object schemas must declare ``additionalProperties: false``.
+    - Total optional parameters across the entire schema must not exceed 24.
+
+    To stay under the optional-parameter limit we promote every property to
+    ``required``.  This is safe because the orchestrator validates the final
+    output against the *original* (un-normalized) schema, so truly-optional
+    fields that the model omits will be caught there, not here.
     """
 
     def _normalize(node: Any) -> Any:
@@ -96,8 +100,13 @@ def _prepare_schema_for_anthropic(schema: dict[str, Any]) -> dict[str, Any]:
                     continue
                 result[key] = _normalize(value)
 
-            if result.get("type") == "object" and "additionalProperties" not in result:
-                result["additionalProperties"] = False
+            if result.get("type") == "object":
+                if "additionalProperties" not in result:
+                    result["additionalProperties"] = False
+                # Promote all properties to required so that the total
+                # optional-parameter count stays within Anthropic's limit (24).
+                if "properties" in result:
+                    result["required"] = list(result["properties"].keys())
 
             return result
 
@@ -268,7 +277,7 @@ class AnthropicProvider(ProviderAdapter):
                     budget,
                 )
             kwargs["thinking"] = {
-                "type": "enabled",
+                "type": "adaptive",
                 "budget_tokens": budget,
             }
             # Anthropic requires temperature=1 when thinking is enabled

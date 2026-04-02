@@ -10,6 +10,8 @@ SECURITY NOTE: Path traversal protection via directory containment checks.
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -73,6 +75,34 @@ class Run:
 
 
 @dataclass
+class StoragePaths:
+    """Resolved council storage paths and current selection."""
+
+    active_artifact_dir: Path
+    active_db_path: Path
+    default_artifact_dir: Path
+    default_db_path: Path
+    legacy_artifact_dir: Path
+    legacy_db_path: Path
+    using_legacy: bool
+
+
+@dataclass
+class StorageMigrationResult:
+    """Outcome of an explicit legacy-to-neutral storage migration."""
+
+    source_artifact_dir: Path
+    source_db_path: Path
+    target_artifact_dir: Path
+    target_db_path: Path
+    dry_run: bool
+    migrated: bool
+    copied_files: int
+    copied_db: bool
+    message: str
+
+
+@dataclass
 class ResultCapsule:
     """Bounded summary for main context ingestion."""
 
@@ -121,8 +151,15 @@ class ArtifactStore:
     """
 
     # Default paths
-    DEFAULT_ARTIFACT_DIR: ClassVar[Path] = Path.home() / ".claude" / "council-artifacts"
-    DEFAULT_DB_PATH: ClassVar[Path] = Path.home() / ".claude" / "council-ledger.db"
+    DEFAULT_HOME_DIR: ClassVar[str] = ".council"
+    DEFAULT_ARTIFACT_SUBDIR: ClassVar[str] = "artifacts"
+    DEFAULT_DB_NAME: ClassVar[str] = "ledger.db"
+    LEGACY_HOME_DIR: ClassVar[str] = ".claude"
+    LEGACY_ARTIFACT_SUBDIR: ClassVar[str] = "council-artifacts"
+    LEGACY_DB_NAME: ClassVar[str] = "council-ledger.db"
+    HOME_ENV_VAR: ClassVar[str] = "COUNCIL_HOME"
+    ARTIFACT_DIR_ENV_VAR: ClassVar[str] = "COUNCIL_ARTIFACT_DIR"
+    DB_PATH_ENV_VAR: ClassVar[str] = "COUNCIL_DB_PATH"
 
     # Token budgets (chars / 4 ≈ tokens)
     MAX_CAPSULE_TOKENS: ClassVar[int] = 500
@@ -139,12 +176,13 @@ class ArtifactStore:
         """Initialize the artifact store.
 
         Args:
-            artifact_dir: Directory for artifact files. Defaults to ~/.claude/council-artifacts
-            db_path: Path to SQLite ledger. Defaults to ~/.claude/council-ledger.db
+            artifact_dir: Directory for artifact files. Defaults to ~/.council/artifacts
+            db_path: Path to SQLite ledger. Defaults to ~/.council/ledger.db
             enabled: If False, store operations become no-ops (for testing/disable mode)
         """
-        self.artifact_dir = artifact_dir or self.DEFAULT_ARTIFACT_DIR
-        self.db_path = db_path or self.DEFAULT_DB_PATH
+        default_artifact_dir, default_db_path = self._resolve_default_paths()
+        self.artifact_dir = artifact_dir or default_artifact_dir
+        self.db_path = db_path or default_db_path
         self.enabled = enabled
 
         if self.enabled:
@@ -152,6 +190,84 @@ class ArtifactStore:
             self.artifact_dir.mkdir(parents=True, exist_ok=True)
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._init_db()
+
+    @classmethod
+    def _resolve_default_paths(cls) -> tuple[Path, Path]:
+        """Resolve default storage paths with neutral defaults and legacy fallback."""
+
+        home_override = os.environ.get(cls.HOME_ENV_VAR)
+        artifact_override = os.environ.get(cls.ARTIFACT_DIR_ENV_VAR)
+        db_override = os.environ.get(cls.DB_PATH_ENV_VAR)
+
+        if artifact_override or db_override:
+            base_home = Path(home_override).expanduser() if home_override else None
+            artifact_dir = (
+                Path(artifact_override).expanduser()
+                if artifact_override
+                else (base_home / cls.DEFAULT_ARTIFACT_SUBDIR if base_home else cls._default_artifact_dir())
+            )
+            db_path = (
+                Path(db_override).expanduser()
+                if db_override
+                else (base_home / cls.DEFAULT_DB_NAME if base_home else cls._default_db_path())
+            )
+            return artifact_dir, db_path
+
+        if home_override:
+            base_home = Path(home_override).expanduser()
+            return base_home / cls.DEFAULT_ARTIFACT_SUBDIR, base_home / cls.DEFAULT_DB_NAME
+
+        default_artifact_dir = cls._default_artifact_dir()
+        default_db_path = cls._default_db_path()
+        legacy_artifact_dir = cls._legacy_artifact_dir()
+        legacy_db_path = cls._legacy_db_path()
+
+        if not default_artifact_dir.exists() and not default_db_path.exists():
+            if legacy_artifact_dir.exists() or legacy_db_path.exists():
+                return legacy_artifact_dir, legacy_db_path
+
+        return default_artifact_dir, default_db_path
+
+    @classmethod
+    def inspect_storage_paths(cls) -> StoragePaths:
+        """Inspect active, default, and legacy storage locations."""
+
+        active_artifact_dir, active_db_path = cls._resolve_default_paths()
+        legacy_artifact_dir = cls._legacy_artifact_dir()
+        legacy_db_path = cls._legacy_db_path()
+        return StoragePaths(
+            active_artifact_dir=active_artifact_dir,
+            active_db_path=active_db_path,
+            default_artifact_dir=cls._default_artifact_dir(),
+            default_db_path=cls._default_db_path(),
+            legacy_artifact_dir=legacy_artifact_dir,
+            legacy_db_path=legacy_db_path,
+            using_legacy=active_artifact_dir == legacy_artifact_dir and active_db_path == legacy_db_path,
+        )
+
+    @classmethod
+    def _default_home_dir(cls) -> Path:
+        return Path.home() / cls.DEFAULT_HOME_DIR
+
+    @classmethod
+    def _default_artifact_dir(cls) -> Path:
+        return cls._default_home_dir() / cls.DEFAULT_ARTIFACT_SUBDIR
+
+    @classmethod
+    def _default_db_path(cls) -> Path:
+        return cls._default_home_dir() / cls.DEFAULT_DB_NAME
+
+    @classmethod
+    def _legacy_home_dir(cls) -> Path:
+        return Path.home() / cls.LEGACY_HOME_DIR
+
+    @classmethod
+    def _legacy_artifact_dir(cls) -> Path:
+        return cls._legacy_home_dir() / cls.LEGACY_ARTIFACT_SUBDIR
+
+    @classmethod
+    def _legacy_db_path(cls) -> Path:
+        return cls._legacy_home_dir() / cls.LEGACY_DB_NAME
 
     def _ensure_path_containment(self, path: Path) -> None:
         """Ensure path stays within artifact directory (prevent traversal)."""
@@ -707,6 +823,134 @@ class ArtifactStore:
 
         return cleaned
 
+    @classmethod
+    def migrate_legacy_storage(
+        cls,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+    ) -> StorageMigrationResult:
+        """Copy legacy ~/.claude council storage into the neutral target path."""
+
+        paths = cls.inspect_storage_paths()
+        source_artifact_dir = paths.legacy_artifact_dir
+        source_db_path = paths.legacy_db_path
+        target_artifact_dir = paths.default_artifact_dir
+        target_db_path = paths.default_db_path
+
+        legacy_exists = source_artifact_dir.exists() or source_db_path.exists()
+        if not legacy_exists:
+            return StorageMigrationResult(
+                source_artifact_dir=source_artifact_dir,
+                source_db_path=source_db_path,
+                target_artifact_dir=target_artifact_dir,
+                target_db_path=target_db_path,
+                dry_run=dry_run,
+                migrated=False,
+                copied_files=0,
+                copied_db=False,
+                message="No legacy council storage found under ~/.claude.",
+            )
+
+        target_exists = target_artifact_dir.exists() or target_db_path.exists()
+        if target_exists and not force:
+            raise RuntimeError(
+                "Neutral council storage already exists. Refusing to merge automatically; "
+                "rerun with --force if you want to overwrite the target."
+            )
+
+        copied_files = 0
+        copied_db = False
+        if dry_run:
+            if source_artifact_dir.exists():
+                copied_files = sum(1 for path in source_artifact_dir.rglob("*") if path.is_file())
+            copied_db = source_db_path.exists()
+            return StorageMigrationResult(
+                source_artifact_dir=source_artifact_dir,
+                source_db_path=source_db_path,
+                target_artifact_dir=target_artifact_dir,
+                target_db_path=target_db_path,
+                dry_run=True,
+                migrated=False,
+                copied_files=copied_files,
+                copied_db=copied_db,
+                message="Dry run only; no files were copied.",
+            )
+
+        if force:
+            shutil.rmtree(target_artifact_dir, ignore_errors=True)
+            target_db_path.unlink(missing_ok=True)
+
+        target_artifact_dir.mkdir(parents=True, exist_ok=True)
+        target_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if source_artifact_dir.exists():
+            for source_path in source_artifact_dir.rglob("*"):
+                if not source_path.is_file():
+                    continue
+                relative_path = source_path.relative_to(source_artifact_dir)
+                destination_path = target_artifact_dir / relative_path
+                destination_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, destination_path)
+                copied_files += 1
+
+        if source_db_path.exists():
+            shutil.copy2(source_db_path, target_db_path)
+            copied_db = True
+            if source_artifact_dir.exists():
+                with sqlite3.connect(target_db_path) as conn:
+                    conn.execute(
+                        """
+                        UPDATE artifacts
+                        SET file_path = replace(file_path, ?, ?)
+                        WHERE file_path LIKE ?
+                        """,
+                        (
+                            str(source_artifact_dir),
+                            str(target_artifact_dir),
+                            f"{source_artifact_dir}%",
+                        ),
+                    )
+                    conn.commit()
+
+        if source_artifact_dir.exists():
+            source_files = sorted(
+                str(path.relative_to(source_artifact_dir))
+                for path in source_artifact_dir.rglob("*")
+                if path.is_file()
+            )
+            target_files = sorted(
+                str(path.relative_to(target_artifact_dir))
+                for path in target_artifact_dir.rglob("*")
+                if path.is_file()
+            )
+            if source_files != target_files:
+                raise RuntimeError("Artifact migration verification failed: copied file set mismatch.")
+
+        if source_db_path.exists():
+            source_conn = sqlite3.connect(source_db_path)
+            target_conn = sqlite3.connect(target_db_path)
+            try:
+                source_ok = source_conn.execute("PRAGMA integrity_check").fetchone()
+                target_ok = target_conn.execute("PRAGMA integrity_check").fetchone()
+            finally:
+                source_conn.close()
+                target_conn.close()
+            if source_ok != ("ok",) or target_ok != ("ok",):
+                raise RuntimeError("Ledger migration verification failed: SQLite integrity check failed.")
+
+        return StorageMigrationResult(
+            source_artifact_dir=source_artifact_dir,
+            source_db_path=source_db_path,
+            target_artifact_dir=target_artifact_dir,
+            target_db_path=target_db_path,
+            dry_run=False,
+            migrated=True,
+            copied_files=copied_files,
+            copied_db=copied_db,
+            message="Legacy council storage copied to neutral ~/.council home.",
+        )
+
 
 # Module-level default store singleton
 _default_store: ArtifactStore | None = None
@@ -733,6 +977,8 @@ __all__ = [
     "ProcessingState",
     "ResultCapsule",
     "Run",
+    "StorageMigrationResult",
+    "StoragePaths",
     "get_store",
     "reset_store",
 ]
