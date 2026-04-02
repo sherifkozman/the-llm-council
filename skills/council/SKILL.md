@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.7.10)
+# LLM Council Skill (v0.7.11)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -16,7 +16,7 @@ Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.7.10'
+pip install 'the-llm-council>=0.7.11'
 ```
 
 Optional extras:

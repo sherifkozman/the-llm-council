@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.11] - 2026-04-02
+
+### Fixed
+- Anthropic adaptive thinking must not include `budget_tokens` — the parameter is only valid for `thinking.type=enabled`, not `adaptive`
+- Schema fallback now catches `"compiled grammar is too large"` errors in addition to the existing patterns
+
 ## [0.7.10] - 2026-04-02
 
 ### Fixed

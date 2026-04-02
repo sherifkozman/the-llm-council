@@ -128,8 +128,8 @@ def _is_structured_output_schema_error(error: Exception | str) -> bool:
         "output_format.schema" in text
         or "too many optional parameters" in text
         or "grammar compilation" in text
-        or "not supported" in text
-        and "schema" in text
+        or "compiled grammar" in text
+        or ("not supported" in text and "schema" in text)
     )
 
 
@@ -264,22 +264,12 @@ class AnthropicProvider(ProviderAdapter):
             # Note: simple json_object mode is not supported by Anthropic API
 
         # Handle reasoning/thinking configuration
-        # See: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/adaptive-thinking
         if request.reasoning and request.reasoning.enabled:
             use_beta = True  # Extended thinking requires beta API
-            # Anthropic uses budget_tokens with min 1024, max 128000
-            budget = request.reasoning.budget_tokens or 8192
-            budget = max(min(budget, 128000), 1024)  # Clamp to valid range
-            if request.reasoning.budget_tokens and request.reasoning.budget_tokens != budget:
-                logger.warning(
-                    "Anthropic budget_tokens clamped from %d to %d (valid range: 1024-128000)",
-                    request.reasoning.budget_tokens,
-                    budget,
-                )
-            kwargs["thinking"] = {
-                "type": "adaptive",
-                "budget_tokens": budget,
-            }
+            # Adaptive thinking: the model decides when and how much to think.
+            # budget_tokens is not permitted with adaptive type.
+            kwargs["thinking"] = {"type": "adaptive"}
             # Anthropic requires temperature=1 when thinking is enabled
             if "temperature" in kwargs and kwargs["temperature"] != 1:
                 logger.debug(
@@ -287,16 +277,6 @@ class AnthropicProvider(ProviderAdapter):
                     kwargs["temperature"],
                 )
                 kwargs["temperature"] = 1
-            # max_tokens must exceed budget_tokens for extended thinking
-            max_tokens = kwargs.get("max_tokens") or 4096
-            if max_tokens <= budget:
-                kwargs["max_tokens"] = budget + max_tokens
-                logger.debug(
-                    "Bumped max_tokens from %d to %d (must exceed budget_tokens=%d)",
-                    max_tokens,
-                    kwargs["max_tokens"],
-                    budget,
-                )
 
         if request.stream:
             return self._generate_stream(client, kwargs, use_beta=use_beta)

@@ -393,8 +393,8 @@ class TestAnthropicThinkingType:
     """Tests for Anthropic thinking/reasoning configuration."""
 
     @pytest.mark.asyncio
-    async def test_thinking_type_is_adaptive(self):
-        """Anthropic provider should use thinking.type=adaptive, not enabled."""
+    async def test_thinking_type_is_adaptive_without_budget(self):
+        """Anthropic adaptive thinking must not include budget_tokens."""
         provider = AnthropicProvider(api_key="test-key")
         client = AsyncMock()
         provider._client = client
@@ -416,8 +416,8 @@ class TestAnthropicThinkingType:
         await provider.generate(request)
 
         call_kwargs = client.beta.messages.create.await_args_list[0].kwargs
-        assert call_kwargs["thinking"]["type"] == "adaptive"
-        assert call_kwargs["thinking"]["budget_tokens"] == 4096
+        assert call_kwargs["thinking"] == {"type": "adaptive"}
+        assert "budget_tokens" not in call_kwargs["thinking"]
 
 
 class TestAnthropicStructuredOutputFallback:
