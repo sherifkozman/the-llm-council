@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-04-02
+
+### Fixed
+- SSL read timeouts (`_ssl.c`) and incomplete operations now classified as retryable network errors instead of unknown
+- CLI `run` command now flushes stdout/stderr on exit so piped consumers (`tee`, `head`) see EOF promptly
+
 ## [0.7.11] - 2026-04-02
 
 ### Fixed

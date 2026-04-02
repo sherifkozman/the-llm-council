@@ -96,9 +96,11 @@ _NETWORK_PATTERNS = (
     "network",
     "dns",
     "socket",
+    "ssl",
     "econnrefused",
     "econnreset",
     "etimedout",
+    "did not complete",
 )
 
 # Server/API errors that are typically transient and retryable

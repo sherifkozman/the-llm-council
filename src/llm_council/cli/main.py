@@ -592,7 +592,8 @@ def run(
                         f"{result.execution_plan.get('execution_profile') or 'prompt_only'}"
                     )
                     console.print(
-                        f"  Runtime profile: {result.execution_plan.get('runtime_profile') or 'default'}"
+                        "  Runtime profile: "
+                        f"{result.execution_plan.get('runtime_profile') or 'default'}"
                     )
                     console.print(
                         f"  Budget class: {result.execution_plan.get('budget_class') or 'normal'}"
@@ -674,6 +675,10 @@ def run(
         else:
             console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+    finally:
+        # Flush both streams so piped consumers (tee, head, etc.) see EOF promptly.
+        sys.stdout.flush()
+        sys.stderr.flush()
 
 
 @app.command()
@@ -1175,7 +1180,11 @@ def _emit_eval_report(
         for case in failing_cases:
             failures = [criterion for criterion in case.criteria if not criterion.passed]
             failure_summary = "; ".join(
-                f"{criterion.name}: {criterion.message or f'expected {criterion.expected!r}, got {criterion.actual!r}'}"
+                "{}: {}".format(
+                    criterion.name,
+                    criterion.message
+                    or f"expected {criterion.expected!r}, got {criterion.actual!r}",
+                )
                 for criterion in failures
             )
             console.print(f"  - {case.case_id} ({case.mode_key}): {failure_summary}")
@@ -1407,7 +1416,9 @@ def storage_migrate(
                     "Source data was left untouched.",
                 ]
             ),
-            title="[green]Council Storage Migration[/green]" if result.migrated else "[yellow]Council Storage Migration[/yellow]",
+            title="[green]Council Storage Migration[/green]"
+            if result.migrated
+            else "[yellow]Council Storage Migration[/yellow]",
             border_style=border_style,
         )
     )
