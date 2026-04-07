@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.13] - 2026-04-06
+
+### Fixed
+- Single-model `--models` flag now correctly overrides the model for all providers instead of being silently ignored (only multi-model >1 was handled)
+- Updated default OpenRouter model from retired `qwen/qwen3.6-plus-preview:free` to `qwen/qwen3.6-plus:free`
+
 ## [0.7.12] - 2026-04-02
 
 ### Fixed

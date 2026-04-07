@@ -1200,6 +1200,15 @@ class Orchestrator:
         """Resolve effective model overrides for the active provider set."""
 
         overrides = dict(self._config.model_overrides)
+
+        # Single-model --models flag: apply as override for all providers.
+        # Multi-model (>1) is handled earlier via provider expansion.
+        models = self._config.models
+        if models and len(models) == 1:
+            for provider_name in self._provider_names:
+                if provider_name not in overrides:
+                    overrides[provider_name] = models[0]
+
         subagent_overrides = get_model_overrides(self._subagent_config or {}, self._resolved_mode)
         subagent_data = (
             subagent_overrides.model_dump(exclude_none=True) if subagent_overrides else {}
