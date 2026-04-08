@@ -247,7 +247,7 @@ class OpenRouterProvider(ProviderAdapter):
 
         # Handle reasoning configuration
         # OpenRouter passes through to underlying models (OpenAI o-series, etc.)
-        if request.reasoning and request.reasoning.enabled:
+        if request.reasoning and request.reasoning.enabled and not request.structured_output:
             if request.reasoning.effort:
                 # Pass through reasoning_effort for OpenAI o-series models
                 body["reasoning_effort"] = request.reasoning.effort
@@ -283,7 +283,7 @@ class OpenRouterProvider(ProviderAdapter):
         response.raise_for_status()
         data = response.json()
 
-        return self._parse_response(data)
+        return self._parse_response(data, structured_output=bool(request.structured_output))
 
     async def _generate_stream(
         self, client: httpx.AsyncClient, body: dict[str, Any]
@@ -310,10 +310,36 @@ class OpenRouterProvider(ProviderAdapter):
                 except Exception:
                     continue
 
-    def _parse_response(self, data: dict[str, Any]) -> GenerateResponse:
+    def _extract_structured_output_text(self, message: dict[str, Any]) -> str | None:
+        """Recover structured JSON payloads from provider-specific reasoning fields."""
+
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return reasoning
+
+        details = message.get("reasoning_details")
+        if isinstance(details, list):
+            parts: list[str] = []
+            for item in details:
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text)
+            if parts:
+                return "\n".join(parts)
+
+        return None
+
+    def _parse_response(
+        self, data: dict[str, Any], *, structured_output: bool = False
+    ) -> GenerateResponse:
         """Parse OpenRouter API response."""
         choice = data.get("choices", [{}])[0]
         message = choice.get("message", {})
+        content = message.get("content")
+        if structured_output and content in (None, ""):
+            content = self._extract_structured_output_text(message)
 
         usage = data.get("usage", {})
         usage_dict = None
@@ -325,8 +351,8 @@ class OpenRouterProvider(ProviderAdapter):
             }
 
         return GenerateResponse(
-            text=message.get("content"),
-            content=message.get("content"),
+            text=content,
+            content=content,
             tool_calls=message.get("tool_calls"),
             usage=usage_dict,
             model=data.get("model"),

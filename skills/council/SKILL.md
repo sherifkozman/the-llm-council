@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.7.13)
+# LLM Council Skill (v0.7.14)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -16,14 +16,14 @@ Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.7.13'
+pip install 'the-llm-council>=0.7.14'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,gemini]>=0.7.9'
-pip install 'the-llm-council[vertex]>=0.7.9'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.7.14'
+pip install 'the-llm-council[vertex]>=0.7.14'
 ```
 
 Configure at least one provider key:

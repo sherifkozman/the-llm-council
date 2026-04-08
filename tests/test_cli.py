@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
-from llm_council.cli.main import app
+from llm_council.cli.main import _load_provider_configs, app
 from llm_council.eval_import import ImportedPullRequest
 from llm_council.providers.base import GenerateResponse
 from llm_council.storage.artifacts import ArtifactStore, ArtifactType
@@ -366,6 +366,33 @@ class TestCLIConfig:
         # Check file was created
         config_file = tmp_path / ".config" / "llm-council" / "config.yaml"
         assert config_file.exists()
+        contents = config_file.read_text()
+        assert "api_key: ${OPENROUTER_API_KEY}" in contents
+        assert "default_model: anthropic/claude-opus-4-6" in contents
+
+    def test_load_provider_configs_expands_env_api_keys(self, tmp_path, monkeypatch):
+        """Provider configs should expand ${ENV_VAR} placeholders before constructor wiring."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+        config_file = tmp_path / ".config" / "llm-council" / "config.yaml"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            """\
+providers:
+  - name: openrouter
+    api_key: ${OPENROUTER_API_KEY}
+    default_model: qwen/qwen3-max-thinking
+"""
+        )
+
+        provider_configs = _load_provider_configs()
+
+        assert provider_configs == {
+            "openrouter": {
+                "api_key": "sk-or-test",
+                "default_model": "qwen/qwen3-max-thinking",
+            }
+        }
 
     def test_config_no_options(self):
         """Test config with no options shows usage."""

@@ -698,6 +698,23 @@ class TestOrchestratorRuntimeTruthfulness:
         assert orch._execution_plan is not None
         assert orch._execution_plan["model_overrides"]["openai"] == "gpt-5.4"
 
+    def test_prepare_run_applies_single_model_override_to_openrouter(self):
+        """A single --models entry should override the active OpenRouter provider."""
+        config = OrchestratorConfig(
+            models=["qwen/qwen3-max-thinking"],
+            provider_configs={"openrouter": {"api_key": "sk-or-test"}},
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = MagicMock()
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["openrouter"], config=config)
+
+        orch._prepare_run("planner")
+
+        assert orch._execution_plan is not None
+        assert orch._execution_plan["model_overrides"]["openrouter"] == "qwen/qwen3-max-thinking"
+
     @pytest.mark.asyncio
     async def test_auto_fallback_replaces_dead_openrouter_with_configured_direct_provider(self):
         """Dead default openrouter should fall back to healthy configured direct providers."""

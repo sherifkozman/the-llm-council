@@ -1408,3 +1408,109 @@ class TestOpenRouterProviderEnvModel:
         monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o")
         provider = OpenRouterProvider(default_model="anthropic/claude-opus-4-5")
         assert provider._default_model == "anthropic/claude-opus-4-5"
+
+    def test_parse_response_uses_reasoning_for_structured_output_when_content_missing(self):
+        """Structured-output requests should recover JSON from reasoning-only responses."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        data = {
+            "model": "qwen/qwen3-max-thinking",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning": '{\n  "result": "READY"\n}',
+                        "reasoning_details": [
+                            {
+                                "type": "reasoning.text",
+                                "text": '{\n  "result": "READY"\n}',
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+
+        response = provider._parse_response(data, structured_output=True)
+
+        assert response.text == '{\n  "result": "READY"\n}'
+        assert response.content == '{\n  "result": "READY"\n}'
+
+    def test_parse_response_does_not_use_reasoning_for_plain_text_requests(self):
+        """Reasoning should stay hidden for non-structured requests."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        data = {
+            "model": "qwen/qwen3-max-thinking",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning": '{\n  "result": "READY"\n}',
+                    },
+                }
+            ],
+        }
+
+        response = provider._parse_response(data, structured_output=False)
+
+        assert response.text is None
+        assert response.content is None
+
+    def test_parse_response_prefers_content_over_reasoning_for_structured_output(self):
+        """Actual payload content must win when both content and reasoning are present."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        data = {
+            "model": "qwen/qwen3-max-thinking",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"result":"CONTENT"}',
+                        "reasoning": '{"result":"REASONING"}',
+                    },
+                }
+            ],
+        }
+
+        response = provider._parse_response(data, structured_output=True)
+
+        assert response.text == '{"result":"CONTENT"}'
+        assert response.content == '{"result":"CONTENT"}'
+
+    def test_build_request_body_omits_reasoning_effort_for_structured_output(self):
+        """Structured-output requests should not opt into provider-specific reasoning controls."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                structured_output=StructuredOutputConfig(
+                    json_schema={
+                        "type": "object",
+                        "properties": {"result": {"type": "string"}},
+                        "required": ["result"],
+                        "additionalProperties": False,
+                    },
+                    name="test_schema",
+                    strict=True,
+                ),
+                reasoning=ReasoningConfig(enabled=True, effort="high"),
+            )
+        )
+
+        assert "reasoning_effort" not in body
+
+    def test_build_request_body_keeps_reasoning_effort_for_plain_text_requests(self):
+        """Plain-text requests should continue to forward reasoning effort."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                reasoning=ReasoningConfig(enabled=True, effort="high"),
+            )
+        )
+
+        assert body["reasoning_effort"] == "high"

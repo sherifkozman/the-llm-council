@@ -161,7 +161,7 @@ Via config file (`~/.config/llm-council/config.yaml`):
 providers:
   - name: openrouter
     api_key: ${OPENROUTER_API_KEY}
-    default_model: openai/gpt-5.4
+    default_model: qwen/qwen3-max-thinking
 
 defaults:
   timeout: 120
@@ -171,7 +171,17 @@ defaults:
 Via environment variable:
 
 ```bash
-export OPENROUTER_DEFAULT_MODEL="google/gemini-3.1-pro-preview"
+export OPENROUTER_MODEL="qwen/qwen3-max-thinking"
+```
+
+For one-off runs, prefer a runtime override instead of editing config:
+
+```bash
+council run planner "Reply with exactly READY and nothing else." \
+  --providers openrouter \
+  --models qwen/qwen3-max-thinking \
+  --timeout 120 \
+  --json
 ```
 
 ### Popular Models on OpenRouter

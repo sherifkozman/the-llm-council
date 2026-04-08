@@ -192,7 +192,8 @@ def _load_config() -> dict[str, Any]:
         return {}
 
     try:
-        return yaml.safe_load(config_file.read_text()) or {}
+        raw = config_file.read_text()
+        return yaml.safe_load(os.path.expandvars(raw)) or {}
     except (yaml.YAMLError, OSError):
         return {}
 
@@ -209,7 +210,7 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
 
     Reads the ``providers`` list from config.yaml and returns a
     dict keyed by provider name with constructor kwargs
-    (e.g. ``default_model``).
+    (e.g. ``api_key`` and ``default_model``).
 
     Example config.yaml::
 
@@ -221,8 +222,8 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
 
     Returns::
 
-        {"openai": {"default_model": "gpt-5.4"},
-         "gemini": {"default_model": "gemini-3.1-pro-preview"}}
+        {"openai": {"api_key": "sk-...", "default_model": "gpt-5.4"},
+         "gemini": {"api_key": "AIza...", "default_model": "gemini-3.1-pro-preview"}}
     """
     config = _load_config()
     providers_list = config.get("providers", [])
@@ -238,6 +239,8 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
             continue
         # Forward known constructor kwargs only
         kwargs: dict[str, Any] = {}
+        if "api_key" in entry:
+            kwargs["api_key"] = entry["api_key"]
         if "default_model" in entry:
             kwargs["default_model"] = entry["default_model"]
         if kwargs:
@@ -1487,7 +1490,7 @@ def config(
 # Provider configurations (API keys, models, etc.)
 providers:
   - name: openrouter
-    # api_key: ${OPENROUTER_API_KEY}
+    api_key: ${OPENROUTER_API_KEY}
     default_model: anthropic/claude-opus-4-6
 
 # Default settings for 'council run' command

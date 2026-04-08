@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-04-07
+
+### Fixed
+- CLI config loading now expands `${ENV_VAR}` placeholders before YAML parsing and forwards `api_key` into provider constructor kwargs, so documented provider config entries actually work
+- OpenRouter `qwen/qwen3-max-thinking` synthesis now succeeds in council runs when configured through `config.yaml`, including the local-source planner smoke test with config-only credentials/model selection
+- OpenRouter structured-output requests now skip provider-specific `reasoning_effort`, which avoids Qwen returning schema payloads in unstable reasoning-only fields during synthesis
+
+### Changed
+- OpenRouter docs now use `OPENROUTER_MODEL`, document runtime `--models` overrides, and clarify config-file environment expansion versus provider env fallbacks
+
+### Added
+- Regression tests for provider config env expansion, single-provider `--models` override on OpenRouter, structured-output reasoning fallback precedence, and OpenRouter request-body handling for structured-output reasoning suppression
+
 ## [0.7.13] - 2026-04-06
 
 ### Fixed
@@ -597,9 +610,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.9...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.14...HEAD
+[0.7.14]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.13...v0.7.14
+[0.7.13]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.12...v0.7.13
+[0.7.12]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.11...v0.7.12
+[0.7.11]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.10...v0.7.11
+[0.7.10]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.9...v0.7.10
 [0.7.9]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.8...v0.7.9
 [0.7.8]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.7...v0.7.8
+[0.7.7]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.6...v0.7.7
+[0.7.6]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.5...v0.7.6
+[0.7.5]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.4...v0.7.5
+[0.7.4]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.2...v0.7.4
 [0.7.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.6.4...v0.7.0
