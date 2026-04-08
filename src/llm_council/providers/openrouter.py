@@ -9,6 +9,8 @@ Docs: https://openrouter.ai/docs
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import time
 from collections.abc import AsyncIterator
@@ -31,75 +33,68 @@ FAST_MODEL = "anthropic/claude-haiku-4-5"
 REASONING_MODEL = "anthropic/claude-opus-4-6"
 CODE_MODEL = "openai/gpt-5.4"
 CRITIC_MODEL = "anthropic/claude-sonnet-4-6"
+logger = logging.getLogger(__name__)
 
 
-def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
-    """Transform a JSON schema for OpenAI strict mode compatibility.
+def _strip_schema_metadata(value: Any) -> Any:
+    """Recursively remove metadata keys that OpenRouter/OpenAI ignore or reject."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_schema_metadata(item) for key, item in value.items() if key != "$schema"
+        }
+    if isinstance(value, list):
+        return [_strip_schema_metadata(item) for item in value]
+    return value
 
-    OpenRouter uses OpenAI-compatible format, which in strict mode requires:
-    1. ALL properties must be listed in the `required` array
-    2. ALL object types must have `additionalProperties: false`
 
-    This function recursively processes the schema to:
-    1. Remove $schema meta field (not needed)
-    2. Add all properties to the required array
-    3. Add additionalProperties: false to all objects
-    4. Process nested object schemas recursively
+def _schema_is_strict_compatible(schema: Any) -> bool:
+    """Return True when the schema already satisfies OpenAI strict-mode rules."""
+    if isinstance(schema, list):
+        return all(_schema_is_strict_compatible(item) for item in schema)
+    if not isinstance(schema, dict):
+        return True
 
-    Args:
-        schema: The original JSON schema.
+    schema_type = schema.get("type")
+    properties = schema.get("properties")
+    if schema_type == "object" and isinstance(properties, dict) and properties:
+        required = schema.get("required")
+        required_set = {
+            item for item in required if isinstance(item, str)
+        } if isinstance(required, list) else set()
+        if required_set != set(properties):
+            return False
+    if schema_type == "object" and schema.get("additionalProperties") is not False:
+        return False
 
-    Returns:
-        A new schema compatible with OpenAI strict mode.
+    for key in (
+        "properties",
+        "items",
+        "prefixItems",
+        "anyOf",
+        "allOf",
+        "oneOf",
+        "definitions",
+        "$defs",
+        "patternProperties",
+        "dependentSchemas",
+        "additionalProperties",
+    ):
+        if key in schema and not _schema_is_strict_compatible(schema[key]):
+            return False
 
-    See: https://platform.openai.com/docs/guides/structured-outputs#additionalproperties
-    """
-    result: dict[str, Any] = {}
+    return True
 
-    for key, value in schema.items():
-        # Skip $schema meta field
-        if key == "$schema":
-            continue
-        # Skip additionalProperties - we'll set it ourselves
-        if key == "additionalProperties":
-            continue
 
-        if key == "properties" and isinstance(value, dict):
-            # Recursively process nested object properties
-            result[key] = {
-                prop_name: _make_schema_strict_compatible(prop_schema)
-                if isinstance(prop_schema, dict) and prop_schema.get("type") == "object"
-                else (
-                    {
-                        **prop_schema,
-                        "items": _make_schema_strict_compatible(prop_schema["items"]),
-                    }
-                    if isinstance(prop_schema, dict)
-                    and prop_schema.get("type") == "array"
-                    and isinstance(prop_schema.get("items"), dict)
-                    and prop_schema["items"].get("type") == "object"
-                    else prop_schema
-                )
-                for prop_name, prop_schema in value.items()
-            }
-            # Make ALL properties required for strict mode
-            result["required"] = list(value.keys())
-            # Strict mode requires additionalProperties: false
-            result["additionalProperties"] = False
-        elif key == "required":
-            # Skip - we'll set this when processing properties
-            continue
-        elif isinstance(value, dict) and value.get("type") == "object":
-            # Recursively process nested object schemas
-            result[key] = _make_schema_strict_compatible(value)
-        else:
-            result[key] = value
-
-    # Ensure all object types have additionalProperties: false
-    if schema.get("type") == "object" and "additionalProperties" not in result:
-        result["additionalProperties"] = False
-
-    return result
+def _prepare_structured_output_schema(
+    schema: dict[str, Any], *, strict: bool
+) -> tuple[dict[str, Any], bool]:
+    """Prepare a JSON schema for OpenRouter without changing its meaning."""
+    sanitized = _strip_schema_metadata(schema)
+    if not strict:
+        return sanitized, False
+    if not _schema_is_strict_compatible(sanitized):
+        return sanitized, False
+    return sanitized, True
 
 
 class OpenRouterProvider(ProviderAdapter):
@@ -228,16 +223,21 @@ class OpenRouterProvider(ProviderAdapter):
         #
         # We apply the format for all models and let OpenRouter handle compatibility.
         if request.structured_output:
-            # Transform schema for strict mode compatibility
-            # OpenAI strict mode requires ALL properties in required array
-            transformed_schema = _make_schema_strict_compatible(
-                dict(request.structured_output.json_schema)
+            transformed_schema, strict_mode = _prepare_structured_output_schema(
+                dict(request.structured_output.json_schema),
+                strict=request.structured_output.strict,
             )
+            if request.structured_output.strict and not strict_mode:
+                logger.warning(
+                    "OpenRouter structured output requested strict mode, but the schema "
+                    "is not already strict-compatible; sending strict=false without "
+                    "changing schema semantics."
+                )
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": request.structured_output.name,
-                    "strict": request.structured_output.strict,
+                    "strict": strict_mode,
                     "schema": transformed_schema,
                 },
             }
@@ -314,8 +314,10 @@ class OpenRouterProvider(ProviderAdapter):
         """Recover structured JSON payloads from provider-specific reasoning fields."""
 
         reasoning = message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning.strip():
-            return reasoning
+        if isinstance(reasoning, str):
+            json_text = self._extract_json_text(reasoning)
+            if json_text is not None:
+                return json_text
 
         details = message.get("reasoning_details")
         if isinstance(details, list):
@@ -327,9 +329,20 @@ class OpenRouterProvider(ProviderAdapter):
                 if isinstance(text, str) and text.strip():
                     parts.append(text)
             if parts:
-                return "\n".join(parts)
+                return self._extract_json_text("\n".join(parts))
 
         return None
+
+    def _extract_json_text(self, text: str) -> str | None:
+        """Return text only when it is valid JSON."""
+        candidate = text.strip()
+        if not candidate:
+            return None
+        try:
+            json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+        return candidate
 
     def _parse_response(
         self, data: dict[str, Any], *, structured_output: bool = False

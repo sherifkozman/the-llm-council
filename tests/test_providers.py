@@ -1437,6 +1437,61 @@ class TestOpenRouterProviderEnvModel:
         assert response.text == '{\n  "result": "READY"\n}'
         assert response.content == '{\n  "result": "READY"\n}'
 
+    def test_parse_response_uses_reasoning_details_for_structured_output_when_content_missing(self):
+        """Structured-output requests should recover JSON from reasoning_details-only payloads."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        data = {
+            "model": "qwen/qwen3-max-thinking",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning_details": [
+                            {
+                                "type": "reasoning.text",
+                                "text": '{\n  "result": "READY"\n}',
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+
+        response = provider._parse_response(data, structured_output=True)
+
+        assert response.text == '{\n  "result": "READY"\n}'
+        assert response.content == '{\n  "result": "READY"\n}'
+
+    def test_parse_response_ignores_non_json_reasoning_for_structured_output(self):
+        """Reasoning fallback should not treat plain prose as the structured payload."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        data = {
+            "model": "qwen/qwen3-max-thinking",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning": "I think the answer should be READY.",
+                        "reasoning_details": [
+                            {
+                                "type": "reasoning.text",
+                                "text": "I think the answer should be READY.",
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+
+        response = provider._parse_response(data, structured_output=True)
+
+        assert response.text is None
+        assert response.content is None
+
     def test_parse_response_does_not_use_reasoning_for_plain_text_requests(self):
         """Reasoning should stay hidden for non-structured requests."""
         provider = OpenRouterProvider(api_key="sk-or-test")
@@ -1502,6 +1557,136 @@ class TestOpenRouterProviderEnvModel:
         )
 
         assert "reasoning_effort" not in body
+
+    def test_build_request_body_preserves_strict_for_already_compatible_schema(self):
+        """Strict mode should stay enabled when the schema already satisfies strict rules."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        schema = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                },
+                                "required": ["name"],
+                                "additionalProperties": False,
+                            }
+                        ]
+                    },
+                },
+            },
+            "required": ["result", "items"],
+            "additionalProperties": False,
+        }
+
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                structured_output=StructuredOutputConfig(
+                    json_schema=schema,
+                    name="test_schema",
+                    strict=True,
+                ),
+            )
+        )
+
+        json_schema = body["response_format"]["json_schema"]
+        assert json_schema["strict"] is True
+        assert json_schema["schema"] == {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                },
+                                "required": ["name"],
+                                "additionalProperties": False,
+                            }
+                        ]
+                    },
+                },
+            },
+            "required": ["result", "items"],
+            "additionalProperties": False,
+        }
+
+    def test_build_request_body_disables_strict_when_schema_has_optional_properties(
+        self, caplog
+    ):
+        """Optional object fields should keep their semantics instead of being made required."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        schema = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"},
+                "summary": {"type": "string"},
+            },
+            "required": ["result"],
+        }
+
+        with caplog.at_level("WARNING"):
+            body = provider._build_request_body(
+                GenerateRequest(
+                    prompt="test",
+                    structured_output=StructuredOutputConfig(
+                        json_schema=schema,
+                        name="test_schema",
+                        strict=True,
+                    ),
+                )
+            )
+
+        json_schema = body["response_format"]["json_schema"]
+        assert json_schema["strict"] is False
+        assert json_schema["schema"] == {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"},
+                "summary": {"type": "string"},
+            },
+            "required": ["result"],
+        }
+        assert "sending strict=false without changing schema semantics" in caplog.text
+
+    def test_build_request_body_disables_strict_when_schema_allows_additional_properties(self):
+        """Strict mode should be disabled when enabling it would disallow extra keys."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"},
+            },
+            "required": ["result"],
+        }
+
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                structured_output=StructuredOutputConfig(
+                    json_schema=schema,
+                    name="test_schema",
+                    strict=True,
+                ),
+            )
+        )
+
+        json_schema = body["response_format"]["json_schema"]
+        assert json_schema["strict"] is False
+        assert json_schema["schema"] == schema
 
     def test_build_request_body_keeps_reasoning_effort_for_plain_text_requests(self):
         """Plain-text requests should continue to forward reasoning effort."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -715,6 +716,45 @@ class TestOrchestratorRuntimeTruthfulness:
         assert orch._execution_plan is not None
         assert orch._execution_plan["model_overrides"]["openrouter"] == "qwen/qwen3-max-thinking"
 
+    def test_prepare_run_applies_model_list_by_provider_order(self):
+        """Multiple --models values should map onto the explicit provider list in order."""
+        config = OrchestratorConfig(
+            models=["gpt-5.4", "gemini-3.1-pro-preview", "qwen/qwen3-max-thinking"],
+            provider_configs={"openrouter": {"api_key": "sk-or-test"}},
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = MagicMock()
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["openai", "vertex-ai", "openrouter"], config=config)
+
+        orch._prepare_run("critic")
+
+        assert orch._execution_plan is not None
+        assert orch._execution_plan["model_overrides"] == {
+            "openai": "gpt-5.4",
+            "vertex-ai": "gemini-3.1-pro-preview",
+            "openrouter": "qwen/qwen3-max-thinking",
+        }
+
+    def test_openrouter_virtual_providers_match_openrouter_preferences(self):
+        """Model-expanded OpenRouter entries should still match the openrouter identity."""
+        config = OrchestratorConfig(
+            models=["qwen/qwen3-max-thinking", "openai/gpt-4.1-mini"],
+            provider_configs={"openrouter": {"api_key": "sk-or-test"}},
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = MagicMock()
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["openrouter"], config=config)
+
+        resolved = orch._resolve_provider_names_for_run(
+            SimpleNamespace(exclude=[], preferred=["openrouter"], fallback=[])
+        )
+
+        assert resolved == ["qwen/qwen3-max-thinking", "openai/gpt-4.1-mini"]
+
     @pytest.mark.asyncio
     async def test_auto_fallback_replaces_dead_openrouter_with_configured_direct_provider(self):
         """Dead default openrouter should fall back to healthy configured direct providers."""
@@ -1182,7 +1222,7 @@ class TestOrchestratorRuntimeTruthfulness:
 
     @pytest.mark.asyncio
     async def test_generate_draft_applies_global_overrides_and_reasoning(self):
-        """Draft requests carry resolved temperature/max_tokens/reasoning settings."""
+        """Draft requests carry the effective provider-compiled settings."""
         config = OrchestratorConfig(
             mode="security",
             temperature=0.1,
@@ -1201,13 +1241,27 @@ class TestOrchestratorRuntimeTruthfulness:
         _, _draft = await orch._generate_draft("openai", provider)
 
         assert provider.last_request is not None
-        assert provider.last_request.temperature == 0.1
         assert provider.last_request.max_tokens == 321
         assert provider.last_request.timeout_seconds == 119.0
         assert provider.last_request.reasoning is not None
         assert provider.last_request.reasoning.effort == "high"
         assert provider.last_request.reasoning.budget_tokens == 32768
         assert provider.last_request.model == "o3-mini"
+        assert provider.last_request.temperature is None
+        assert orch._execution_plan is not None
+        assert orch._execution_plan["phase_request_compilation"]["draft"] == [
+            {
+                "provider": "openai",
+                "model": "o3-mini",
+                "decisions": [
+                    {
+                        "option": "temperature",
+                        "action": "dropped",
+                        "detail": "o3-mini rejects temperature",
+                    }
+                ],
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_generate_draft_uses_runtime_model_pack_override(self):
@@ -1230,6 +1284,70 @@ class TestOrchestratorRuntimeTruthfulness:
 
         assert provider.last_request is not None
         assert provider.last_request.model == get_model_for_pack(ModelPack.GROUNDED)
+
+    @pytest.mark.asyncio
+    async def test_call_provider_compiles_virtual_openrouter_requests(self):
+        """The runtime call path must apply OpenRouter compilation to model-expanded providers."""
+        config = OrchestratorConfig(
+            providers=["openrouter"],
+            provider_configs={"openrouter": {"api_key": "sk-or-test"}},
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = MagicMock()
+            mock_reg.return_value = mock_registry
+            orch = Orchestrator(providers=["openrouter"], config=config)
+
+        orch._prepare_run("planner")
+
+        provider = CaptureProvider()
+        await orch._call_provider(
+            "qwen/qwen3-max-thinking",
+            provider,
+            GenerateRequest(
+                prompt="test",
+                model="qwen/qwen3-max-thinking",
+                structured_output={
+                    "json_schema": {
+                        "type": "object",
+                        "properties": {
+                            "result": {"type": "string"},
+                            "summary": {"type": "string"},
+                        },
+                        "required": ["result"],
+                        "additionalProperties": False,
+                    },
+                    "name": "planner",
+                    "strict": True,
+                },
+                reasoning={"enabled": True, "effort": "high"},
+            ),
+            phase="draft",
+        )
+
+        assert provider.last_request is not None
+        assert provider.last_request.reasoning is None
+        assert provider.last_request.structured_output is not None
+        assert provider.last_request.structured_output.strict is False
+        assert orch._execution_plan is not None
+        assert orch._execution_plan["phase_request_compilation"]["draft"] == [
+            {
+                "provider": "qwen/qwen3-max-thinking",
+                "model": "qwen/qwen3-max-thinking",
+                "decisions": [
+                    {
+                        "option": "reasoning",
+                        "action": "dropped",
+                        "detail": "OpenRouter structured-output requests do not forward reasoning controls",
+                    },
+                    {
+                        "option": "structured_output.strict",
+                        "action": "downgraded",
+                        "detail": "OpenRouter strict mode disabled because schema is not strict-compatible",
+                    },
+                ],
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_collect_evidence_updates_execution_plan(self, tmp_path, monkeypatch):

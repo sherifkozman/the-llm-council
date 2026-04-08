@@ -5,7 +5,7 @@ on:
   release:
     types: [published]
 
-  # Optional: Publish to TestPyPI on pushes to main
+  # Intentional: pushes to main publish to TestPyPI via publish-to-testpypi below.
   push:
     branches:
       - main
@@ -39,7 +39,7 @@ jobs:
           uv build
 
       - name: Store the distribution packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: python-package-distributions
           path: dist/

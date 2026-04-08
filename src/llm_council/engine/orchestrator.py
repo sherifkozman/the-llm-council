@@ -19,7 +19,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from typing import (
     Any,
@@ -49,8 +49,9 @@ from llm_council.providers.base import (
     ReasoningConfig,
     StructuredOutputConfig,
 )
+from llm_council.providers.compiler import compile_request_for_provider
 from llm_council.providers.concurrency import provider_call_slot
-from llm_council.providers.registry import get_registry
+from llm_council.providers.registry import get_registry, provider_identity
 from llm_council.schemas import load_schema
 from llm_council.storage.artifacts import ArtifactStore, ArtifactType, get_store
 from llm_council.subagents import (
@@ -827,6 +828,14 @@ class Orchestrator:
                     usage = dict(chunk.usage)
             return GenerateResponse(text="".join(text_parts), usage=usage)
 
+        compiled = compile_request_for_provider(provider_name, request)
+        self._record_request_compilation(
+            phase=phase,
+            provider_name=provider_name,
+            compilation=compiled.to_dict(),
+        )
+        request = compiled.request
+
         while True:
             try:
                 slot_timeout = request.timeout_seconds or float(self._config.timeout)
@@ -1191,23 +1200,22 @@ class Orchestrator:
 
     def _provider_identity(self, provider_name: str) -> str:
         """Map a provider or virtual provider name to its canonical identity."""
-
-        if "/" in provider_name and provider_name != "openrouter":
-            return provider_name.split("/", 1)[0]
-        return provider_name
+        return provider_identity(provider_name)
 
     def _resolve_model_overrides(self) -> dict[str, str]:
         """Resolve effective model overrides for the active provider set."""
 
         overrides = dict(self._config.model_overrides)
 
-        # Single-model --models flag: apply as override for all providers.
-        # Multi-model (>1) is handled earlier via provider expansion.
+        # A single --models entry applies to every active provider.
+        # When the caller provides one model per provider, preserve that pairing.
         models = self._config.models
         if models and len(models) == 1:
             for provider_name in self._provider_names:
-                if provider_name not in overrides:
-                    overrides[provider_name] = models[0]
+                overrides[provider_name] = models[0]
+        elif models and len(models) == len(self._provider_names):
+            for provider_name, model in zip(self._provider_names, models, strict=False):
+                overrides[provider_name] = model
 
         subagent_overrides = get_model_overrides(self._subagent_config or {}, self._resolved_mode)
         subagent_data = (
@@ -1320,13 +1328,7 @@ class Orchestrator:
                     "critique": 30.0,
                     "synthesis": 45.0,
                 }
-            elif provider_name == "vertex-ai":
-                bounded_caps = {
-                    "draft": 60.0,
-                    "critique": 45.0,
-                    "synthesis": 60.0,
-                }
-            elif provider_name == "gemini":
+            elif provider_name in {"vertex-ai", "gemini"}:
                 bounded_caps = {
                     "draft": 60.0,
                     "critique": 45.0,
@@ -1528,6 +1530,22 @@ class Orchestrator:
         waits = self._execution_plan.setdefault("provider_queue_wait_ms", {})
         entries = waits.setdefault(phase or "unknown", [])
         entries.append({"provider": provider_name, "wait_ms": round(wait_ms, 1)})
+
+    def _record_request_compilation(
+        self,
+        *,
+        phase: str | None,
+        provider_name: str,
+        compilation: dict[str, Any],
+    ) -> None:
+        """Record provider-specific request compilation decisions."""
+
+        if self._execution_plan is None:
+            return
+
+        compilations = self._execution_plan.setdefault("phase_request_compilation", {})
+        entries = compilations.setdefault(phase or "unknown", [])
+        entries.append({"provider": provider_name, **compilation})
 
     def _build_cost_estimate(self) -> CostEstimate:
         """Compute a cost estimate from recorded token usage."""

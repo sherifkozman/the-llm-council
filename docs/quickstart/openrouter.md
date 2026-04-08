@@ -35,6 +35,7 @@ export OPENROUTER_API_KEY="sk-or-v1-..."
 
 ```bash
 council doctor
+council doctor --provider openrouter --deep --json
 ```
 
 Expected output:
@@ -167,6 +168,10 @@ defaults:
   timeout: 120
   max_retries: 3
 ```
+
+If `council doctor --provider openrouter --deep` reports that the configured
+model is deprecated, the provider is still healthy. Update
+`providers.openrouter.default_model` or use a one-off `--models` override.
 
 Via environment variable:
 

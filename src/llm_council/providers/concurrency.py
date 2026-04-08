@@ -12,10 +12,10 @@ import asyncio
 import os
 import tempfile
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator
 
 try:  # pragma: no cover - exercised indirectly on non-POSIX platforms
     import fcntl

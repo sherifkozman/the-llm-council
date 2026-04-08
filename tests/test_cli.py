@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 from typer.testing import CliRunner
 
 from llm_council.cli.main import _load_provider_configs, app
@@ -283,6 +284,214 @@ class TestCLIDoctor:
             assert '"probe_ok": false' in result.stdout
             assert "Skipped because base doctor failed" in result.stdout
             provider.generate.assert_not_called()
+
+    def test_doctor_deep_probe_explains_openrouter_missing_model(self):
+        """Deep doctor should explain when the configured OpenRouter model is unavailable."""
+
+        @asynccontextmanager
+        async def fake_slot(_name: str, *, timeout_seconds: float | None = None):
+            yield 0.0
+
+        with (
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "json"},
+            ),
+            patch("llm_council.providers.registry.get_registry") as mock_reg,
+            patch("llm_council.cli.main.provider_call_slot", fake_slot),
+        ):
+            mock_registry = MagicMock()
+            mock_registry.list_providers.return_value = ["openrouter"]
+            mock_registry.resolve_name.side_effect = {"openrouter": "openrouter"}.get
+
+            provider = MagicMock()
+            provider._default_model = "qwen/qwen3.6-plus:free"
+            doctor_result = MagicMock()
+            doctor_result.ok = True
+            doctor_result.message = "OpenRouter API is accessible"
+            doctor_result.latency_ms = 10.0
+            provider.doctor = AsyncMock(return_value=doctor_result)
+
+            request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            provider.generate = AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "Client error '404 Not Found' for url 'https://openrouter.ai/api/v1/chat/completions'",
+                    request=request,
+                    response=httpx.Response(
+                        404,
+                        request=request,
+                        json={
+                            "error": {
+                                "message": "The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access."
+                            }
+                        },
+                    ),
+                )
+            )
+
+            mock_registry.get_provider.return_value = provider
+            mock_reg.return_value = mock_registry
+
+            result = runner.invoke(app, ["doctor", "--provider", "openrouter", "--deep", "--json"])
+
+            assert result.exit_code == 0
+            assert '"probe_ok": false' in result.stdout
+            assert "OpenRouter probe failed for configured model 'qwen/qwen3.6-plus:free'" in result.stdout
+            assert "The free model has been deprecated." in result.stdout
+            assert "use --models" in result.stdout
+
+    def test_doctor_deep_probe_preserves_generic_openrouter_404(self):
+        """Generic OpenRouter 404s should preserve upstream failure text."""
+
+        @asynccontextmanager
+        async def fake_slot(_name: str, *, timeout_seconds: float | None = None):
+            yield 0.0
+
+        with (
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "json"},
+            ),
+            patch("llm_council.providers.registry.get_registry") as mock_reg,
+            patch("llm_council.cli.main.provider_call_slot", fake_slot),
+        ):
+            mock_registry = MagicMock()
+            mock_registry.list_providers.return_value = ["openrouter"]
+            mock_registry.resolve_name.side_effect = {"openrouter": "openrouter"}.get
+
+            provider = MagicMock()
+            provider._default_model = "qwen/qwen3.6-plus:free"
+            doctor_result = MagicMock()
+            doctor_result.ok = True
+            doctor_result.message = "OpenRouter API is accessible"
+            doctor_result.latency_ms = 10.0
+            provider.doctor = AsyncMock(return_value=doctor_result)
+
+            request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            provider.generate = AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "Client error '404 Not Found' for url 'https://openrouter.ai/api/v1/chat/completions'",
+                    request=request,
+                    response=httpx.Response(
+                        404,
+                        request=request,
+                        json={"error": {"message": "Upstream route missing"}},
+                    ),
+                )
+            )
+
+            mock_registry.get_provider.return_value = provider
+            mock_reg.return_value = mock_registry
+
+            result = runner.invoke(app, ["doctor", "--provider", "openrouter", "--deep", "--json"])
+
+            assert result.exit_code == 0
+            assert '"probe_ok": false' in result.stdout
+            assert "Configured OpenRouter model" not in result.stdout
+            assert "Client error '404 Not Found'" in result.stdout
+            assert "Upstream route missing" in result.stdout
+
+    def test_doctor_deep_probe_does_not_misclassify_openrouter_model_404(self):
+        """Model-not-found 404s should remain generic unless the payload signals deprecation."""
+
+        @asynccontextmanager
+        async def fake_slot(_name: str, *, timeout_seconds: float | None = None):
+            yield 0.0
+
+        with (
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "json"},
+            ),
+            patch("llm_council.providers.registry.get_registry") as mock_reg,
+            patch("llm_council.cli.main.provider_call_slot", fake_slot),
+        ):
+            mock_registry = MagicMock()
+            mock_registry.list_providers.return_value = ["openrouter"]
+            mock_registry.resolve_name.side_effect = {"openrouter": "openrouter"}.get
+
+            provider = MagicMock()
+            provider._default_model = "qwen/qwen3.6-plus:free"
+            doctor_result = MagicMock()
+            doctor_result.ok = True
+            doctor_result.message = "OpenRouter API is accessible"
+            doctor_result.latency_ms = 10.0
+            provider.doctor = AsyncMock(return_value=doctor_result)
+
+            request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            provider.generate = AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "Client error '404 Not Found' for url 'https://openrouter.ai/api/v1/chat/completions'",
+                    request=request,
+                    response=httpx.Response(
+                        404,
+                        request=request,
+                        json={"error": {"message": "Unknown model slug"}},
+                    ),
+                )
+            )
+
+            mock_registry.get_provider.return_value = provider
+            mock_reg.return_value = mock_registry
+
+            result = runner.invoke(app, ["doctor", "--provider", "openrouter", "--deep", "--json"])
+
+            assert result.exit_code == 0
+            assert '"probe_ok": false' in result.stdout
+            assert "OpenRouter probe failed for configured model" not in result.stdout
+            assert "Client error '404 Not Found'" in result.stdout
+            assert "Unknown model slug" in result.stdout
+
+    def test_doctor_deep_probe_preserves_plain_text_http_error_body(self):
+        """Plain-text upstream HTTP failures should remain visible in the probe message."""
+
+        @asynccontextmanager
+        async def fake_slot(_name: str, *, timeout_seconds: float | None = None):
+            yield 0.0
+
+        with (
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "json"},
+            ),
+            patch("llm_council.providers.registry.get_registry") as mock_reg,
+            patch("llm_council.cli.main.provider_call_slot", fake_slot),
+        ):
+            mock_registry = MagicMock()
+            mock_registry.list_providers.return_value = ["openrouter"]
+            mock_registry.resolve_name.side_effect = {"openrouter": "openrouter"}.get
+
+            provider = MagicMock()
+            provider._default_model = "z-ai/glm-5.1"
+            doctor_result = MagicMock()
+            doctor_result.ok = True
+            doctor_result.message = "OpenRouter API is accessible"
+            doctor_result.latency_ms = 10.0
+            provider.doctor = AsyncMock(return_value=doctor_result)
+
+            request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            provider.generate = AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "Server error '502 Bad Gateway' for url 'https://openrouter.ai/api/v1/chat/completions'",
+                    request=request,
+                    response=httpx.Response(
+                        502,
+                        request=request,
+                        text="Gateway upstream timeout at edge",
+                    ),
+                )
+            )
+
+            mock_registry.get_provider.return_value = provider
+            mock_reg.return_value = mock_registry
+
+            result = runner.invoke(app, ["doctor", "--provider", "openrouter", "--deep", "--json"])
+
+            assert result.exit_code == 0
+            assert '"probe_ok": false' in result.stdout
+            assert "OpenRouter probe failed for configured model" not in result.stdout
+            assert "Server error '502 Bad Gateway'" in result.stdout
+            assert "Gateway upstream timeout at edge" in result.stdout
 
     def test_doctor_deep_probe_serializes_live_probes(self):
         """Deep doctor should not fan out multiple live probes at once."""

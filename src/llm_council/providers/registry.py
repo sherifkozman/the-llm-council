@@ -22,6 +22,30 @@ _PROVIDER_ALIASES: dict[str, str] = {
 }
 
 
+def resolve_provider_name(name: str) -> str:
+    """Resolve a provider name or alias to its canonical registered name."""
+
+    normalized = name.strip().lower()
+    if not normalized:
+        raise ValueError("Provider name must be a non-empty string.")
+    return _PROVIDER_ALIASES.get(normalized, normalized)
+
+
+def provider_identity(name: str) -> str:
+    """Resolve the canonical provider identity for direct and virtual providers.
+
+    In llm-council, names containing ``/`` are virtual OpenRouter providers produced
+    by model expansion (for example ``qwen/qwen3-max-thinking``). They must still
+    retain the ``openrouter`` identity for provider-specific policy and preference
+    matching.
+    """
+
+    resolved = resolve_provider_name(name)
+    if "/" in resolved and resolved != "openrouter":
+        return "openrouter"
+    return resolved
+
+
 class ProviderRegistry:
     """Singleton registry of provider adapter classes."""
 
@@ -78,11 +102,7 @@ class ProviderRegistry:
 
     def resolve_name(self, name: str) -> str:
         """Resolve a provider name or alias to its canonical registered name."""
-
-        normalized = name.strip().lower()
-        if not normalized:
-            raise ValueError("Provider name must be a non-empty string.")
-        return _PROVIDER_ALIASES.get(normalized, normalized)
+        return resolve_provider_name(name)
 
     def list_providers(self) -> list[str]:
         """Return a sorted list of registered provider names."""

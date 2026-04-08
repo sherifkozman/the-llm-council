@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
+import httpx
 import typer
 import yaml
 from rich.console import Console
@@ -765,6 +766,57 @@ def doctor(
     # Load per-provider config so doctor shows configured models
     provider_cfgs = _load_provider_configs()
 
+    def _extract_http_error_message(error: httpx.HTTPStatusError) -> str:
+        """Extract a provider-supplied error message when available."""
+
+        try:
+            payload = error.response.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            nested_error = payload.get("error")
+            if isinstance(nested_error, dict):
+                message = nested_error.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+            message = payload.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+
+        text = error.response.text.strip()
+        if text:
+            return text
+        return str(error)
+
+    def _format_probe_failure(name: str, provider: Any, error: Exception) -> str:
+        """Render deep-probe failures with provider-specific guidance when possible."""
+
+        if isinstance(error, httpx.HTTPStatusError):
+            status_code = error.response.status_code
+            upstream_message = _extract_http_error_message(error)
+            configured_model = getattr(provider, "_default_model", None)
+            lowered_message = upstream_message.lower()
+            if (
+                name == "openrouter"
+                and status_code == 404
+                and isinstance(configured_model, str)
+                and configured_model.strip()
+                and (
+                    "deprecated" in lowered_message
+                    or "deprecation" in lowered_message
+                    or ("transition" in lowered_message and "access" in lowered_message)
+                )
+            ):
+                return (
+                    f"OpenRouter probe failed for configured model '{configured_model}': "
+                    f"{upstream_message} Update providers.openrouter.default_model or use --models."
+                )
+            generic_message = str(error)
+            if upstream_message and upstream_message not in generic_message:
+                return f"{generic_message} - {upstream_message}"
+        return str(error)
+
     async def _run_deep_probe(name: str, provider: Any) -> dict[str, Any]:
         from time import perf_counter
 
@@ -805,7 +857,7 @@ def doctor(
                         payload.update(
                             {
                                 "probe_ok": False,
-                                "probe_message": str(e),
+                                "probe_message": _format_probe_failure(name, provider, e),
                                 "probe_latency_ms": None,
                             }
                         )

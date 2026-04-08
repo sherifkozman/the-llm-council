@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.15] - 2026-04-08
+
+### Fixed
+- Added provider-aware request compilation across all current providers so generic council options are transformed, downgraded, or dropped explicitly per provider/model instead of relying on scattered adapter-only behavior
+- OpenRouter deep doctor now preserves upstream HTTP payload text and only reports a configured-model migration hint when the probe failure actually signals model deprecation
+- Source-tree version detection now prefers the checkout version instead of leaking a previously installed wheel version into `PYTHONPATH=src` runs
+
+### Changed
+- Refreshed the packaged OpenRouter quickstart, council skill, and Claude plugin metadata to the `0.7.15` release surface
+
 ## [0.7.14] - 2026-04-07
 
 ### Fixed
@@ -610,7 +620,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.14...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.15...HEAD
+[0.7.15]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.14...v0.7.15
 [0.7.14]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.13...v0.7.14
 [0.7.13]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.12...v0.7.13
 [0.7.12]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.11...v0.7.12

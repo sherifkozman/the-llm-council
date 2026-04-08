@@ -25,12 +25,10 @@ from llm_council.providers.anthropic import (
 from llm_council.providers.anthropic import (
     STRUCTURED_OUTPUT_MODELS as ANTHROPIC_STRUCTURED_OUTPUT_MODELS,
 )
-from llm_council.providers.anthropic import (
-    STRUCTURED_OUTPUTS_BETA,
-)
 
 # Import shared schema normalization from anthropic provider
 from llm_council.providers.anthropic import (
+    STRUCTURED_OUTPUTS_BETA,
     _prepare_schema_for_anthropic,
 )
 from llm_council.providers.base import (

@@ -17,8 +17,8 @@ import json
 import logging
 import os
 import shlex
-import signal
 import shutil
+import signal
 import tempfile
 import warnings
 from collections.abc import AsyncIterator
