@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.16] - 2026-04-09
+
+### Fixed
+- Bounded review draft chunking now comes from a centralized provider budget policy instead of provider-name heuristics, with explicit execution metadata for strategy, estimates, envelopes, and chunk reasons
+- Review-mode markdown file context is now sliced into heading-aware evidence packs with anchored source metadata, instead of relying only on first-byte truncation
+- Downstream critique and synthesis phases now consume normalized chunk findings and quoted evidence excerpts instead of silently replaying the full raw file bundle after chunked drafts
+- OpenRouter bounded `critic --mode review` runs now skip impossible over-budget critique calls and return a conservative reviewer fallback object when repeated synthesis responses fail JSON validation
+
+### Changed
+- Added large-review observability to the execution plan, including truncation warnings, slicing metadata, per-phase prompt sizing, and bounded prompt-compaction decisions
+- Updated the OpenRouter quickstart, packaged skill metadata, and Claude plugin version for the `0.7.16` release
+
 ## [0.7.15] - 2026-04-08
 
 ### Fixed
@@ -620,7 +632,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.15...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.16...HEAD
+[0.7.16]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.15...v0.7.16
 [0.7.15]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.14...v0.7.15
 [0.7.14]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.13...v0.7.14
 [0.7.13]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.12...v0.7.13

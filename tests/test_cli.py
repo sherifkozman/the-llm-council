@@ -702,6 +702,85 @@ class TestOutputFormatConfig:
                 assert "{" in result.stdout or "providers" in result.stdout
 
 
+class TestCLIContextMetadata:
+    """Tests for file-ingestion metadata passed into council runs."""
+
+    def test_run_passes_file_truncation_metadata_into_config(self, tmp_path):
+        """Run should preserve truncation and skip decisions in context metadata."""
+        large_files = []
+        for index in range(1, 6):
+            path = tmp_path / f"large-{index}.md"
+            path.write_text("x" * 60_000)
+            large_files.append(path)
+        skipped_file = large_files[-1]
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.output = {"result": "test"}
+        mock_result.model_dump.return_value = {"success": True, "output": {"result": "test"}}
+        mock_result.validation_errors = None
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch("llm_council.cli.main._load_config_defaults", return_value={}),
+        ):
+            mock_council = MagicMock()
+            mock_council_class.return_value = mock_council
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "critic",
+                    "Review the benchmark plan",
+                    *[item for path in large_files for item in ("--files", str(path))],
+                    "--json",
+                ],
+            )
+
+        assert result.exit_code in [0, 1]
+        council_config = mock_council_class.call_args.kwargs["config"]
+        files = council_config.context_metadata["files"]
+        assert any(
+            item["path"] == str(large_files[0])
+            and item["truncated"] is True
+            and item["status"] == "included"
+            for item in files
+        )
+        assert any(
+            item["path"] == str(skipped_file) and item["status"] == "skipped_total_limit"
+            for item in files
+        )
+        assert council_config.context_metadata["warnings"]
+
+    def test_run_keeps_file_warnings_out_of_stdout_json(self, tmp_path):
+        """File-ingestion warnings should not pollute stdout JSON payloads."""
+        missing_file = tmp_path / "missing.md"
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.output = {"result": "test"}
+        mock_result.model_dump.return_value = {"success": True, "output": {"result": "test"}}
+        mock_result.validation_errors = None
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch("llm_council.cli.main._load_config_defaults", return_value={}),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(
+                app,
+                ["run", "critic", "Review the benchmark plan", "--files", str(missing_file), "--json"],
+            )
+
+        assert result.exit_code in [0, 1]
+        assert '"success": true' in result.stdout
+        assert "File not found" not in result.stdout
+
+
 class TestCLIEvaluate:
     """Tests for eval command."""
 

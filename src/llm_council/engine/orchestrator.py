@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
@@ -42,12 +44,14 @@ from llm_council.protocol.types import (
 )
 from llm_council.providers.base import (
     DoctorResult,
+    ErrorType,
     GenerateRequest,
     GenerateResponse,
     Message,
     ProviderAdapter,
     ReasoningConfig,
     StructuredOutputConfig,
+    classify_error,
 )
 from llm_council.providers.compiler import compile_request_for_provider
 from llm_council.providers.concurrency import provider_call_slot
@@ -70,10 +74,151 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-_CHUNKING_PROVIDER_IDENTITIES = frozenset({"vertex-ai", "gemini", "gemini-cli"})
 _CHUNKING_CONTEXT_CHAR_THRESHOLD = 60_000
 _CHUNKING_TARGET_CHARS = 60_000
 _CHUNKED_DRAFT_MAX_TOKENS = 900
+_LARGE_SINGLE_RUN_WARNING_TOKENS = 12_000
+_DEFAULT_ESTIMATE_METHOD = "chars_div_4_padded"
+_PHASE_PROMPT_PROFILES: dict[str, list[dict[str, int | None]]] = {
+    "critique": [
+        {"draft_limit": 1_800, "excerpt_limit": 320, "max_sources": 2, "max_findings": 5, "critique_limit": None},
+        {"draft_limit": 1_200, "excerpt_limit": 220, "max_sources": 2, "max_findings": 4, "critique_limit": None},
+        {"draft_limit": 800, "excerpt_limit": 160, "max_sources": 1, "max_findings": 3, "critique_limit": None},
+        {"draft_limit": 500, "excerpt_limit": 120, "max_sources": 1, "max_findings": 2, "critique_limit": None},
+        {"draft_limit": 300, "excerpt_limit": 80, "max_sources": 0, "max_findings": 2, "critique_limit": None},
+    ],
+    "synthesis": [
+        {"draft_limit": 1_200, "excerpt_limit": 220, "max_sources": 2, "max_findings": 3, "critique_limit": 12_000},
+        {"draft_limit": 900, "excerpt_limit": 160, "max_sources": 1, "max_findings": 3, "critique_limit": 8_000},
+        {"draft_limit": 650, "excerpt_limit": 120, "max_sources": 1, "max_findings": 2, "critique_limit": 5_000},
+        {"draft_limit": 450, "excerpt_limit": 80, "max_sources": 1, "max_findings": 2, "critique_limit": 3_000},
+        {"draft_limit": 300, "excerpt_limit": 0, "max_sources": 0, "max_findings": 1, "critique_limit": 1_800},
+        {"draft_limit": 220, "excerpt_limit": 0, "max_sources": 0, "max_findings": 1, "critique_limit": 1_200},
+        {"draft_limit": 0, "excerpt_limit": 0, "max_sources": 0, "max_findings": 0, "critique_limit": 1_800, "omit_drafts": 1, "omit_context": 1},
+        {"draft_limit": 0, "excerpt_limit": 0, "max_sources": 0, "max_findings": 0, "critique_limit": 1_000, "omit_drafts": 1, "omit_context": 1},
+    ],
+}
+_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "again",
+        "against",
+        "ambiguous",
+        "among",
+        "analysis",
+        "benchmark",
+        "boundaries",
+        "change",
+        "cleaner",
+        "comparable",
+        "comparability",
+        "compare",
+        "critic",
+        "document",
+        "draft",
+        "evaluation",
+        "files",
+        "first",
+        "focus",
+        "from",
+        "harness",
+        "important",
+        "into",
+        "leave",
+        "leaves",
+        "milestone",
+        "misses",
+        "mode",
+        "more",
+        "overclaims",
+        "plan",
+        "publishable",
+        "result",
+        "review",
+        "retrieval",
+        "selects",
+        "should",
+        "task",
+        "than",
+        "that",
+        "their",
+        "there",
+        "these",
+        "this",
+        "those",
+        "under",
+        "with",
+    }
+)
+_PROVIDER_BUDGET_REGISTRY: dict[str, dict[str, Any]] = {
+    "default": {
+        "safe_input_tokens": {"draft": 14_000, "critique": 16_000, "synthesis": 16_000},
+        "queue_wait_headroom_seconds": {"draft": 2.0, "critique": 1.5, "synthesis": 1.5},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.2,
+    },
+    "openai": {
+        "safe_input_tokens": {"draft": 13_500, "critique": 15_000, "synthesis": 15_000},
+        "queue_wait_headroom_seconds": {"draft": 3.0, "critique": 2.0, "synthesis": 2.0},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.2,
+    },
+    "openrouter": {
+        "safe_input_tokens": {"draft": 12_000, "critique": 11_000, "synthesis": 11_000},
+        "queue_wait_headroom_seconds": {"draft": 4.0, "critique": 3.0, "synthesis": 3.0},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.28,
+    },
+    "vertex-ai": {
+        "safe_input_tokens": {"draft": 18_000, "critique": 18_000, "synthesis": 18_000},
+        "queue_wait_headroom_seconds": {"draft": 2.0, "critique": 1.5, "synthesis": 1.5},
+        "estimator_divisor": 3.6,
+        "estimator_padding": 1.22,
+    },
+    "gemini": {
+        "safe_input_tokens": {"draft": 18_000, "critique": 18_000, "synthesis": 18_000},
+        "queue_wait_headroom_seconds": {"draft": 2.0, "critique": 1.5, "synthesis": 1.5},
+        "estimator_divisor": 3.6,
+        "estimator_padding": 1.22,
+    },
+    "gemini-cli": {
+        "safe_input_tokens": {"draft": 22_000, "critique": 20_000, "synthesis": 20_000},
+        "queue_wait_headroom_seconds": {"draft": 4.0, "critique": 3.0, "synthesis": 3.0},
+        "estimator_divisor": 3.5,
+        "estimator_padding": 1.18,
+    },
+    "anthropic": {
+        "safe_input_tokens": {"draft": 13_500, "critique": 15_000, "synthesis": 15_000},
+        "queue_wait_headroom_seconds": {"draft": 2.5, "critique": 2.0, "synthesis": 2.0},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.2,
+    },
+    "claude": {
+        "safe_input_tokens": {"draft": 13_500, "critique": 15_000, "synthesis": 15_000},
+        "queue_wait_headroom_seconds": {"draft": 2.5, "critique": 2.0, "synthesis": 2.0},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.2,
+    },
+    "claude-code": {
+        "safe_input_tokens": {"draft": 13_500, "critique": 15_000, "synthesis": 15_000},
+        "queue_wait_headroom_seconds": {"draft": 2.5, "critique": 2.0, "synthesis": 2.0},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.2,
+    },
+    "codex": {
+        "safe_input_tokens": {"draft": 16_000, "critique": 16_000, "synthesis": 16_000},
+        "queue_wait_headroom_seconds": {"draft": 5.0, "critique": 3.0, "synthesis": 3.0},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.15,
+    },
+    "codex-cli": {
+        "safe_input_tokens": {"draft": 16_000, "critique": 16_000, "synthesis": 16_000},
+        "queue_wait_headroom_seconds": {"draft": 5.0, "critique": 3.0, "synthesis": 3.0},
+        "estimator_divisor": 4.0,
+        "estimator_padding": 1.15,
+    },
+}
 
 
 class OrchestratorConfig(BaseModel):
@@ -128,6 +273,13 @@ class OrchestratorConfig(BaseModel):
         description=(
             "Additional system context prepended to all prompts. "
             "Used for --context/--system file injection."
+        ),
+    )
+    context_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Structured metadata describing how CLI/system context was prepared "
+            "before orchestration."
         ),
     )
     mode: str | None = Field(
@@ -280,6 +432,12 @@ class Orchestrator:
         self._health_report: HealthReport | None = None
         self._run_id: str | None = None
         self._phase_context_override: str | None = None
+        self._prepared_reference_context: str | None = None
+        self._prepared_context_prefix: str = ""
+        self._prepared_context_blocks: list[tuple[str, str]] = []
+        self._prepared_context_metadata: dict[str, Any] = {}
+        self._draft_handoffs: dict[str, dict[str, Any]] = {}
+        self._last_draft_budget_decisions: dict[str, dict[str, Any]] = {}
 
         if self._config.enable_artifacts:
             self._artifact_store = get_store(enabled=True)
@@ -304,6 +462,12 @@ class Orchestrator:
         self._execution_plan = None
         self._evidence_bundle = None
         self._phase_context_override = None
+        self._prepared_reference_context = None
+        self._prepared_context_prefix = ""
+        self._prepared_context_blocks = []
+        self._prepared_context_metadata = {}
+        self._draft_handoffs = {}
+        self._last_draft_budget_decisions = {}
         phase_timings: list[PhaseTiming] = []
         start_time = time.monotonic()
 
@@ -438,9 +602,15 @@ class Orchestrator:
         except Exception as exc:
             detail = self._format_exception_chain(exc)
             critique = ""
+            restored = self._restore_transient_draft_providers(drafts, exc, phase="critique")
             self._append_degradation_note(
                 f"Critique failed ({detail}); continuing without critique."
             )
+            if restored:
+                self._append_degradation_note(
+                    "Continuing to synthesis with restored draft provider(s): "
+                    + ", ".join(restored)
+                )
             logger.warning("Critique phase failed; continuing without critique: %s", detail)
 
         try:
@@ -569,14 +739,33 @@ class Orchestrator:
             "You are an adversarial reviewer. Identify errors, gaps, contradictions, "
             "and schema violations. Provide concrete fixes."
         )
-        user_prompt = self._format_critique_prompt(
-            self._task,
-            drafts,
-            context_override=self._phase_context_override,
-        )
         last_error: Exception | None = None
+        skipped_over_budget = False
+        context_chars = len(self._context_source(self._phase_context_override))
 
         for index, (provider_name, adapter) in enumerate(candidates):
+            user_prompt, prompt_meta = self._select_prompt_profile(
+                provider_name=provider_name,
+                phase="critique",
+                system_prompt=system_prompt,
+                prompt_builder=lambda profile: self._format_critique_prompt(
+                    self._task,
+                    drafts,
+                    context_override=self._phase_context_override,
+                    draft_limit=profile.get("draft_limit"),
+                    excerpt_limit=int(profile.get("excerpt_limit") or 320),
+                    max_sources=profile.get("max_sources"),
+                    max_findings=profile.get("max_findings"),
+                ),
+            )
+            if prompt_meta.get("over_budget"):
+                skipped_over_budget = True
+                if self._execution_plan is not None:
+                    self._execution_plan.setdefault("warnings", []).append(
+                        f"{provider_name} critique was skipped because the prompt remained "
+                        "above its effective bounded budget after compaction."
+                    )
+                continue
             request = GenerateRequest(
                 model=self._model_override(provider_name),
                 messages=[
@@ -599,6 +788,8 @@ class Orchestrator:
                 provider_name=provider_name,
                 max_tokens=request.max_tokens,
                 timeout_seconds=request.timeout_seconds,
+                raw_source_chars=self._prepared_context_metadata.get("raw_source_chars", 0),
+                evidence_pack_chars=context_chars + len(user_prompt),
             )
             try:
                 response = await self._call_provider(
@@ -617,6 +808,8 @@ class Orchestrator:
 
         if last_error is not None:
             raise last_error
+        if skipped_over_budget:
+            return ""
         raise RuntimeError("Critique failed without a usable provider response.")
 
     async def _run_synthesis(
@@ -639,19 +832,43 @@ class Orchestrator:
         last_error: Exception | None = None
 
         for provider_index, (provider_name, adapter) in enumerate(candidates):
+            force_inline_schema = False
             for _attempt in range(1, self._config.max_retries + 1):
                 total_attempts += 1
                 system_prompt = (
                     "You are the synthesizer. Combine drafts and critique into a single response. "
                     "Return ONLY valid JSON that matches the provided schema."
                 )
-                user_prompt = self._format_synthesis_prompt(
-                    task=self._task,
-                    drafts=drafts,
-                    critique=critique,
-                    schema=schema,
-                    errors=errors,
-                    context_override=self._phase_context_override,
+                supports_structured_output = bool(schema) and await adapter.supports(
+                    "structured_output"
+                ) and not force_inline_schema
+                use_raw_drafts = bool(errors) and any(
+                    handoff.get("findings") for handoff in self._draft_handoffs.values()
+                )
+                user_prompt, _prompt_meta = self._select_prompt_profile(
+                    provider_name=provider_name,
+                    phase="synthesis",
+                    system_prompt=system_prompt,
+                    prompt_builder=lambda profile, *,
+                    _errors=tuple(errors),
+                    _use_raw_drafts=use_raw_drafts,
+                    _inline_schema=not supports_structured_output: self._format_synthesis_prompt(
+                        task=self._task,
+                        drafts=drafts,
+                        critique=critique,
+                        schema=schema,
+                        errors=_errors,
+                        context_override=self._phase_context_override,
+                        use_raw_drafts=_use_raw_drafts,
+                        draft_limit=profile.get("draft_limit"),
+                        excerpt_limit=int(profile.get("excerpt_limit") or 320),
+                        max_sources=profile.get("max_sources"),
+                        max_findings=profile.get("max_findings"),
+                        critique_limit=profile.get("critique_limit"),
+                        omit_drafts=bool(profile.get("omit_drafts")),
+                        inline_schema=_inline_schema,
+                        omit_context=bool(profile.get("omit_context")),
+                    ),
                 )
 
                 request = GenerateRequest(
@@ -671,7 +888,7 @@ class Orchestrator:
                     reasoning=self._reasoning,
                 )
 
-                if schema and await adapter.supports("structured_output"):
+                if supports_structured_output:
                     request.structured_output = StructuredOutputConfig(
                         json_schema=schema,
                         name=self._subagent_name or "council_output",
@@ -686,6 +903,9 @@ class Orchestrator:
                     timeout_seconds=request.timeout_seconds,
                     structured_output=request.structured_output is not None,
                     attempt=total_attempts,
+                    raw_source_chars=self._prepared_context_metadata.get("raw_source_chars", 0),
+                    evidence_pack_chars=len(self._context_source(self._phase_context_override))
+                    + len(user_prompt),
                 )
 
                 try:
@@ -697,6 +917,17 @@ class Orchestrator:
                         remaining_providers=max(len(candidates) - provider_index - 1, 0),
                     )
                 except Exception as exc:
+                    if schema and not force_inline_schema:
+                        detail = self._format_exception_chain(exc)
+                        error_type = classify_error(detail)
+                        if error_type in {ErrorType.UNKNOWN, ErrorType.NETWORK, ErrorType.TIMEOUT}:
+                            force_inline_schema = True
+                            if self._execution_plan is not None:
+                                self._execution_plan.setdefault("warnings", []).append(
+                                    f"{provider_name} synthesis fell back to inline-schema JSON mode "
+                                    "after structured-output request failure."
+                                )
+                            continue
                     last_error = exc
                     break
 
@@ -706,7 +937,15 @@ class Orchestrator:
                     self._record_phase_provider_used("synthesis", provider_name)
                     return result, total_attempts
                 errors = result.errors
+                if use_raw_drafts and self._execution_plan is not None:
+                    self._execution_plan.setdefault("warnings", []).append(
+                        "Synthesis fell back to raw draft text after normalized evidence "
+                        "was insufficient to satisfy schema validation."
+                    )
 
+        fallback = self._fallback_synthesis_from_evidence(drafts, critique, errors)
+        if fallback is not None:
+            return fallback, total_attempts
         if last_raw is not None:
             return ValidationResult(ok=False, errors=errors, raw=last_raw), total_attempts
         if last_error is not None:
@@ -740,13 +979,23 @@ class Orchestrator:
         chunk_plan = self._draft_chunk_plan(provider_name, system_prompt, user_prompt)
         if chunk_plan is not None:
             self._phase_context_override = chunk_plan["prefix"] or None
+            self._draft_handoffs[provider_name] = {
+                "strategy": "chunked_context",
+                "chunk_count": chunk_plan["chunk_count"],
+                "findings": [],
+            }
             if self._execution_plan is not None:
                 self._execution_plan["draft_execution"] = {
                     "strategy": "chunked_context",
+                    "provider": provider_name,
                     "chunk_count": chunk_plan["chunk_count"],
-                    "reason": chunk_plan["reason"],
+                    "reason": chunk_plan["forced_reason"],
+                    "estimate_method": chunk_plan["estimate_method"],
                     "estimated_input_tokens": chunk_plan["estimated_input_tokens"],
+                    "safe_envelope_tokens": chunk_plan["safe_envelope_tokens"],
                     "replayed_context_chars": len(self._phase_context_override or ""),
+                    "raw_source_chars": chunk_plan["raw_source_chars"],
+                    "evidence_pack_chars": chunk_plan["evidence_pack_chars"],
                 }
             chunk_results: list[str] = []
             for index, chunk in enumerate(chunk_plan["chunks"], start=1):
@@ -781,6 +1030,8 @@ class Orchestrator:
                     max_tokens=chunk_request.max_tokens,
                     timeout_seconds=chunk_request.timeout_seconds,
                     attempt=index,
+                    raw_source_chars=len(self._config.system_context or ""),
+                    evidence_pack_chars=len(chunk_context),
                 )
                 response = await self._call_provider(
                     provider_name,
@@ -788,12 +1039,20 @@ class Orchestrator:
                     chunk_request,
                     phase="draft",
                 )
+                self._draft_handoffs[provider_name]["findings"].append(
+                    {
+                        "chunk_index": index,
+                        "draft": (response.text or "").strip(),
+                        "sources": self._evidence_sources_for_chunk(chunk),
+                    }
+                )
                 labels = ", ".join(path for path, _content in chunk)
                 chunk_results.append(
                     f"Chunk {index}/{chunk_plan['chunk_count']} ({labels}):\n{response.text or ''}"
                 )
             return provider_name, "\n\n".join(chunk_results).strip()
         self._phase_context_override = None
+        self._draft_handoffs.pop(provider_name, None)
         self._record_phase_prompt_metrics(
             "draft",
             system_prompt=system_prompt,
@@ -801,9 +1060,21 @@ class Orchestrator:
             provider_name=provider_name,
             max_tokens=request.max_tokens,
             timeout_seconds=request.timeout_seconds,
+            raw_source_chars=len(self._config.system_context or ""),
+            evidence_pack_chars=len(self._context_source()),
         )
         if self._execution_plan is not None:
-            self._execution_plan["draft_execution"] = {"strategy": "single_run"}
+            decision = self._last_draft_budget_decisions.get(provider_name, {})
+            self._execution_plan["draft_execution"] = {
+                "strategy": "single_run",
+                "provider": provider_name,
+                "estimate_method": decision.get("estimate_method"),
+                "estimated_input_tokens": decision.get("estimated_input_tokens"),
+                "safe_envelope_tokens": decision.get("safe_envelope_tokens"),
+                "forced_reason": decision.get("forced_reason", "none"),
+                "raw_source_chars": decision.get("raw_source_chars", 0),
+                "evidence_pack_chars": decision.get("evidence_pack_chars", 0),
+            }
         response = await self._call_provider(provider_name, adapter, request, phase="draft")
         return provider_name, response.text or ""
 
@@ -867,6 +1138,21 @@ class Orchestrator:
 
             except Exception as exc:
                 error_detail = self._format_exception_chain(exc)
+                error_type = classify_error(error_detail)
+                if self._execution_plan is not None and error_type in {
+                    ErrorType.TIMEOUT,
+                    ErrorType.NETWORK,
+                    ErrorType.RATE_LIMIT,
+                }:
+                    warning_reason = {
+                        ErrorType.TIMEOUT: "timeout",
+                        ErrorType.NETWORK: "network/read-abort",
+                        ErrorType.RATE_LIMIT: "rate_limit",
+                    }[error_type]
+                    self._execution_plan.setdefault("warnings", []).append(
+                        f"{provider_name} degraded during {phase or 'call'} due to {warning_reason}: "
+                        f"{error_detail}"
+                    )
                 if self._degradation_policy:
                     remaining = (
                         remaining_providers
@@ -998,6 +1284,7 @@ class Orchestrator:
             ),
             "evidence_items": 0,
         }
+        self._prepare_reference_context()
         self._execution_plan["preflight_estimate"] = self._build_preflight_estimate()
 
     def _build_reasoning_config(self, budget: Any) -> ReasoningConfig | None:
@@ -1368,13 +1655,21 @@ class Orchestrator:
         if not self._provider_names:
             return None
         timeout_map = self._provider_request_timeout_map()
+        decisions: dict[str, dict[str, Any]] = {}
+        if self._task is not None:
+            system_prompt = self._system_prompt
+            user_prompt = self._format_draft_prompt(self._task)
+            decisions = {
+                provider_name: self._draft_budget_decision(provider_name, system_prompt, user_prompt)
+                for provider_name in self._provider_names
+            }
         return max(
             self._provider_names,
             key=lambda provider_name: (
                 timeout_map[provider_name]["draft"],
                 timeout_map[provider_name]["critique"],
                 timeout_map[provider_name]["synthesis"],
-                provider_name in _CHUNKING_PROVIDER_IDENTITIES,
+                decisions.get(provider_name, {}).get("strategy") == "chunked_context",
             ),
         )
 
@@ -1463,6 +1758,592 @@ class Orchestrator:
             return ""
         return self._evidence_bundle.to_prompt_block()
 
+    def _is_review_workload(self) -> bool:
+        """Return True when the current run is a document-heavy review workflow."""
+
+        return (self._subagent_name == "critic") or (self._resolved_mode == "review")
+
+    def _provider_budget(self, provider_name: str) -> dict[str, Any]:
+        """Return the authoritative budget policy for a provider identity."""
+
+        identity = self._provider_identity(provider_name)
+        base = _PROVIDER_BUDGET_REGISTRY["default"]
+        override = _PROVIDER_BUDGET_REGISTRY.get(identity, {})
+        return {
+            "safe_input_tokens": {
+                **base["safe_input_tokens"],
+                **override.get("safe_input_tokens", {}),
+            },
+            "queue_wait_headroom_seconds": {
+                **base["queue_wait_headroom_seconds"],
+                **override.get("queue_wait_headroom_seconds", {}),
+            },
+            "estimator_divisor": override.get("estimator_divisor", base["estimator_divisor"]),
+            "estimator_padding": override.get("estimator_padding", base["estimator_padding"]),
+            "budget_source": identity if identity in _PROVIDER_BUDGET_REGISTRY else "default",
+        }
+
+    def _estimate_tokens_for_provider(
+        self, provider_name: str, *parts: str
+    ) -> tuple[int, str, float]:
+        """Estimate input tokens using a provider-aware padded heuristic."""
+
+        budget = self._provider_budget(provider_name)
+        total_chars = sum(len(part) for part in parts)
+        if total_chars <= 0:
+            return 0, _DEFAULT_ESTIMATE_METHOD, budget["estimator_padding"]
+        divisor = float(budget["estimator_divisor"])
+        padding = float(budget["estimator_padding"])
+        estimate = max(int((total_chars / divisor) * padding), 1)
+        method = f"chars_div_{str(divisor).rstrip('0').rstrip('.')}_padded"
+        return estimate, method, padding
+
+    def _phase_budget_status(
+        self, provider_name: str, phase: str, system_prompt: str, user_prompt: str
+    ) -> dict[str, Any]:
+        """Compute provider-aware prompt budget status for a phase."""
+
+        budget = self._provider_budget(provider_name)
+        phase_timeout = self._provider_request_timeout_seconds(phase, provider_name=provider_name)
+        queue_headroom = float(budget["queue_wait_headroom_seconds"][phase])
+        safe_envelope = int(budget["safe_input_tokens"][phase])
+        timeout_factor = max(min((phase_timeout - queue_headroom) / max(phase_timeout, 1.0), 1.0), 0.55)
+        effective_envelope = max(int(safe_envelope * timeout_factor), 1)
+        estimated_tokens, estimate_method, _padding = self._estimate_tokens_for_provider(
+            provider_name, system_prompt, user_prompt
+        )
+        return {
+            "provider": provider_name,
+            "phase": phase,
+            "estimate_method": estimate_method,
+            "estimated_input_tokens": estimated_tokens,
+            "safe_envelope_tokens": safe_envelope,
+            "effective_envelope_tokens": effective_envelope,
+            "phase_timeout_seconds": phase_timeout,
+            "queue_wait_headroom_seconds": queue_headroom,
+            "over_budget": estimated_tokens > effective_envelope,
+        }
+
+    def _compact_text(self, content: str, limit: int | None) -> str:
+        """Trim free-form text to a bounded size for prompt assembly."""
+
+        normalized = content.strip()
+        if limit is None or len(normalized) <= limit:
+            return normalized
+        return normalized[:limit].rstrip() + "\n... [content truncated]"
+
+    def _record_phase_prompt_compaction(
+        self, phase: str, provider_name: str, decision: Mapping[str, Any]
+    ) -> None:
+        """Record prompt-compaction metadata for inspectability."""
+
+        if self._execution_plan is None:
+            return
+        entries = self._execution_plan.setdefault("phase_prompt_compaction", {}).setdefault(phase, [])
+        entries.append(dict(decision))
+
+    def _prompt_profile_candidates(self, phase: str) -> list[dict[str, int | None]]:
+        """Return progressive compaction profiles for a phase."""
+
+        return [dict(profile) for profile in _PHASE_PROMPT_PROFILES.get(phase, [{}])]
+
+    def _select_prompt_profile(
+        self,
+        *,
+        provider_name: str,
+        phase: str,
+        system_prompt: str,
+        prompt_builder: Callable[[Mapping[str, int | None]], str],
+    ) -> tuple[str, dict[str, Any]]:
+        """Pick the least aggressive prompt profile that fits the phase budget."""
+
+        profiles = self._prompt_profile_candidates(phase)
+        selected_prompt = ""
+        selected_meta: dict[str, Any] = {}
+
+        for index, profile in enumerate(profiles):
+            candidate_prompt = prompt_builder(profile)
+            budget_status = self._phase_budget_status(
+                provider_name, phase, system_prompt, candidate_prompt
+            )
+            selected_prompt = candidate_prompt
+            selected_meta = {
+                **budget_status,
+                "profile_index": index,
+                "profile": dict(profile),
+                "compacted": index > 0,
+            }
+            if not budget_status["over_budget"] or index == len(profiles) - 1:
+                break
+
+        if selected_meta.get("compacted"):
+            self._record_phase_prompt_compaction(phase, provider_name, selected_meta)
+            if self._execution_plan is not None:
+                self._execution_plan.setdefault("warnings", []).append(
+                    f"{provider_name} {phase} prompt was compacted to fit bounded review budget."
+                )
+        elif selected_meta.get("over_budget") and self._execution_plan is not None:
+            self._execution_plan.setdefault("warnings", []).append(
+                f"{provider_name} {phase} prompt remained above its effective budget after compaction."
+            )
+
+        return selected_prompt, selected_meta
+
+    def _context_source(self, context_override: str | None = None) -> str:
+        """Return the effective reference context after preparation."""
+
+        if context_override is not None:
+            return context_override
+        if self._prepared_reference_context is not None:
+            return self._prepared_reference_context
+        return self._config.system_context or ""
+
+    def _extract_file_context_blocks_from_text(self, context: str) -> tuple[str, list[tuple[str, str]]]:
+        """Parse CLI-injected file blocks from arbitrary reference context."""
+
+        if not context:
+            return "", []
+
+        lines = context.splitlines(keepends=True)
+        prefix_parts: list[str] = []
+        blocks: list[tuple[str, str]] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith("=== FILE: ") and line.rstrip("\n").endswith(" ==="):
+                path = line.rstrip("\n")[10:-4]
+                i += 1
+                content_parts: list[str] = []
+                end_marker = f"=== END: {path} ==="
+                while i < len(lines) and lines[i].rstrip("\n") != end_marker:
+                    content_parts.append(lines[i])
+                    i += 1
+                if i < len(lines):
+                    blocks.append((path, "".join(content_parts).rstrip("\n")))
+                    i += 1
+                    if i < len(lines) and lines[i] == "\n":
+                        i += 1
+                    continue
+            prefix_parts.append(line)
+            i += 1
+        return "".join(prefix_parts).strip(), blocks
+
+    def _reference_context_blocks(
+        self, context_override: str | None = None
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Return parsed file blocks for the effective reference context."""
+
+        if context_override is None and self._prepared_reference_context is not None:
+            return self._prepared_context_prefix, list(self._prepared_context_blocks)
+        return self._extract_file_context_blocks_from_text(self._context_source(context_override))
+
+    def _task_keywords(self) -> set[str]:
+        """Extract stable task keywords for markdown slice scoring."""
+
+        if not self._task:
+            return set()
+        return {
+            token
+            for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", self._task.lower())
+            if token not in _STOPWORDS and not token.isdigit()
+        }
+
+    def _is_markdown_like_file(self, path: str) -> bool:
+        lowered = path.lower()
+        return lowered.endswith(".md") or lowered.endswith(".markdown") or lowered.endswith(".txt")
+
+    def _heading_sections(self, content: str) -> list[dict[str, Any]]:
+        """Split markdown-like content into heading-aware sections."""
+
+        heading_pattern = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+        matches = list(heading_pattern.finditer(content))
+        if not matches:
+            return [
+                {
+                    "heading": None,
+                    "level": 0,
+                    "start": 0,
+                    "end": len(content),
+                    "content": content,
+                }
+            ]
+
+        sections: list[dict[str, Any]] = []
+        if matches[0].start() > 0:
+            sections.append(
+                {
+                    "heading": None,
+                    "level": 0,
+                    "start": 0,
+                    "end": matches[0].start(),
+                    "content": content[: matches[0].start()],
+                }
+            )
+        for index, match in enumerate(matches):
+            start = match.start()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+            sections.append(
+                {
+                    "heading": match.group(2).strip(),
+                    "level": len(match.group(1)),
+                    "start": start,
+                    "end": end,
+                    "content": content[start:end],
+                }
+            )
+        return sections
+
+    def _score_markdown_section(self, section: Mapping[str, Any], keywords: set[str]) -> int:
+        """Score a section for relevance to the current review task."""
+
+        heading = str(section.get("heading") or "").lower()
+        body = str(section.get("content") or "").lower()
+        heading_hits = sum(1 for keyword in keywords if keyword in heading)
+        body_hits = sum(1 for keyword in keywords if keyword in body)
+        if heading_hits == 0 and body_hits == 0:
+            return 0
+        structural_bonus = 2 if heading else 0
+        return heading_hits * 6 + body_hits * 2 + structural_bonus
+
+    def _quote_excerpt(self, content: str, *, limit: int = 1800) -> str:
+        """Delimit evidence excerpts as untrusted quoted content."""
+
+        normalized = content.strip()
+        if len(normalized) > limit:
+            normalized = normalized[:limit].rstrip() + "\n... [excerpt truncated]"
+        return f"<quoted_evidence>\n{normalized}\n</quoted_evidence>"
+
+    def _anchor_for_heading(self, heading: str | None) -> str | None:
+        """Convert a heading into a stable text anchor."""
+
+        if not heading:
+            return None
+        anchor = re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
+        return anchor or None
+
+    def _slice_markdown_block(self, path: str, content: str) -> tuple[str, list[dict[str, Any]], bool]:
+        """Prepare a markdown block by keeping the most relevant sections."""
+
+        keywords = self._task_keywords()
+        sections = self._heading_sections(content)
+        if len(sections) <= 1:
+            if not keywords:
+                return content, [], False
+            single_section = sections[0]
+            if self._score_markdown_section(single_section, keywords) <= 0:
+                return content, [], False
+            heading = single_section.get("heading")
+            anchor = self._anchor_for_heading(heading if isinstance(heading, str) else None)
+            label = path if not anchor else f"{path}#{anchor}"
+            rendered = (
+                f"[Source: {label} | heading: {heading or 'Document excerpt'} | chars: 0-{len(content)}]\n"
+                f"{self._quote_excerpt(content)}"
+            )
+            return (
+                rendered,
+                [
+                    {
+                        "path": path,
+                        "source_label": label,
+                        "heading": heading,
+                        "anchor": anchor,
+                        "original_char_span": [0, len(content)],
+                        "retained_char_span": [0, len(content.strip())],
+                        "score": self._score_markdown_section(single_section, keywords),
+                    }
+                ],
+                True,
+            )
+
+        scored = [
+            {
+                **section,
+                "score": self._score_markdown_section(section, keywords),
+            }
+            for section in sections
+        ]
+        scored.sort(
+            key=lambda section: (
+                section["score"],
+                1 if section.get("heading") else 0,
+                -(section["level"] or 0),
+                -len(str(section.get("content") or "")),
+            ),
+            reverse=True,
+        )
+
+        candidate_sections = [section for section in scored if int(section["score"]) > 0]
+        if not candidate_sections:
+            candidate_sections = list(scored)
+
+        kept: list[dict[str, Any]] = []
+        retained_chars = 0
+        char_budget = min(max(int(len(content) * 0.55), 2200), 18_000)
+        for section in candidate_sections:
+            snippet = str(section["content"]).strip()
+            if not snippet:
+                continue
+            if kept and retained_chars >= char_budget and section["score"] <= 0:
+                continue
+            kept.append(section)
+            retained_chars += len(snippet)
+            if retained_chars >= char_budget and len(kept) >= 2:
+                break
+
+        if not kept:
+            kept.append(scored[0])
+
+        kept.sort(key=lambda section: int(section["start"]))
+        rendered_parts: list[str] = []
+        slice_metadata: list[dict[str, Any]] = []
+        for section in kept:
+            heading = section.get("heading")
+            anchor = self._anchor_for_heading(heading if isinstance(heading, str) else None)
+            label = path if not anchor else f"{path}#{anchor}"
+            excerpt = self._quote_excerpt(str(section["content"]))
+            heading_label = heading if isinstance(heading, str) and heading else "Document excerpt"
+            rendered_parts.append(
+                f"[Source: {label} | heading: {heading_label} | chars: {section['start']}-{section['end']}]\n"
+                f"{excerpt}"
+            )
+            slice_metadata.append(
+                {
+                    "path": path,
+                    "source_label": label,
+                    "heading": heading,
+                    "anchor": anchor,
+                    "original_char_span": [int(section["start"]), int(section["end"])],
+                    "retained_char_span": [0, len(str(section["content"]).strip())],
+                    "score": int(section["score"]),
+                }
+            )
+
+        rendered = "\n\n".join(rendered_parts)
+        return rendered, slice_metadata, len(kept) != len(sections)
+
+    def _prepare_reference_context(self) -> None:
+        """Prepare file-heavy reference context for review workloads."""
+
+        raw_context = self._config.system_context or ""
+        prefix, blocks = self._extract_file_context_blocks_from_text(raw_context)
+        metadata = dict(self._config.context_metadata or {})
+        file_entries = list(metadata.get("files", []))
+        warnings = list(metadata.get("warnings", []))
+        slice_entries: list[dict[str, Any]] = []
+        prepared_blocks: list[tuple[str, str]] = []
+        sliced_files = 0
+
+        for path, content in blocks:
+            prepared_content = content
+            if self._is_review_workload() and self._is_markdown_like_file(path):
+                prepared_content, slices, sliced = self._slice_markdown_block(path, content)
+                if slices:
+                    slice_entries.extend(slices)
+                if sliced:
+                    sliced_files += 1
+                    warnings.append(
+                        f"Sliced {path} into {len(slices)} relevant evidence section(s)."
+                    )
+            prepared_blocks.append((path, prepared_content))
+
+        prepared_context = self._render_file_context(prefix, prepared_blocks)
+        self._prepared_reference_context = prepared_context or None
+        self._prepared_context_prefix = prefix
+        self._prepared_context_blocks = prepared_blocks
+        self._prepared_context_metadata = {
+            "files": file_entries,
+            "warnings": warnings,
+            "slice_count": len(slice_entries),
+            "sliced_files": sliced_files,
+            "slices": slice_entries,
+            "raw_source_chars": len(raw_context),
+            "prepared_source_chars": len(prepared_context),
+            "file_blocks": len(blocks),
+        }
+        if self._execution_plan is not None:
+            self._execution_plan["context_preparation"] = dict(self._prepared_context_metadata)
+
+    def _draft_budget_decision(
+        self, provider_name: str, system_prompt: str, user_prompt: str
+    ) -> dict[str, Any]:
+        """Compute the central chunking decision for bounded review drafts."""
+
+        budget = self._provider_budget(provider_name)
+        phase_timeout = self._provider_request_timeout_seconds("draft", provider_name=provider_name)
+        queue_headroom = float(budget["queue_wait_headroom_seconds"]["draft"])
+        prefix, blocks = self._reference_context_blocks()
+        estimated_tokens, estimate_method, _padding = self._estimate_tokens_for_provider(
+            provider_name, system_prompt, user_prompt
+        )
+        safe_envelope = int(budget["safe_input_tokens"]["draft"])
+        timeout_factor = max(min((phase_timeout - queue_headroom) / max(phase_timeout, 1.0), 1.0), 0.55)
+        effective_envelope = max(int(safe_envelope * timeout_factor), 1)
+
+        forced_reason = "none"
+        if estimated_tokens > safe_envelope:
+            forced_reason = "size"
+        elif estimated_tokens > effective_envelope:
+            forced_reason = "queue_wait_risk" if queue_headroom >= 3.0 else "timeout_risk"
+
+        total_block_chars = sum(len(path) + len(content) + 32 for path, content in blocks)
+        minimum_chunk_count = (
+            max(2, math.ceil(estimated_tokens / effective_envelope))
+            if forced_reason != "none" and effective_envelope > 0
+            else 1
+        )
+        chunk_target_chars = max(
+            8_000 if minimum_chunk_count > 1 else 20_000,
+            min(_CHUNKING_TARGET_CHARS, math.ceil(total_block_chars / max(minimum_chunk_count, 1))),
+        )
+        chunks = self._chunk_file_context_blocks(blocks, target_chars=chunk_target_chars)
+        should_chunk = (
+            self._is_review_workload()
+            and self._config.runtime_profile == RuntimeProfile.BOUNDED
+            and bool(blocks)
+            and (
+                forced_reason != "none"
+                or len(system_prompt) + len(user_prompt) >= _CHUNKING_CONTEXT_CHAR_THRESHOLD
+            )
+            and len(chunks) > 1
+        )
+        warnings: list[str] = []
+        if (
+            not should_chunk
+            and estimated_tokens >= _LARGE_SINGLE_RUN_WARNING_TOKENS
+            and self._config.runtime_profile == RuntimeProfile.BOUNDED
+        ):
+            warnings.append(
+                f"Large bounded draft for {provider_name} remained single-run "
+                f"({estimated_tokens} estimated tokens; {len(blocks)} file block(s))."
+            )
+        if budget["budget_source"] == "default" and self._provider_identity(provider_name) != "default":
+            warnings.append(
+                f"Using default draft budget fallback for provider identity "
+                f"'{self._provider_identity(provider_name)}'."
+            )
+        return {
+            "strategy": "chunked_context" if should_chunk else "single_run",
+            "provider": provider_name,
+            "provider_identity": self._provider_identity(provider_name),
+            "budget_source": budget["budget_source"],
+            "estimate_method": estimate_method,
+            "estimated_input_tokens": estimated_tokens,
+            "safe_envelope_tokens": safe_envelope,
+            "effective_envelope_tokens": effective_envelope,
+            "forced_reason": forced_reason,
+            "queue_wait_headroom_seconds": queue_headroom,
+            "phase_timeout_seconds": phase_timeout,
+            "file_blocks": len(blocks),
+            "prefix_context_chars": len(prefix),
+            "reference_context_chars": len(self._context_source()),
+            "chunk_target_chars": chunk_target_chars,
+            "chunks": chunks if should_chunk else [],
+            "chunk_count": len(chunks) if should_chunk else 1,
+            "minimum_chunk_count": minimum_chunk_count,
+            "prefix": prefix,
+            "warnings": warnings,
+            "raw_source_chars": len(self._config.system_context or ""),
+            "evidence_pack_chars": len(self._prepared_reference_context or ""),
+        }
+
+    def _evidence_sources_for_chunk(
+        self, chunk: Sequence[tuple[str, str]]
+    ) -> list[dict[str, Any]]:
+        """Build anchored evidence metadata for a prepared context chunk."""
+
+        sources: list[dict[str, Any]] = []
+        for path, content in chunk:
+            excerpt = content.strip()
+            if len(excerpt) > 300:
+                excerpt = excerpt[:300].rstrip() + "..."
+            sources.append(
+                {
+                    "path": path,
+                    "excerpt": excerpt,
+                }
+            )
+        return sources
+
+    def _render_chunk_handoff(
+        self,
+        provider_name: str,
+        handoff: Mapping[str, Any],
+        *,
+        draft_limit: int | None = None,
+        excerpt_limit: int = 320,
+        max_sources: int | None = None,
+        max_findings: int | None = None,
+    ) -> str:
+        """Render normalized chunk findings for critique and synthesis prompts."""
+
+        findings = list(handoff.get("findings") or [])
+        if not findings:
+            return ""
+        omitted_findings = 0
+        if max_findings is not None and len(findings) > max_findings:
+            omitted_findings = len(findings) - max_findings
+            findings = findings[:max_findings]
+        rendered: list[str] = []
+        for finding in findings:
+            sources = list(finding.get("sources") or [])
+            if max_sources is not None and max_sources >= 0:
+                sources = sources[:max_sources]
+            if max_sources == 0:
+                source_lines = "- Source anchors omitted to fit bounded review budget."
+            else:
+                source_lines = "\n".join(
+                    f"- {source['path']}:\n{self._quote_excerpt(source['excerpt'], limit=excerpt_limit)}"
+                    for source in sources
+                    if source.get("excerpt")
+                )
+                if not source_lines:
+                    source_lines = "- No retained evidence excerpt"
+            finding_text = self._compact_text(str(finding.get("draft") or ""), draft_limit)
+            rendered.append(
+                f"Provider: {provider_name}\n"
+                f"Chunk {finding['chunk_index']}/{handoff.get('chunk_count', len(findings))}\n"
+                f"Chunk findings:\n{finding_text}\n"
+                f"Source anchors:\n{source_lines}"
+            )
+        if omitted_findings:
+            rendered.append(f"... {omitted_findings} chunk finding(s) omitted for budget.")
+        return "\n\n".join(rendered)
+
+    def _compose_draft_blocks(
+        self,
+        drafts: Mapping[str, str],
+        *,
+        use_raw_drafts: bool = False,
+        draft_limit: int | None = None,
+        excerpt_limit: int = 320,
+        max_sources: int | None = None,
+        max_findings: int | None = None,
+    ) -> tuple[str, int]:
+        """Render critique/synthesis draft material and report its effective size."""
+
+        parts: list[str] = []
+        for name, content in drafts.items():
+            if not content.strip():
+                continue
+            if not use_raw_drafts:
+                handoff = self._draft_handoffs.get(name)
+                if handoff and handoff.get("findings"):
+                    parts.append(
+                        self._render_chunk_handoff(
+                            name,
+                            handoff,
+                            draft_limit=draft_limit,
+                            excerpt_limit=excerpt_limit,
+                            max_sources=max_sources,
+                            max_findings=max_findings,
+                        )
+                    )
+                    continue
+            rendered_content = self._compact_text(content, draft_limit)
+            parts.append(f"Provider: {name}\nDraft:\n{rendered_content}")
+        rendered = "\n\n".join(part for part in parts if part)
+        return rendered, len(rendered)
+
     def _record_usage(self, provider: str, usage: Mapping[str, int] | None) -> None:
         """Accumulate token usage and call counts for cost estimation."""
 
@@ -1477,10 +2358,8 @@ class Orchestrator:
     def _estimate_input_tokens(self, *parts: str) -> int:
         """Return a lightweight token estimate for prompt diagnostics."""
 
-        total_chars = sum(len(part) for part in parts)
-        if total_chars <= 0:
-            return 0
-        return max((total_chars + 3) // 4, 1)
+        estimate, _method, _padding = self._estimate_tokens_for_provider("default", *parts)
+        return estimate
 
     def _record_phase_prompt_metrics(
         self,
@@ -1493,6 +2372,8 @@ class Orchestrator:
         timeout_seconds: float | None,
         structured_output: bool = False,
         attempt: int | None = None,
+        raw_source_chars: int | None = None,
+        evidence_pack_chars: int | None = None,
     ) -> None:
         """Record prompt sizing diagnostics for the current phase."""
 
@@ -1501,6 +2382,9 @@ class Orchestrator:
 
         metrics = self._execution_plan.setdefault("phase_prompt_metrics", {})
         entries = metrics.setdefault(phase, [])
+        estimate, estimate_method, _padding = self._estimate_tokens_for_provider(
+            provider_name, system_prompt, user_prompt
+        )
         entries.append(
             {
                 "provider": provider_name,
@@ -1508,10 +2392,22 @@ class Orchestrator:
                 "system_chars": len(system_prompt),
                 "user_chars": len(user_prompt),
                 "total_chars": len(system_prompt) + len(user_prompt),
-                "estimated_input_tokens": self._estimate_input_tokens(system_prompt, user_prompt),
+                "estimated_input_tokens": estimate,
+                "estimate_method": estimate_method,
                 "max_output_tokens": max_tokens,
                 "timeout_seconds": timeout_seconds,
                 "structured_output": structured_output,
+                "raw_source_chars": (
+                    self._prepared_context_metadata.get("raw_source_chars", 0)
+                    if raw_source_chars is None
+                    else raw_source_chars
+                ),
+                "evidence_pack_chars": (
+                    self._prepared_context_metadata.get("prepared_source_chars", 0)
+                    if evidence_pack_chars is None
+                    else evidence_pack_chars
+                ),
+                "phase_prompt_chars": len(system_prompt) + len(user_prompt),
             }
         )
 
@@ -1628,6 +2524,227 @@ class Orchestrator:
         self._record_degraded_output("none", None, reason)
         return (ValidationResult(ok=False, errors=[note, *fallback_errors]), 0)
 
+    def _fallback_synthesis_from_evidence(
+        self,
+        drafts: Mapping[str, str],
+        critique: str,
+        errors: Sequence[str],
+    ) -> ValidationResult | None:
+        """Recover a minimal reviewer result from anchored draft evidence."""
+
+        if self._schema_name != "reviewer":
+            return None
+
+        issues = self._build_reviewer_fallback_issues(drafts, critique)
+        recommendations = self._build_reviewer_fallback_recommendations(issues)
+        if not recommendations:
+            recommendations = [
+                {
+                    "priority": "should_fix",
+                    "recommendation": "Rerun the review with a less constrained runtime or a mixed provider set.",
+                    "rationale": "Provider responses could not be validated as structured reviewer JSON.",
+                }
+            ]
+
+        if issues:
+            high_severity = {"critical", "high", "medium"}
+            verdict = (
+                "request_changes"
+                if any(issue["severity"] in high_severity for issue in issues)
+                else "approve_with_comments"
+            )
+            summary_basis = "; ".join(issue["description"] for issue in issues[:2])
+        else:
+            verdict = "approve_with_comments"
+            summary_basis = (
+                "Draft findings were incomplete, so this result is based on bounded evidence fallback."
+            )
+
+        review_summary = self._compact_text(
+            f"Fallback reviewer synthesis based on bounded chunk evidence: {summary_basis}",
+            220,
+        )
+        reasoning = (
+            "Structured synthesis responses did not validate, so council assembled a conservative "
+            "review result from chunked draft findings and any surviving critique text. "
+            "This fallback preserves explicit evidence anchors and avoids inventing unsupported details."
+        )
+        fallback = {
+            "review_summary": review_summary,
+            "verdict": verdict,
+            "issues": issues,
+            "recommendations": recommendations,
+            "reasoning": reasoning,
+            "review_type": "code_quality",
+            "confidence": 58 if issues else 42,
+            "blocking_issues": [
+                issue["description"] for issue in issues if issue["severity"] in {"critical", "high"}
+            ][:5],
+        }
+
+        note = (
+            "Synthesis validation failed; used conservative reviewer fallback built from "
+            "chunked draft evidence."
+        )
+        self._append_degradation_note(note)
+        self._record_degraded_output("evidence_fallback", None, "; ".join(errors) or "validation")
+        if self._execution_plan is not None:
+            self._execution_plan.setdefault("warnings", []).append(note)
+        return ValidationResult(
+            ok=True,
+            data=fallback,
+            raw=json.dumps(fallback),
+            errors=[*errors, note],
+        )
+
+    def _build_reviewer_fallback_issues(
+        self, drafts: Mapping[str, str], critique: str
+    ) -> list[dict[str, Any]]:
+        """Extract conservative reviewer issues from chunk findings and critique text."""
+
+        issues: list[dict[str, Any]] = []
+        seen_descriptions: set[str] = set()
+        source_index = {
+            provider_name: [
+                source
+                for finding in handoff.get("findings") or []
+                for source in list(finding.get("sources") or [])[:1]
+            ]
+            for provider_name, handoff in self._draft_handoffs.items()
+        }
+
+        def add_issue(description: str, provider_name: str | None = None) -> None:
+            normalized = " ".join(description.split())
+            if not normalized or normalized in seen_descriptions:
+                return
+            seen_descriptions.add(normalized)
+            source = (source_index.get(provider_name or "", []) or [{}])[0]
+            issues.append(
+                {
+                    "severity": self._infer_issue_severity(normalized),
+                    "category": self._infer_issue_category(normalized),
+                    "description": normalized[:400],
+                    "location": {
+                        "file": source.get("path") or "context",
+                    },
+                    "suggested_fix": self._suggest_fix_for_issue(normalized),
+                }
+            )
+
+        for provider_name, handoff in self._draft_handoffs.items():
+            for finding in handoff.get("findings") or []:
+                for candidate in self._extract_issue_candidates(str(finding.get("draft") or "")):
+                    add_issue(candidate, provider_name)
+                    if len(issues) >= 5:
+                        return issues
+
+        for provider_name, draft_text in drafts.items():
+            for candidate in self._extract_issue_candidates(draft_text):
+                add_issue(candidate, provider_name)
+                if len(issues) >= 5:
+                    return issues
+
+        for candidate in self._extract_issue_candidates(critique):
+            add_issue(candidate)
+            if len(issues) >= 5:
+                return issues
+        return issues
+
+    def _extract_issue_candidates(self, text: str) -> list[str]:
+        """Extract plausible issue statements from free-form review text."""
+
+        candidates: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            stripped = re.sub(r"^\*\*(.+?)\*\*$", r"\1", stripped)
+            stripped = re.sub(r"^\*\*(\d+\.\s*)?", "", stripped)
+            stripped = re.sub(r"\*\*$", "", stripped)
+            stripped = re.sub(r"^\d+[.)]\s*", "", stripped)
+            stripped = re.sub(r"^[-*]\s*", "", stripped)
+            if len(stripped) < 20:
+                continue
+            lower = stripped.lower()
+            if lower.startswith("chunk ") or lower.startswith("provider:") or lower.startswith("source anchors:"):
+                continue
+            if stripped not in candidates:
+                candidates.append(stripped)
+        return candidates
+
+    def _infer_issue_severity(self, description: str) -> str:
+        """Infer a reviewer severity from issue text."""
+
+        lowered = description.lower()
+        if "critical" in lowered:
+            return "critical"
+        if "high" in lowered or "overclaim" in lowered or "irreconcilable" in lowered:
+            return "high"
+        if "low" in lowered or "nit" in lowered:
+            return "low"
+        if "info" in lowered or "note:" in lowered:
+            return "info"
+        return "medium"
+
+    def _infer_issue_category(self, description: str) -> str:
+        """Infer a reviewer issue category from issue text."""
+
+        lowered = description.lower()
+        if any(token in lowered for token in ("security", "auth", "exposure", "injection", "vulnerability")):
+            return "security"
+        if any(token in lowered for token in ("performance", "latency", "slow", "timeout")):
+            return "performance"
+        if any(token in lowered for token in ("test", "coverage", "regression", "missing test")):
+            return "testing"
+        if any(token in lowered for token in ("doc", "documentation", "readme")):
+            return "documentation"
+        if any(token in lowered for token in ("logic", "contradict", "ambigu", "overclaim", "comparable")):
+            return "logic"
+        if any(token in lowered for token in ("maintain", "refactor", "complex")):
+            return "maintainability"
+        if any(token in lowered for token in ("style", "format")):
+            return "style"
+        return "bug"
+
+    def _suggest_fix_for_issue(self, description: str) -> str:
+        """Generate a conservative remediation sentence for a fallback issue."""
+
+        lowered = description.lower()
+        if "compar" in lowered or "overclaim" in lowered:
+            return "Tighten the milestone language so the benchmark claim matches the actual harness contract."
+        if "harness" in lowered or "boundary" in lowered:
+            return "Define the harness boundary explicitly and separate retrieval-only claims from assisted or bounded runs."
+        if "test" in lowered:
+            return "Add regression coverage for the missing case before relying on the result."
+        return "Revise the plan to address this finding explicitly and tie the change to the cited evidence."
+
+    def _build_reviewer_fallback_recommendations(
+        self, issues: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Derive reviewer recommendations from fallback issues."""
+
+        recommendations: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for issue in issues[:3]:
+            description = str(issue.get("description") or "")
+            recommendation = str(issue.get("suggested_fix") or "").strip()
+            if not recommendation or recommendation in seen:
+                continue
+            seen.add(recommendation)
+            priority = (
+                "must_fix"
+                if issue.get("severity") in {"critical", "high"}
+                else "should_fix"
+            )
+            recommendations.append(
+                {
+                    "priority": priority,
+                    "recommendation": recommendation,
+                    "rationale": description[:220],
+                }
+            )
+        return recommendations
+
     def _extract_json(self, text: str) -> dict[str, Any] | None:
         """Extract the first JSON object from a response string.
 
@@ -1711,7 +2828,7 @@ class Orchestrator:
         user-provided content from system instructions, reducing
         prompt injection risk.
         """
-        ctx = self._config.system_context if context_override is None else context_override
+        ctx = self._context_source(context_override)
         if not ctx:
             return ""
         return (
@@ -1727,34 +2844,7 @@ class Orchestrator:
 
     def _extract_file_context_blocks(self) -> tuple[str, list[tuple[str, str]]]:
         """Parse CLI-injected file context blocks from system_context."""
-
-        ctx = self._config.system_context or ""
-        if not ctx:
-            return "", []
-
-        lines = ctx.splitlines(keepends=True)
-        prefix_parts: list[str] = []
-        blocks: list[tuple[str, str]] = []
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if line.startswith("=== FILE: ") and line.rstrip("\n").endswith(" ==="):
-                path = line.rstrip("\n")[10:-4]
-                i += 1
-                content_parts: list[str] = []
-                end_marker = f"=== END: {path} ==="
-                while i < len(lines) and lines[i].rstrip("\n") != end_marker:
-                    content_parts.append(lines[i])
-                    i += 1
-                if i < len(lines):
-                    blocks.append((path, "".join(content_parts).rstrip("\n")))
-                    i += 1
-                    if i < len(lines) and lines[i] == "\n":
-                        i += 1
-                    continue
-            prefix_parts.append(line)
-            i += 1
-        return "".join(prefix_parts).strip(), blocks
+        return self._reference_context_blocks()
 
     def _render_file_context(self, prefix: str, blocks: Sequence[tuple[str, str]]) -> str:
         """Render file context blocks back into the CLI-injected format."""
@@ -1771,10 +2861,14 @@ class Orchestrator:
     ) -> list[list[tuple[str, str]]]:
         """Greedily group file blocks into bounded context chunks."""
 
+        expanded_blocks: list[tuple[str, str]] = []
+        for path, content in blocks:
+            expanded_blocks.extend(self._split_large_context_block(path, content, target_chars))
+
         chunks: list[list[tuple[str, str]]] = []
         current: list[tuple[str, str]] = []
         current_chars = 0
-        for path, content in blocks:
+        for path, content in expanded_blocks:
             block_chars = len(path) + len(content) + 32
             if current and current_chars + block_chars > target_chars:
                 chunks.append(current)
@@ -1786,52 +2880,92 @@ class Orchestrator:
             chunks.append(current)
         return chunks
 
+    def _split_large_context_block(
+        self, path: str, content: str, target_chars: int
+    ) -> list[tuple[str, str]]:
+        """Split oversized prepared blocks by evidence section or paragraph."""
+
+        block_chars = len(path) + len(content) + 32
+        if block_chars <= target_chars:
+            return [(path, content)]
+
+        segments: list[str] = []
+        if "[Source:" in content:
+            segments = [
+                segment.strip()
+                for segment in re.split(r"(?m)(?=^\[Source: )", content)
+                if segment.strip()
+            ]
+        if not segments:
+            segments = [segment.strip() for segment in content.split("\n\n") if segment.strip()]
+        if len(segments) <= 1:
+            return [(path, content)]
+
+        parts: list[tuple[str, str]] = []
+        current_parts: list[str] = []
+        current_chars = 0
+        part_index = 1
+        for segment in segments:
+            segment_chars = len(segment) + 2
+            if current_parts and current_chars + segment_chars > target_chars:
+                parts.append((f"{path}#part-{part_index}", "\n\n".join(current_parts)))
+                part_index += 1
+                current_parts = []
+                current_chars = 0
+            current_parts.append(segment)
+            current_chars += segment_chars
+        if current_parts:
+            parts.append((f"{path}#part-{part_index}", "\n\n".join(current_parts)))
+        return parts or [(path, content)]
+
     def _draft_chunk_plan(
         self, provider_name: str, system_prompt: str, user_prompt: str
     ) -> dict[str, Any] | None:
         """Return chunking metadata when a draft prompt should be split."""
-
-        if provider_name not in _CHUNKING_PROVIDER_IDENTITIES:
+        decision = self._draft_budget_decision(provider_name, system_prompt, user_prompt)
+        self._last_draft_budget_decisions[provider_name] = decision
+        if self._execution_plan is not None:
+            budgets = self._execution_plan.setdefault("draft_budget_decisions", {})
+            budgets[provider_name] = {
+                key: value
+                for key, value in decision.items()
+                if key not in {"chunks"}
+            }
+            if decision["warnings"]:
+                self._execution_plan.setdefault("warnings", []).extend(decision["warnings"])
+        if decision["strategy"] != "chunked_context":
             return None
-        if self._config.runtime_profile != RuntimeProfile.BOUNDED:
-            return None
-        prefix, blocks = self._extract_file_context_blocks()
-        if len(blocks) <= 1:
-            return None
-        total_chars = len(system_prompt) + len(user_prompt)
-        if total_chars < _CHUNKING_CONTEXT_CHAR_THRESHOLD:
-            return None
-        chunks = self._chunk_file_context_blocks(blocks, target_chars=_CHUNKING_TARGET_CHARS)
-        if len(chunks) <= 1:
-            return None
-        return {
-            "provider": provider_name,
-            "chunk_count": len(chunks),
-            "prefix": prefix,
-            "chunks": chunks,
-            "estimated_input_tokens": self._estimate_input_tokens(system_prompt, user_prompt),
-            "reason": "large_reference_context",
-        }
+        return decision
 
     def _build_preflight_estimate(self) -> dict[str, Any]:
         """Build a rough execution estimate for client-facing planning."""
 
         provider_name = self._preflight_duration_basis_provider()
-        prefix, blocks = self._extract_file_context_blocks()
+        if provider_name is None:
+            return {
+                "request_strategy": "single_run",
+                "provider": None,
+                "file_blocks": 0,
+                "planned_call_count": {"draft": 0, "critique": 0, "synthesis": 0, "total": 0},
+                "estimated_duration_seconds": {"average": 0, "upper_bound": 0},
+                "chunking": {"enabled": False, "has_file_blocks": False},
+                "provider_decisions": {},
+            }
+        prefix, blocks = self._reference_context_blocks()
         has_file_blocks = bool(blocks)
+        provider_decisions: dict[str, Any] = {}
         request_strategy = "single_run"
         planned_draft_calls = 1
-        if (
-            provider_name in _CHUNKING_PROVIDER_IDENTITIES
-            and self._config.runtime_profile == RuntimeProfile.BOUNDED
-            and len(blocks) > 1
-        ):
-            total_context_chars = len(self._config.system_context or "")
-            if total_context_chars >= _CHUNKING_CONTEXT_CHAR_THRESHOLD:
+        system_prompt = self._system_prompt
+        user_prompt = self._format_draft_prompt(self._task or "")
+        for name in self._provider_names:
+            decision = self._draft_budget_decision(name, system_prompt, user_prompt)
+            provider_decisions[name] = {
+                key: value for key, value in decision.items() if key not in {"chunks"}
+            }
+            if decision["strategy"] == "chunked_context":
                 request_strategy = "chunked_context"
-                planned_draft_calls = len(
-                    self._chunk_file_context_blocks(blocks, target_chars=_CHUNKING_TARGET_CHARS)
-                )
+                planned_draft_calls = max(planned_draft_calls, int(decision["chunk_count"]))
 
         draft_timeout = self._provider_request_timeout_seconds("draft", provider_name=provider_name)
         critique_timeout = self._provider_request_timeout_seconds(
@@ -1853,10 +2987,11 @@ class Orchestrator:
             "provider": provider_name,
             "file_blocks": len(blocks),
             "prefix_context_chars": len(prefix),
-            "reference_context_chars": len(self._config.system_context or ""),
-            "estimated_input_tokens": self._estimate_input_tokens(
-                self._config.system_context or ""
-            ),
+            "reference_context_chars": len(self._context_source()),
+            "raw_source_chars": self._prepared_context_metadata.get("raw_source_chars", 0),
+            "evidence_pack_chars": self._prepared_context_metadata.get("prepared_source_chars", 0),
+            "estimated_input_tokens": provider_decisions[provider_name]["estimated_input_tokens"],
+            "estimate_method": provider_decisions[provider_name]["estimate_method"],
             "planned_call_count": {
                 "draft": planned_draft_calls,
                 "critique": 1,
@@ -1869,22 +3004,24 @@ class Orchestrator:
             },
             "chunking": {
                 "enabled": request_strategy == "chunked_context",
-                "target_context_chars": _CHUNKING_TARGET_CHARS,
+                "target_context_chars": provider_decisions[provider_name]["chunk_target_chars"],
                 "trigger_context_chars": _CHUNKING_CONTEXT_CHAR_THRESHOLD,
                 "has_file_blocks": has_file_blocks,
             },
+            "provider_decisions": provider_decisions,
+            "warnings": [warning for decision in provider_decisions.values() for warning in decision["warnings"]],
         }
 
     @contextmanager
     def _temporary_context_override(self, context_override: str | None):
         """Temporarily swap the configured system context for prompt rendering."""
 
-        original_context = self._config.system_context
+        original_prepared = self._prepared_reference_context
         try:
-            self._config.system_context = context_override
+            self._prepared_reference_context = context_override
             yield
         finally:
-            self._config.system_context = original_context
+            self._prepared_reference_context = original_prepared
 
     def _format_draft_prompt(self, task: str) -> str:
         """Format the draft prompt with task details."""
@@ -1920,16 +3057,24 @@ class Orchestrator:
         drafts: dict[str, str],
         *,
         context_override: str | None = None,
+        use_raw_drafts: bool = False,
+        draft_limit: int | None = None,
+        excerpt_limit: int = 320,
+        max_sources: int | None = None,
+        max_findings: int | None = None,
     ) -> str:
         """Format critique prompt with all drafts."""
 
         context_block = self._build_context_block(context_override)
         collected_evidence = self._build_collected_evidence_block()
         evidence_block = self._build_evidence_requirements_block()
-        draft_blocks = "\n\n".join(
-            f"Provider: {name}\nDraft:\n{content}"
-            for name, content in drafts.items()
-            if content.strip()
+        draft_blocks, _draft_chars = self._compose_draft_blocks(
+            drafts,
+            use_raw_drafts=use_raw_drafts,
+            draft_limit=draft_limit,
+            excerpt_limit=excerpt_limit,
+            max_sources=max_sources,
+            max_findings=max_findings,
         )
         if not draft_blocks:
             draft_blocks = "No successful draft responses available."
@@ -1958,26 +3103,50 @@ class Orchestrator:
         errors: Iterable[str],
         *,
         context_override: str | None = None,
+        use_raw_drafts: bool = False,
+        draft_limit: int | None = None,
+        excerpt_limit: int = 320,
+        max_sources: int | None = None,
+        max_findings: int | None = None,
+        critique_limit: int | None = None,
+        omit_drafts: bool = False,
+        inline_schema: bool = True,
+        omit_context: bool = False,
     ) -> str:
         """Format synthesis prompt."""
 
-        context_block = self._build_context_block(context_override)
+        context_block = "" if omit_context else self._build_context_block(context_override)
         collected_evidence = self._build_collected_evidence_block()
         evidence_block = self._build_evidence_requirements_block()
-        draft_blocks = "\n\n".join(
-            f"Provider: {name}\nDraft:\n{content}"
-            for name, content in drafts.items()
-            if content.strip()
-        )
-        if not draft_blocks:
-            draft_blocks = "No successful draft responses available."
-        schema_block = json.dumps(schema, indent=2) if schema else "{}"
+        if omit_drafts:
+            draft_blocks = (
+                "Draft details omitted to fit bounded review budget. "
+                "Rely on the critique plus prior draft analysis summaries."
+            )
+        else:
+            draft_blocks, _draft_chars = self._compose_draft_blocks(
+                drafts,
+                use_raw_drafts=use_raw_drafts,
+                draft_limit=draft_limit,
+                excerpt_limit=excerpt_limit,
+                max_sources=max_sources,
+                max_findings=max_findings,
+            )
+            if not draft_blocks:
+                draft_blocks = "No successful draft responses available."
+        schema_block = json.dumps(schema, indent=2) if schema and inline_schema else "{}"
         error_block = "\n".join(f"- {err}" for err in errors) if errors else "None"
+        critique_block = self._compact_text(critique, critique_limit)
+        schema_hint = (
+            f"Schema (JSON):\n{schema_block}\n\n"
+            if inline_schema
+            else "Schema is enforced separately by structured output. Fill every required field.\n\n"
+        )
         return (
             f"Task:\n{task}\n{context_block}{collected_evidence}{evidence_block}\n"
-            f"Schema (JSON):\n{schema_block}\n\n"
+            f"{schema_hint}"
             f"Summary tier: {self._config.summary_tier.value}\n\n"
-            f"Critique:\n{critique}\n\n"
+            f"Critique:\n{critique_block}\n\n"
             f"Drafts:\n{draft_blocks}\n\n"
             f"Validation errors to fix (if any):\n{error_block}"
             "\n\nReturn ONLY JSON that matches the schema."
@@ -2036,6 +3205,29 @@ class Orchestrator:
             return
         notes = self._execution_plan.setdefault("degradation_notes", [])
         notes.append(note)
+
+    def _restore_transient_draft_providers(
+        self, drafts: Mapping[str, str], phase_error: BaseException, *, phase: str
+    ) -> list[str]:
+        """Re-enable successful draft providers after a transient downstream abort."""
+
+        detail = self._format_exception_chain(phase_error)
+        if classify_error(detail) not in {ErrorType.TIMEOUT, ErrorType.NETWORK}:
+            return []
+
+        restored: list[str] = []
+        for provider_name, draft_text in drafts.items():
+            if not draft_text or provider_name not in self._provider_init_errors:
+                continue
+            self._provider_init_errors.pop(provider_name, None)
+            restored.append(provider_name)
+
+        if restored and self._execution_plan is not None:
+            self._execution_plan.setdefault("warnings", []).append(
+                f"Re-enabled transiently degraded draft provider(s) for synthesis after {phase} failure: "
+                + ", ".join(restored)
+            )
+        return restored
 
     def _record_degraded_output(self, source: str, provider_name: str | None, reason: str) -> None:
         """Record when the final output came from a degraded fallback path."""

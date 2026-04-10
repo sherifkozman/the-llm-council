@@ -55,11 +55,12 @@ _cli_state: dict[str, Any] = {
 }
 
 
-def _get_console() -> Console:
+def _get_console(*, stderr: bool = False) -> Console:
     """Get console with current settings."""
     return Console(
         no_color=_cli_state["no_color"],
         force_terminal=None if not _cli_state["no_color"] else False,
+        stderr=stderr,
     )
 
 
@@ -67,6 +68,12 @@ def _print(message: str, **kwargs: Any) -> None:
     """Print message unless quiet mode is enabled."""
     if not _cli_state["quiet"]:
         _get_console().print(message, **kwargs)
+
+
+def _warn(message: str, **kwargs: Any) -> None:
+    """Print warnings to stderr so stdout stays machine-readable."""
+    if not _cli_state["quiet"]:
+        _get_console(stderr=True).print(message, **kwargs)
 
 
 def _setup_logging() -> None:
@@ -408,11 +415,14 @@ def run(
         raise typer.Exit(1)
 
     # Read --files and merge into context
+    context_metadata: dict[str, Any] = {}
     if files:
         file_context_parts: list[str] = []
         max_total_bytes = 200_000  # 200KB total cap
         max_per_file = 50_000  # 50KB per file
         total_bytes = 0
+        file_entries: list[dict[str, Any]] = []
+        warnings: list[str] = []
         # Flatten: each entry can be comma-separated or a single path
         all_paths = [p.strip() for entry in files for p in entry.split(",")]
         for fpath in all_paths:
@@ -420,19 +430,56 @@ def run(
                 continue
             p = Path(fpath)
             if not p.exists():
-                _print(f"[yellow]Warning:[/yellow] File not found: {fpath}")
+                warning = f"File not found: {fpath}"
+                warnings.append(warning)
+                _warn(f"[yellow]Warning:[/yellow] {warning}")
+                file_entries.append({"path": fpath, "status": "missing"})
                 continue
             content = p.read_text(encoding="utf-8", errors="replace")
+            original_chars = len(content)
+            retained_chars = original_chars
+            truncated = False
             if len(content) > max_per_file:
                 content = content[:max_per_file] + f"\n... [truncated at {max_per_file // 1000}KB]"
+                retained_chars = len(content)
+                truncated = True
+                warnings.append(f"Truncated {fpath} to {max_per_file} chars.")
             if total_bytes + len(content) > max_total_bytes:
-                _print(f"[yellow]Warning:[/yellow] Skipping {fpath} (200KB total limit)")
+                warning = f"Skipping {fpath} (200KB total limit)"
+                warnings.append(warning)
+                _warn(f"[yellow]Warning:[/yellow] {warning}")
+                file_entries.append(
+                    {
+                        "path": fpath,
+                        "status": "skipped_total_limit",
+                        "original_chars": original_chars,
+                        "retained_chars": 0,
+                    }
+                )
                 continue
             total_bytes += len(content)
             file_context_parts.append(f"=== FILE: {fpath} ===\n{content}\n=== END: {fpath} ===")
+            file_entries.append(
+                {
+                    "path": fpath,
+                    "status": "included",
+                    "original_chars": original_chars,
+                    "retained_chars": retained_chars,
+                    "truncated": truncated,
+                }
+            )
         if file_context_parts:
             file_block = "\n\n".join(file_context_parts)
             context = f"{context}\n\n{file_block}" if context else file_block
+        context_metadata = {
+            "files": file_entries,
+            "warnings": warnings,
+            "limits": {
+                "max_total_chars": max_total_bytes,
+                "max_per_file_chars": max_per_file,
+            },
+            "total_retained_chars": total_bytes,
+        }
 
     # Load defaults from config file
     config_defaults = _load_config_defaults()
@@ -535,6 +582,7 @@ def run(
             runtime_profile=runtime_profile,
             reasoning_profile=reasoning_profile,
             system_context=context,
+            context_metadata=context_metadata,
             output_schema=custom_schema,
             follow_router=route,
             provider_configs=_load_provider_configs(),
@@ -653,6 +701,21 @@ def run(
                                 if value is not None
                             )
                         )
+                    preflight = result.execution_plan.get("preflight_estimate") or {}
+                    if preflight:
+                        console.print(
+                            "  Preflight strategy: "
+                            f"{preflight.get('request_strategy', 'single_run')}"
+                        )
+                    context_prep = result.execution_plan.get("context_preparation") or {}
+                    if context_prep.get("warnings"):
+                        console.print("  Context warnings:")
+                        for warning in context_prep["warnings"]:
+                            console.print(f"    - {warning}")
+                    if result.execution_plan.get("warnings"):
+                        console.print("  Runtime warnings:")
+                        for warning in result.execution_plan["warnings"]:
+                            console.print(f"    - {warning}")
                 if result.routed and result.routing_decision:
                     routing_mode = result.routing_decision.get("mode")
                     routing_mode_suffix = (

@@ -293,6 +293,23 @@ Check model status at [openrouter.ai/models](https://openrouter.ai/models)
 2. Reduce timeout: `--timeout 60`
 3. Use fewer providers for parallel drafts
 
+### Issue: Large bounded reviews fail or degrade on a single OpenRouter provider
+
+**Symptoms**:
+- `critic --mode review --runtime-profile bounded` returns a degraded fallback result
+- execution metadata shows chunked drafts, skipped critique, or repeated JSON validation failures
+- large markdown/task bundles generate many truncation or slicing warnings
+
+**Why this happens**:
+- bounded review caps are intentionally conservative
+- large document reviews are now sliced and chunked, but a single provider can still be forced onto the conservative fallback path if critique stays over budget or synthesis refuses valid JSON
+
+**Mitigations**:
+1. Prefer mixed providers for large review runs: `--providers openai,vertex-ai,openrouter`
+2. Reduce broad `--files` inputs, especially large backlog or task files
+3. Increase timeout for doc-heavy reviews: `--timeout 180`
+4. Inspect `execution_plan.context_preparation`, `draft_budget_decisions`, and `phase_prompt_compaction` in `--json` output to see what was truncated, sliced, skipped, or compacted
+
 ## Cost Optimization
 
 ### Track Costs

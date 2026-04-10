@@ -114,6 +114,13 @@ class CouncilConfig(BaseModel):
         default=None,
         description="Additional system context/instructions to prepend",
     )
+    context_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Structured metadata describing how reference context was ingested "
+            "(for example, file truncation, skipped files, and slicing decisions)."
+        ),
+    )
     output_schema: dict[str, Any] | None = Field(
         default=None,
         description="Custom JSON schema for output validation",

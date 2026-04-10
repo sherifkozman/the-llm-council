@@ -60,6 +60,7 @@ class Council:
             models=config.models,
             provider_configs=config.provider_configs,
             system_context=config.system_context,
+            context_metadata=dict(config.context_metadata),
             mode=config.mode,
             model_pack=config.model_pack,
             model_overrides=dict(config.model_overrides),
