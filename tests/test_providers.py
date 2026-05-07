@@ -31,7 +31,12 @@ from llm_council.providers.base import (
     classify_error,
 )
 from llm_council.providers.cli.claude_code import ClaudeCodeCLIProvider
-from llm_council.providers.cli.codex import CodexCLIProvider
+from llm_council.providers.cli.codex import (
+    CodexCLIProvider,
+    _LiveCodexState,
+    _extract_error_message,
+    _ingest_codex_stdout_line,
+)
 from llm_council.providers.cli.gemini_cli import GeminiCLIProvider
 from llm_council.providers.gemini import (
     DEFAULT_MODEL as GEMINI_DEFAULT_MODEL,
@@ -1699,3 +1704,145 @@ class TestOpenRouterProviderEnvModel:
         )
 
         assert body["reasoning_effort"] == "high"
+
+
+class TestCodexTurnFailedHandling:
+    """Regression tests for the silent ``turn.failed`` swallowing bug.
+
+    Before the fix, codex CLI could exit cleanly (returncode 0) while emitting
+    a ``turn.failed`` JSONL event (e.g. server rejected an unsupported model).
+    The adapter would then return an empty success, causing the orchestrator
+    to wait the full phase timeout with no actionable diagnostic.
+    """
+
+    def test_ingest_codex_stdout_line_captures_turn_failed(self):
+        """`_ingest_codex_stdout_line` must extract error_message from turn.failed."""
+        state = _LiveCodexState()
+        line = (
+            '{"type":"turn.failed","error":{"message":'
+            '"The \'gpt-5.5\' model requires a newer version of Codex."}}'
+        )
+
+        _ingest_codex_stdout_line(line, state)
+
+        assert "gpt-5.5" in state.error_message
+        assert "newer version of Codex" in state.error_message
+
+    def test_ingest_codex_stdout_line_ignores_turn_failed_without_message(self):
+        """Malformed turn.failed events shouldn't crash the parser."""
+        state = _LiveCodexState()
+
+        _ingest_codex_stdout_line('{"type":"turn.failed"}', state)
+        _ingest_codex_stdout_line('{"type":"turn.failed","error":null}', state)
+        _ingest_codex_stdout_line('{"type":"turn.failed","error":{}}', state)
+
+        assert state.error_message == ""
+
+    def test_extract_error_message_recognizes_turn_failed(self):
+        """`_extract_error_message` must surface turn.failed errors."""
+        stdout = (
+            '{"type":"thread.started","thread_id":"abc"}\n'
+            '{"type":"turn.started"}\n'
+            '{"type":"turn.failed","error":{"message":"unsupported model"}}\n'
+        )
+
+        assert _extract_error_message(stdout) == "unsupported model"
+
+    def test_extract_error_message_still_handles_error_events(self):
+        """Existing ``error`` event extraction must not regress."""
+        stdout = (
+            '{"type":"thread.started","thread_id":"abc"}\n'
+            '{"type":"error","message":"client rejected schema"}\n'
+        )
+
+        assert _extract_error_message(stdout) == "client rejected schema"
+
+    def test_extract_error_message_returns_empty_when_no_error(self):
+        """Successful runs should yield an empty error string."""
+        stdout = (
+            '{"type":"thread.started","thread_id":"abc"}\n'
+            '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
+            '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
+        )
+
+        assert _extract_error_message(stdout) == ""
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_raises_when_clean_exit_emits_turn_failed(self):
+        """Production bug: codex exits 0 but emits turn.failed -> classified error.
+
+        Before the fix, this scenario returned an empty success and the
+        orchestrator silently waited the full phase timeout.
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b'{"type":"thread.started","thread_id":"abc"}\n'
+                b'{"type":"turn.started"}\n'
+                b'{"type":"turn.failed","error":{"message":'
+                b'"The \'gpt-5.5\' model requires a newer version of Codex. '
+                b'Please upgrade to the latest app or CLI and try again."}}\n'
+            ),
+            b"",
+        )
+        process.returncode = 0  # clean exit despite the failed turn
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            pytest.raises(RuntimeError, match="newer version of Codex"),
+        ):
+            await provider.generate(GenerateRequest(prompt="test"))
+
+
+class TestCodexIsolatedHomeStateCopy:
+    """Regression tests for the missing-config.toml bug in the isolated HOME.
+
+    Before the fix, ``_copy_isolated_runtime_state`` only copied auth files,
+    so user model/trust preferences were dropped. The codex subprocess then
+    fell back to the CLI's built-in default, which could be incompatible
+    with the installed CLI version (silent hang in combination with bug #1).
+    """
+
+    def test_copy_isolated_runtime_state_includes_config_toml(self, tmp_path):
+        """`config.toml` must be copied alongside auth files."""
+        # Arrange a fake user ~/.codex directory
+        fake_home = tmp_path / "home"
+        source_codex = fake_home / ".codex"
+        source_codex.mkdir(parents=True)
+        (source_codex / "auth.json").write_text('{"token": "secret"}')
+        (source_codex / "config.toml").write_text(
+            'model = "gpt-5.4"\nmodel_reasoning_effort = "medium"\n'
+        )
+
+        target_codex = tmp_path / "iso" / ".codex"
+        target_codex.mkdir(parents=True)
+
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        with patch("llm_council.providers.cli.codex.Path.home", return_value=fake_home):
+            provider._copy_isolated_runtime_state(target_codex)
+
+        assert (target_codex / "auth.json").exists()
+        assert (target_codex / "config.toml").exists()
+        assert "gpt-5.4" in (target_codex / "config.toml").read_text()
+
+    def test_copy_isolated_runtime_state_skips_missing_files(self, tmp_path):
+        """Missing source files must be silently skipped (no crash)."""
+        fake_home = tmp_path / "home"
+        source_codex = fake_home / ".codex"
+        source_codex.mkdir(parents=True)
+        # Only auth.json exists; config.toml is intentionally missing
+        (source_codex / "auth.json").write_text('{"token": "secret"}')
+
+        target_codex = tmp_path / "iso" / ".codex"
+        target_codex.mkdir(parents=True)
+
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        # Must not raise even though config.toml is missing
+        with patch("llm_council.providers.cli.codex.Path.home", return_value=fake_home):
+            provider._copy_isolated_runtime_state(target_codex)
+
+        assert (target_codex / "auth.json").exists()
+        assert not (target_codex / "config.toml").exists()

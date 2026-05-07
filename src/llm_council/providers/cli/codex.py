@@ -156,7 +156,13 @@ def _extract_agent_message(stdout_text: str) -> str:
 
 
 def _extract_error_message(stdout_text: str) -> str:
-    """Extract a Codex error payload from JSONL stdout when stderr is empty."""
+    """Extract a Codex error payload from JSONL stdout when stderr is empty.
+
+    Recognizes both ``type: "error"`` events (synchronous client-side errors,
+    e.g. invalid JSON schema) and ``type: "turn.failed"`` events (server-side
+    rejections like unsupported model). The latter occurs with exit code 0,
+    so the post-loop logic must consult this helper before assuming success.
+    """
 
     for line in reversed(stdout_text.splitlines()):
         stripped = line.strip()
@@ -166,11 +172,19 @@ def _extract_error_message(stdout_text: str) -> str:
             payload = json.loads(stripped)
         except json.JSONDecodeError:
             continue
-        if not isinstance(payload, dict) or payload.get("type") != "error":
+        if not isinstance(payload, dict):
             continue
-        message = payload.get("message")
-        if isinstance(message, str):
-            return message
+        event_type = payload.get("type")
+        if event_type == "error":
+            message = payload.get("message")
+            if isinstance(message, str) and message:
+                return message
+        elif event_type == "turn.failed":
+            error_payload = payload.get("error")
+            if isinstance(error_payload, dict):
+                message = error_payload.get("message")
+                if isinstance(message, str) and message:
+                    return message
     return ""
 
 
@@ -227,6 +241,16 @@ def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
             }
+    elif event_type == "turn.failed":
+        # Codex emits ``turn.failed`` (with exit code 0) when the server rejects
+        # the request -- e.g. a model not supported by this CLI version. Capture
+        # the error message so the post-loop handler can surface it instead of
+        # returning an empty success.
+        error_payload = payload.get("error")
+        if isinstance(error_payload, dict):
+            message = error_payload.get("message")
+            if isinstance(message, str) and message:
+                state.error_message = message
     elif event_type == "error":
         message = payload.get("message")
         if isinstance(message, str):
@@ -381,10 +405,19 @@ class CodexCLIProvider(ProviderAdapter):
         }
 
     def _copy_isolated_runtime_state(self, codex_dir: Path) -> None:
-        """Copy only the auth material needed for isolated Codex subprocesses."""
+        """Copy auth and user-preference state into the isolated Codex HOME.
+
+        We deliberately exclude MCP-server / plugin / tool definitions to keep the
+        isolation guarantee from the parent session, but ``config.toml`` carries
+        user-intent settings that should follow the user (selected model,
+        reasoning effort, trusted projects). Without it codex falls back to the
+        CLI's built-in default model, which may not be supported by the
+        installed CLI version (the failure surfaces as silent hangs combined
+        with bug #2 below). See: https://github.com/sherifkozman/the-llm-council/issues/<TBD>
+        """
 
         source_dir = Path.home() / ".codex"
-        for filename in ("auth.json", ".credentials.json"):
+        for filename in ("auth.json", ".credentials.json", "config.toml"):
             source = source_dir / filename
             target = codex_dir / filename
             if source.exists():
@@ -576,7 +609,49 @@ class CodexCLIProvider(ProviderAdapter):
                         output = Path(output_path).read_text(encoding="utf-8")
                 if not output:
                     output = _extract_agent_message(stdout_text)
+
+                # Codex sometimes exits cleanly (returncode 0) yet emits a
+                # ``turn.failed`` JSONL event -- e.g. server rejecting a model
+                # the local CLI version can't support. Surface that as a
+                # classified error rather than returning empty success;
+                # otherwise the orchestrator wastes the full phase timeout
+                # waiting for output that will never arrive.
                 if not output.strip():
+                    error_text = _extract_error_message(stdout_text)
+                    if error_text:
+                        error_details = self._error_details(error_text)
+                        error_type = classify_error(
+                            error_details, proc.returncode or 0
+                        )
+
+                        if error_type == ErrorType.BILLING:
+                            billing_url = get_billing_help_url("codex")
+                            raise RuntimeError(
+                                f"BILLING ERROR: OpenAI credits exhausted. "
+                                f"Add credits at {billing_url}\n"
+                                f"Details: {error_details}"
+                            )
+                        elif error_type == ErrorType.AUTH:
+                            raise RuntimeError(
+                                f"AUTH ERROR: Invalid or missing API key. "
+                                f"Check OPENAI_API_KEY environment variable.\n"
+                                f"Details: {error_details}"
+                            )
+                        elif error_type == ErrorType.MODEL_UNAVAILABLE:
+                            raise RuntimeError(
+                                f"MODEL UNAVAILABLE: {error_details}"
+                            )
+                        elif error_type == ErrorType.RATE_LIMIT:
+                            raise RuntimeError(
+                                f"RATE LIMIT: Too many requests. Wait and "
+                                f"retry.\nDetails: {error_details}"
+                            )
+                        else:
+                            raise RuntimeError(
+                                f"Codex emitted error event "
+                                f"({error_type.value}): {error_details}"
+                            )
+
                     logger.warning("Codex CLI returned success but empty output")
 
                 return GenerateResponse(
@@ -677,6 +752,40 @@ class CodexCLIProvider(ProviderAdapter):
 
             if not output:
                 output = _extract_agent_message(stdout_text)
+
+            # Codex sometimes exits cleanly (returncode 0) yet emits a
+            # ``turn.failed`` or ``error`` JSONL event. Surface that as a
+            # classified error instead of silently returning empty output --
+            # otherwise the orchestrator's draft phase observes an empty
+            # response and waits the full timeout before retrying with no
+            # actionable diagnostic.
+            if not output.strip() and state.error_message:
+                error_details = self._error_details(state.error_message)
+                error_type = classify_error(error_details, proc.returncode or 0)
+
+                if error_type == ErrorType.BILLING:
+                    billing_url = get_billing_help_url("codex")
+                    raise RuntimeError(
+                        f"BILLING ERROR: OpenAI credits exhausted. "
+                        f"Add credits at {billing_url}\n"
+                        f"Details: {error_details}"
+                    )
+                elif error_type == ErrorType.AUTH:
+                    raise RuntimeError(
+                        f"AUTH ERROR: Invalid or missing API key. "
+                        f"Check OPENAI_API_KEY environment variable.\n"
+                        f"Details: {error_details}"
+                    )
+                elif error_type == ErrorType.MODEL_UNAVAILABLE:
+                    raise RuntimeError(f"MODEL UNAVAILABLE: {error_details}")
+                elif error_type == ErrorType.RATE_LIMIT:
+                    raise RuntimeError(
+                        f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {error_details}"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Codex emitted error event ({error_type.value}): {error_details}"
+                    )
 
             # Warn if output is empty on success
             if not output.strip():
