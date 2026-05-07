@@ -1707,13 +1707,47 @@ class TestOpenRouterProviderEnvModel:
 
 
 class TestCodexTurnFailedHandling:
-    """Regression tests for the silent ``turn.failed`` swallowing bug.
+    """Regression tests for the silent codex hang bug.
 
-    Before the fix, codex CLI could exit cleanly (returncode 0) while emitting
-    a ``turn.failed`` JSONL event (e.g. server rejected an unsupported model).
-    The adapter would then return an empty success, causing the orchestrator
-    to wait the full phase timeout with no actionable diagnostic.
+    Three related failure modes were collapsing to "Provider codex failed:
+    unknown" with empty error_message:
+
+    1. ``turn.failed`` JSONL events were ignored. Codex exits cleanly (rc 0)
+       even after emitting them, so the post-loop logic returned empty
+       success.
+    2. ``_extract_error_message`` only knew about ``error`` events, not
+       ``turn.failed``.
+    3. The subprocess inherited the parent's stdin and codex blocked reading
+       it forever (Windows asyncio Proactor + an open pipe with no writer).
+
+    Together these caused full-phase timeouts (~239s with 2 retries) and no
+    actionable diagnostic.
     """
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_uses_devnull_stdin(self):
+        """Codex subprocess must be launched with stdin=DEVNULL.
+
+        Without this, codex blocks reading from an inherited stdin pipe even
+        when the prompt is supplied as a CLI argument, producing no output
+        until the phase timeout fires.
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+                b'"text":"ok"}}\n'
+                b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+            ),
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt="test"))
+
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.DEVNULL
 
     def test_ingest_codex_stdout_line_captures_turn_failed(self):
         """`_ingest_codex_stdout_line` must extract error_message from turn.failed."""

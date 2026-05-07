@@ -549,10 +549,17 @@ class CodexCLIProvider(ProviderAdapter):
             )
             env = self._get_subprocess_env()
             env["HOME"] = cli_home
-            # Safe: uses argument list, no shell; minimal environment
+            # Safe: uses argument list, no shell; minimal environment.
+            # ``stdin=DEVNULL`` is critical: codex reads the prompt as a CLI
+            # argument, but its CLI advertises "If stdin is piped and a prompt
+            # is also provided, stdin is appended as a <stdin> block." When we
+            # inherit the parent's stdin (Windows asyncio Proactor + an open
+            # pipe with no writer), codex blocks on the read indefinitely and
+            # produces no JSONL output until the phase timeout kills it.
             proc = await asyncio.create_subprocess_exec(
                 cmd[0],
                 *cmd[1:],
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
