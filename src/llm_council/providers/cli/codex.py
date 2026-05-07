@@ -361,8 +361,21 @@ class CodexCLIProvider(ProviderAdapter):
         model: str,
         output_last_message_path: str | None = None,
         output_schema_path: str | None = None,
-    ) -> list[str]:
-        """Build the CLI command as argument list (safe from injection)."""
+    ) -> tuple[list[str], str]:
+        """Build the CLI command and extract the prompt (safe from injection).
+
+        Returns ``(cmd, prompt)``. The prompt is *not* appended to ``cmd``;
+        instead ``-`` is appended to tell codex to read it from stdin, and
+        the caller is responsible for piping ``prompt`` to ``proc.stdin``.
+
+        Why: on Windows, npm installs codex as ``codex.cmd``, a batch
+        wrapper that goes through ``cmd.exe``. ``cmd.exe`` enforces an
+        8191-char total command-line limit. Council's prompts (system
+        prompt + JSON schema + user task) routinely exceed that, producing
+        ``"The command line is too long."`` failures even on simple tasks.
+        Reading the prompt from stdin keeps the command line tiny and
+        sidesteps the limit on every platform.
+        """
         if not self._cli_path:
             raise RuntimeError("Codex CLI not found.")
 
@@ -384,8 +397,8 @@ class CodexCLIProvider(ProviderAdapter):
         else:
             raise ValueError("Either 'messages' or 'prompt' must be provided")
 
-        cmd.append(prompt)
-        return cmd
+        cmd.append("-")
+        return cmd, prompt
 
     def _check_unsafe_flags(self) -> None:
         """Emit warning if using unsafe permissive flags."""
@@ -541,7 +554,7 @@ class CodexCLIProvider(ProviderAdapter):
                         ),
                         schema_file,
                     )
-            cmd = self._build_command(
+            cmd, prompt_text = self._build_command(
                 request,
                 model=model,
                 output_last_message_path=output_path,
@@ -550,21 +563,33 @@ class CodexCLIProvider(ProviderAdapter):
             env = self._get_subprocess_env()
             env["HOME"] = cli_home
             # Safe: uses argument list, no shell; minimal environment.
-            # ``stdin=DEVNULL`` is critical: codex reads the prompt as a CLI
-            # argument, but its CLI advertises "If stdin is piped and a prompt
-            # is also provided, stdin is appended as a <stdin> block." When we
-            # inherit the parent's stdin (Windows asyncio Proactor + an open
-            # pipe with no writer), codex blocks on the read indefinitely and
-            # produces no JSONL output until the phase timeout kills it.
+            # ``stdin=PIPE`` lets us write the prompt and close stdin so
+            # codex reads it as a normal stream + EOF. We deliberately do
+            # NOT inherit the parent's stdin (Windows asyncio Proactor with
+            # an open inherited pipe causes codex to block on the read
+            # indefinitely). The prompt is sent via stdin rather than as a
+            # CLI argument because Windows ``codex.cmd`` is a cmd.exe batch
+            # wrapper, and cmd.exe enforces an 8191-char total command-line
+            # limit that council's typical prompts (system + JSON schema +
+            # user task) routinely exceed.
             proc = await asyncio.create_subprocess_exec(
                 cmd[0],
                 *cmd[1:],
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
                 start_new_session=True,
             )
+
+            # Send the prompt to codex via stdin and close it so codex sees
+            # EOF and proceeds. ``-`` is the placeholder we put in cmd to
+            # tell codex to read the prompt from stdin.
+            if proc.stdin is not None:
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    proc.stdin.write(prompt_text.encode("utf-8"))
+                    await proc.stdin.drain()
+                    proc.stdin.close()
 
             timeout = self._request_timeout(request)
             if (

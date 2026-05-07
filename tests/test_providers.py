@@ -1218,6 +1218,7 @@ class TestCLIProviderTimeouts:
 
         class HangingCodexProcess:
             def __init__(self) -> None:
+                self.stdin = None  # generate() guards on `is not None`
                 self.stdout = asyncio.StreamReader()
                 self.stderr = asyncio.StreamReader()
                 self.returncode: int | None = None
@@ -1261,6 +1262,7 @@ class TestCLIProviderTimeouts:
 
         class HangingCodexProcess:
             def __init__(self) -> None:
+                self.stdin = None  # generate() guards on `is not None`
                 self.stdout = asyncio.StreamReader()
                 self.stderr = asyncio.StreamReader()
                 self.returncode: int | None = None
@@ -1725,12 +1727,17 @@ class TestCodexTurnFailedHandling:
     """
 
     @pytest.mark.asyncio
-    async def test_codex_cli_uses_devnull_stdin(self):
-        """Codex subprocess must be launched with stdin=DEVNULL.
+    async def test_codex_cli_pipes_prompt_via_stdin(self):
+        """Codex subprocess receives the prompt via stdin, not as a CLI arg.
 
-        Without this, codex blocks reading from an inherited stdin pipe even
-        when the prompt is supplied as a CLI argument, producing no output
-        until the phase timeout fires.
+        On Windows, codex.cmd is a cmd.exe batch wrapper and cmd.exe enforces
+        an 8191-char command-line limit. Council's prompts (system + JSON
+        schema + user task) routinely exceed that, producing
+        "The command line is too long." failures even on simple tasks.
+        Reading the prompt from stdin keeps the command line tiny on every
+        platform; we use ``-`` as the prompt placeholder per codex's
+        ``--help`` ("If not provided as an argument (or if `-` is used),
+        instructions are read from stdin").
         """
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
         process = AsyncMock()
@@ -1745,9 +1752,17 @@ class TestCodexTurnFailedHandling:
         process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
-            await provider.generate(GenerateRequest(prompt="test"))
+            await provider.generate(GenerateRequest(prompt="hello world"))
 
-        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.DEVNULL
+        # stdin must be a writable PIPE so we can deliver the prompt + EOF
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        # The cmd should end with the stdin placeholder, not the prompt text
+        cmd_args = mock_exec.await_args.args
+        assert cmd_args[-1] == "-"
+        assert "hello world" not in cmd_args
+        # And the prompt should have been written to the subprocess stdin
+        process.stdin.write.assert_called_once_with(b"hello world")
+        process.stdin.close.assert_called_once()
 
     def test_ingest_codex_stdout_line_captures_turn_failed(self):
         """`_ingest_codex_stdout_line` must extract error_message from turn.failed."""
