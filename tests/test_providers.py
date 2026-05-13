@@ -980,6 +980,23 @@ class TestCLIProviderTimeouts:
         assert mock_exec.await_args.kwargs["start_new_session"] is True
 
     @pytest.mark.asyncio
+    async def test_claude_cli_pipes_prompt_via_stdin(self):
+        provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude", use_bare=False)
+        process = AsyncMock()
+        process.communicate.return_value = (b'{"result": "ok"}', b"")
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt="hello world"))
+
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        cmd_args = mock_exec.await_args.args
+        assert "hello world" not in cmd_args
+        assert "--bare" not in cmd_args
+        process.stdin.write.assert_called_once_with(b"hello world")
+        process.stdin.close.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_claude_cli_parses_list_envelopes(self):
         provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude")
         process = AsyncMock()
@@ -1024,10 +1041,15 @@ class TestCLIProviderTimeouts:
         assert mock_exec.await_args.args[:5] == (
             "/opt/homebrew/bin/gemini",
             "-p",
-            "test",
+            "Use the piped stdin as the full request.",
             "--approval-mode",
             "default",
         )
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        assert "test" not in mock_exec.await_args.args
+        assert "--skip-trust" in mock_exec.await_args.args
+        process.stdin.write.assert_called_once_with(b"test")
+        process.stdin.close.assert_called_once()
         assert "-m" in mock_exec.await_args.args
         assert "--output-format" in mock_exec.await_args.args
 
@@ -1231,10 +1253,22 @@ class TestCLIProviderTimeouts:
         process = HangingCodexProcess()
 
         async def _emit_stdout() -> None:
+            # Real codex 0.129.0+ may emit several agent_message events before
+            # the canonical ``turn.completed`` marker. Council must wait for
+            # turn.completed and use the *latest* agent_message, not the first.
             process.stdout.feed_data(b'{"type":"thread.started","thread_id":"abc"}\n')
             await asyncio.sleep(0.01)
             process.stdout.feed_data(
+                b'{"type":"item.completed","item":{"type":"agent_message",'
+                b'"text":"I\'m looking up the files first."}}\n'
+            )
+            await asyncio.sleep(0.05)
+            process.stdout.feed_data(
                 b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}\n'
+            )
+            await asyncio.sleep(0.01)
+            process.stdout.feed_data(
+                b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
             )
 
         async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
@@ -1253,6 +1287,7 @@ class TestCLIProviderTimeouts:
             asyncio.create_task(_emit_stdout())
             response = await provider.generate(GenerateRequest(prompt="test", timeout_seconds=5))
 
+        # The final agent_message (after turn.completed) wins, not the preamble.
         assert response.text == "READY"
         mock_terminate.assert_awaited_once()
 
@@ -1756,6 +1791,9 @@ class TestCodexTurnFailedHandling:
 
         # stdin must be a writable PIPE so we can deliver the prompt + EOF
         assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        env = mock_exec.await_args.kwargs["env"]
+        assert env["CODEX_HOME"] == str(Path(env["HOME"]) / ".codex")
+        assert env["USERPROFILE"] == env["HOME"]
         # The cmd should end with the stdin placeholder, not the prompt text
         cmd_args = mock_exec.await_args.args
         assert cmd_args[-1] == "-"

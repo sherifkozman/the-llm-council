@@ -36,6 +36,7 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
+from llm_council.providers.cli._subprocess import write_stdin_and_close
 
 logger = logging.getLogger(__name__)
 
@@ -562,6 +563,8 @@ class CodexCLIProvider(ProviderAdapter):
             )
             env = self._get_subprocess_env()
             env["HOME"] = cli_home
+            env["USERPROFILE"] = cli_home
+            env["CODEX_HOME"] = str(Path(cli_home) / ".codex")
             # Safe: uses argument list, no shell; minimal environment.
             # ``stdin=PIPE`` lets us write the prompt and close stdin so
             # codex reads it as a normal stream + EOF. We deliberately do
@@ -587,9 +590,7 @@ class CodexCLIProvider(ProviderAdapter):
             # tell codex to read the prompt from stdin.
             if proc.stdin is not None:
                 with contextlib.suppress(BrokenPipeError, ConnectionResetError):
-                    proc.stdin.write(prompt_text.encode("utf-8"))
-                    await proc.stdin.drain()
-                    proc.stdin.close()
+                    await write_stdin_and_close(proc.stdin, prompt_text)
 
             timeout = self._request_timeout(request)
             if (
@@ -698,30 +699,32 @@ class CodexCLIProvider(ProviderAdapter):
             stderr_task = asyncio.create_task(_read_codex_stderr(proc.stderr, state))
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
-            completion_started_at: float | None = None
             terminated_after_output = False
             output = ""
 
             while True:
-                with contextlib.suppress(OSError):
-                    if output_path:
+                # Always re-read from the freshest sources each iteration.
+                # Codex 0.129.0+ may emit several agent_message events before
+                # the final one (preamble -> reasoning -> final answer); we
+                # must use the latest, not the first one we saw.
+                file_output = ""
+                if output_path:
+                    with contextlib.suppress(OSError):
                         file_output = Path(output_path).read_text(encoding="utf-8")
-                        if file_output:
-                            output = file_output
-
-                if not output and state.agent_message:
-                    output = state.agent_message
+                output = file_output or state.agent_message
 
                 now = loop.time()
-                if output and completion_started_at is None:
-                    completion_started_at = now
 
                 if proc.returncode is not None:
                     break
 
-                if completion_started_at is not None and (
-                    state.saw_turn_completed or now - completion_started_at >= 1.0
-                ):
+                # Codex's canonical end-of-turn signal is the ``turn.completed``
+                # JSONL event. Wait for it (or process exit) instead of inferring
+                # completion from the first agent_message: codex 0.129.0+ may emit
+                # preamble agent_messages mid-reasoning ("I'm validating ..."),
+                # and the older 1-second grace after first output would kill codex
+                # before its real answer arrived.
+                if state.saw_turn_completed:
                     terminated_after_output = True
                     await _terminate_live_process(proc)
                     break

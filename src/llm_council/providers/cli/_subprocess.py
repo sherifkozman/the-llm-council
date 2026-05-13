@@ -4,8 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import os
 import signal
+
+
+async def write_stdin_and_close(writer: object, text: str) -> None:
+    """Write text to a subprocess stdin stream and close it."""
+
+    data = text.encode("utf-8")
+    result = writer.write(data)  # type: ignore[attr-defined]
+    if inspect.isawaitable(result):
+        await result
+
+    drain = writer.drain()  # type: ignore[attr-defined]
+    if inspect.isawaitable(drain):
+        await drain
+
+    closed = writer.close()  # type: ignore[attr-defined]
+    if inspect.isawaitable(closed):
+        await closed
 
 
 async def terminate_process_tree(

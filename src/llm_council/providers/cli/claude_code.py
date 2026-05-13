@@ -2,8 +2,7 @@
 Claude Code CLI provider adapter.
 
 Wraps the ``claude`` CLI (Claude Code) for non-interactive generation.
-Uses --bare mode to skip hooks/LSP/plugins and prevent recursion
-when council is invoked from within Claude Code.
+Pipes prompts via stdin to avoid Windows command-line length limits.
 
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
@@ -31,7 +30,10 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
-from llm_council.providers.cli._subprocess import terminate_process_tree
+from llm_council.providers.cli._subprocess import (
+    terminate_process_tree,
+    write_stdin_and_close,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,24 @@ DEFAULT_MODEL = "sonnet"
 _ENV_ALLOWLIST = {
     "PATH",
     "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "ComSpec",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "PROGRAMDATA",
+    "ProgramData",
+    "PROGRAMFILES",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
     "TERM",
     "LANG",
     "LC_ALL",
@@ -115,8 +134,8 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
     """Claude Code CLI provider adapter.
 
     Invokes the ``claude`` CLI in non-interactive mode (-p) with JSON output.
-    Uses --bare to skip hooks, LSP, and plugin loading for speed and to
-    prevent infinite recursion when council runs inside Claude Code.
+    Uses stdin for prompt delivery so Windows launchers do not hit command-line
+    length limits.
 
     Security: All subprocess calls use asyncio.create_subprocess_exec with
     argument lists (no shell). Environment is restricted to an allowlist.
@@ -135,14 +154,24 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         self,
         cli_path: str | None = None,
         default_model: str | None = None,
+        use_bare: bool | None = None,
         timeout: int = 120,
     ) -> None:
         self._cli_path = cli_path or shutil.which("claude")
         self._default_model = default_model or DEFAULT_MODEL
+        self._use_bare = (
+            bool(os.environ.get("ANTHROPIC_API_KEY")) if use_bare is None else use_bare
+        )
         self._timeout = timeout
 
-    def _build_command(self, request: GenerateRequest) -> list[str]:
-        """Build the CLI command as an argument list (no shell, safe from injection)."""
+    def _build_command(self, request: GenerateRequest) -> tuple[list[str], str]:
+        """Build the CLI command and extract the prompt.
+
+        The prompt is sent over stdin instead of as a positional argument. On
+        Windows the npm launcher is a PowerShell/CMD wrapper, so large council
+        prompts otherwise trip the 8191-char command-line limit before Claude
+        sees the request.
+        """
         if not self._cli_path:
             raise RuntimeError(
                 "Claude Code CLI not found. Install: npm install -g @anthropic-ai/claude-code"
@@ -158,21 +187,29 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             request.model or self._default_model,
         ]
 
+        cmd.extend(["--input-format", "text"])
+        if not self._use_bare:
+            cmd.remove("--bare")
+            cmd.extend(["--no-session-persistence", "--disable-slash-commands"])
+
         # Build prompt from messages or prompt field
         prompt = ""
         if request.messages:
             system_parts = [m.content for m in request.messages if m.role == "system"]
             user_parts = [m.content for m in request.messages if m.role == "user"]
             if system_parts:
-                cmd.extend(["--system-prompt", "\n\n".join(str(p) for p in system_parts)])
-            prompt = "\n\n".join(str(p) for p in user_parts)
+                prompt = (
+                    "System instructions:\n"
+                    + "\n\n".join(str(p) for p in system_parts)
+                    + "\n\nUser request:\n"
+                )
+            prompt += "\n\n".join(str(p) for p in user_parts)
         elif request.prompt:
             prompt = request.prompt
         else:
             raise ValueError("Either 'messages' or 'prompt' must be provided")
 
-        cmd.append(prompt)
-        return cmd
+        return cmd, prompt
 
     def _get_minimal_env(self) -> dict[str, str]:
         """Get minimal environment with only allowlisted variables."""
@@ -192,17 +229,22 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         if request.stream:
             raise NotImplementedError("Streaming not supported for CLI providers")
 
-        cmd = self._build_command(request)
+        cmd, prompt_text = self._build_command(request)
 
         # Safe: uses argument list via create_subprocess_exec, no shell spawned
         proc = await asyncio.create_subprocess_exec(
             cmd[0],
             *cmd[1:],
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._get_minimal_env(),
             start_new_session=True,
         )
+
+        if proc.stdin is not None:
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                await write_stdin_and_close(proc.stdin, prompt_text)
 
         timeout = self._request_timeout(request)
         try:
@@ -218,26 +260,33 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         stderr_text = stderr.decode("utf-8", errors="replace")
 
         if proc.returncode != 0:
-            error_type = classify_error(stderr_text, proc.returncode or 0)
+            error_details = stderr_text
+            if not error_details.strip():
+                with contextlib.suppress(json.JSONDecodeError):
+                    data = json.loads(stdout_text)
+                    error_details = _extract_text_payload(
+                        data.get("result") if isinstance(data, dict) else data
+                    )
+            error_type = classify_error(error_details, proc.returncode or 0)
             if error_type == ErrorType.BILLING:
                 billing_url = get_billing_help_url("claude-code")
                 raise RuntimeError(
                     f"BILLING ERROR: Anthropic credits exhausted. "
                     f"Check billing at {billing_url}\n"
-                    f"Details: {stderr_text[:200]}"
+                    f"Details: {error_details[:200]}"
                 )
             elif error_type == ErrorType.AUTH:
                 raise RuntimeError(
                     "AUTH ERROR: Invalid or missing credentials. "
                     "Run 'claude login' or check ANTHROPIC_API_KEY.\n"
-                    f"Details: {stderr_text[:200]}"
+                    f"Details: {error_details[:200]}"
                 )
             elif error_type == ErrorType.RATE_LIMIT:
                 raise RuntimeError(
-                    f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {stderr_text[:200]}"
+                    f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {error_details[:200]}"
                 )
             else:
-                raise RuntimeError(f"CLI failed ({error_type.value}): {stderr_text}")
+                raise RuntimeError(f"CLI failed ({error_type.value}): {error_details}")
 
         # Parse JSON output from --output-format json.
         output = ""
