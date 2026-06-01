@@ -17,8 +17,15 @@ permissions:
   contents: read
 
 jobs:
+  ci:
+    name: CI
+    # Gate: lint, format, mypy, and tests must pass before anything is built
+    # or published. Prevents releases shipping from a red pipeline.
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Build distribution
+    needs: [ci]
     runs-on: ubuntu-latest
 
     steps:
