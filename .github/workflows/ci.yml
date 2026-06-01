@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Allow other workflows (e.g. publish.yml) to require CI as a prerequisite.
+  workflow_call:
 
 jobs:
   test:
