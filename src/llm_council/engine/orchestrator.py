@@ -21,7 +21,15 @@ import logging
 import math
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import contextmanager
 from typing import (
     Any,
@@ -831,7 +839,7 @@ class Orchestrator:
                 phase="critique",
                 system_prompt=system_prompt,
                 prompt_builder=lambda profile: self._format_critique_prompt(
-                    self._task,
+                    self._task or "",
                     drafts,
                     context_override=self._phase_context_override,
                     draft_limit=profile.get("draft_limit"),
@@ -929,29 +937,37 @@ class Orchestrator:
                 use_raw_drafts = bool(errors) and any(
                     handoff.get("findings") for handoff in self._draft_handoffs.values()
                 )
+
+                def _build_synthesis_prompt(
+                    profile: Mapping[str, int | None],
+                    *,
+                    _errors: tuple[str, ...] = tuple(errors),
+                    _use_raw_drafts: bool = use_raw_drafts,
+                    _inline_schema: bool = not supports_structured_output,
+                ) -> str:
+                    return self._format_synthesis_prompt(
+                        task=self._task or "",
+                        drafts=drafts,
+                        critique=critique,
+                        schema=schema,
+                        errors=_errors,
+                        context_override=self._phase_context_override,
+                        use_raw_drafts=_use_raw_drafts,
+                        draft_limit=profile.get("draft_limit"),
+                        excerpt_limit=int(profile.get("excerpt_limit") or 320),
+                        max_sources=profile.get("max_sources"),
+                        max_findings=profile.get("max_findings"),
+                        critique_limit=profile.get("critique_limit"),
+                        omit_drafts=bool(profile.get("omit_drafts")),
+                        inline_schema=_inline_schema,
+                        omit_context=bool(profile.get("omit_context")),
+                    )
+
                 user_prompt, _prompt_meta = self._select_prompt_profile(
                     provider_name=provider_name,
                     phase="synthesis",
                     system_prompt=system_prompt,
-                    prompt_builder=lambda profile, *, _errors=tuple(errors), _use_raw_drafts=use_raw_drafts, _inline_schema=not supports_structured_output: (
-                        self._format_synthesis_prompt(
-                            task=self._task,
-                            drafts=drafts,
-                            critique=critique,
-                            schema=schema,
-                            errors=_errors,
-                            context_override=self._phase_context_override,
-                            use_raw_drafts=_use_raw_drafts,
-                            draft_limit=profile.get("draft_limit"),
-                            excerpt_limit=int(profile.get("excerpt_limit") or 320),
-                            max_sources=profile.get("max_sources"),
-                            max_findings=profile.get("max_findings"),
-                            critique_limit=profile.get("critique_limit"),
-                            omit_drafts=bool(profile.get("omit_drafts")),
-                            inline_schema=_inline_schema,
-                            omit_context=bool(profile.get("omit_context")),
-                        )
-                    ),
+                    prompt_builder=_build_synthesis_prompt,
                 )
 
                 request = GenerateRequest(
@@ -973,7 +989,7 @@ class Orchestrator:
 
                 if supports_structured_output:
                     request.structured_output = StructuredOutputConfig(
-                        json_schema=schema,
+                        json_schema=schema or {},
                         name=self._subagent_name or "council_output",
                         strict=True,
                     )
@@ -3117,7 +3133,7 @@ class Orchestrator:
         }
 
     @contextmanager
-    def _temporary_context_override(self, context_override: str | None):
+    def _temporary_context_override(self, context_override: str | None) -> Iterator[None]:
         """Temporarily swap the configured system context for prompt rendering."""
 
         original_prepared = self._prepared_reference_context

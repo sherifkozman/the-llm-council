@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -197,7 +197,7 @@ def _apply_capability_overrides(
     """
 
     normalized_execution_profile = (
-        cast(ExecutionProfile, requested_execution_profile)
+        requested_execution_profile
         if requested_execution_profile in _EXECUTION_PROFILE_ORDER
         else None
     )
@@ -209,9 +209,7 @@ def _apply_capability_overrides(
             plan.execution_profile = normalized_execution_profile
 
     normalized_budget_class = (
-        cast(BudgetClass, requested_budget_class)
-        if requested_budget_class in _BUDGET_CLASS_ORDER
-        else None
+        requested_budget_class if requested_budget_class in _BUDGET_CLASS_ORDER else None
     )
     if normalized_budget_class is not None:
         if _BUDGET_CLASS_ORDER[normalized_budget_class] > _BUDGET_CLASS_ORDER[plan.budget_class]:

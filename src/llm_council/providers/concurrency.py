@@ -20,7 +20,7 @@ from pathlib import Path
 try:  # pragma: no cover - exercised indirectly on non-POSIX platforms
     import fcntl
 except ImportError:  # pragma: no cover - Windows fallback
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 _LOCK_DIR_ENV = "LLM_COUNCIL_LOCK_DIR"
 _DISABLE_LOCKS_ENV = "LLM_COUNCIL_DISABLE_PROVIDER_LOCKS"
