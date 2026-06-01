@@ -20,7 +20,7 @@ from pathlib import Path
 try:  # pragma: no cover - exercised indirectly on non-POSIX platforms
     import fcntl
 except ImportError:  # pragma: no cover - Windows fallback
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 _LOCK_DIR_ENV = "LLM_COUNCIL_LOCK_DIR"
 _DISABLE_LOCKS_ENV = "LLM_COUNCIL_DISABLE_PROVIDER_LOCKS"
@@ -34,13 +34,17 @@ def _locks_enabled() -> bool:
 
 def _lock_root() -> Path:
     override = os.getenv(_LOCK_DIR_ENV)
-    base = Path(override) if override else Path(tempfile.gettempdir()) / "llm-council-provider-locks"
+    base = (
+        Path(override) if override else Path(tempfile.gettempdir()) / "llm-council-provider-locks"
+    )
     base.mkdir(parents=True, exist_ok=True)
     return base
 
 
 def _lock_path_for_provider(provider_name: str) -> Path:
-    safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in provider_name)
+    safe_name = "".join(
+        ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in provider_name
+    )
     return _lock_root() / f"{safe_name}.lock"
 
 
@@ -87,9 +91,7 @@ def acquire_provider_call_lease(
             elapsed = time.monotonic() - started
             if timeout_seconds is not None and elapsed >= timeout_seconds:
                 os.close(fd)
-                raise TimeoutError(
-                    f"Timed out waiting for provider slot: {provider_name}"
-                ) from exc
+                raise TimeoutError(f"Timed out waiting for provider slot: {provider_name}") from exc
             time.sleep(poll_interval_seconds)
 
     waited_ms = round((time.monotonic() - started) * 1000, 1)

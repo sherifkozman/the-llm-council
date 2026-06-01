@@ -233,9 +233,7 @@ def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
             state.error_message = message
 
 
-async def _read_codex_stdout(
-    stream: asyncio.StreamReader | None, state: _LiveCodexState
-) -> None:
+async def _read_codex_stdout(stream: asyncio.StreamReader | None, state: _LiveCodexState) -> None:
     """Consume Codex stdout incrementally."""
 
     if stream is None:
@@ -252,9 +250,7 @@ async def _read_codex_stdout(
             state.turn_started_at = now
 
 
-async def _read_codex_stderr(
-    stream: asyncio.StreamReader | None, state: _LiveCodexState
-) -> None:
+async def _read_codex_stderr(stream: asyncio.StreamReader | None, state: _LiveCodexState) -> None:
     """Consume Codex stderr incrementally."""
 
     if stream is None:
@@ -503,9 +499,7 @@ class CodexCLIProvider(ProviderAdapter):
                 )
                 with os.fdopen(schema_fd, "w", encoding="utf-8") as schema_file:
                     json.dump(
-                        _prepare_schema_for_codex(
-                            dict(request.structured_output.json_schema)
-                        ),
+                        _prepare_schema_for_codex(dict(request.structured_output.json_schema)),
                         schema_file,
                     )
             cmd = self._build_command(

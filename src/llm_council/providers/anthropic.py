@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -115,7 +115,7 @@ def _prepare_schema_for_anthropic(schema: dict[str, Any]) -> dict[str, Any]:
 
         return node
 
-    return _normalize(schema)
+    return cast("dict[str, Any]", _normalize(schema))
 
 
 logger = logging.getLogger(__name__)

@@ -12,7 +12,9 @@ import pytest
 from llm_council.providers.concurrency import acquire_provider_call_lease
 
 
-def _hold_provider_lock(lock_dir: str, provider_name: str, ready_queue: multiprocessing.Queue) -> None:
+def _hold_provider_lock(
+    lock_dir: str, provider_name: str, ready_queue: multiprocessing.Queue
+) -> None:
     os.environ["LLM_COUNCIL_LOCK_DIR"] = lock_dir
     lease = acquire_provider_call_lease(provider_name, timeout_seconds=1.0)
     ready_queue.put("locked")
@@ -26,7 +28,11 @@ def _hold_provider_lock(lock_dir: str, provider_name: str, ready_queue: multipro
 def test_acquire_provider_call_lease_times_out_when_another_process_holds_slot(tmp_path: Path):
     """A second process should not be able to enter the same provider slot immediately."""
 
-    ctx = multiprocessing.get_context("fork") if "fork" in multiprocessing.get_all_start_methods() else multiprocessing
+    ctx = (
+        multiprocessing.get_context("fork")
+        if "fork" in multiprocessing.get_all_start_methods()
+        else multiprocessing
+    )
     ready_queue = ctx.Queue()
     process = ctx.Process(
         target=_hold_provider_lock,

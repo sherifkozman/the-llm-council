@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 try:
-    import tomllib
+    import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
     tomllib = None
 

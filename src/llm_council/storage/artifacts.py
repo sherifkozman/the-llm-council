@@ -204,7 +204,11 @@ class ArtifactStore:
             artifact_dir = (
                 Path(artifact_override).expanduser()
                 if artifact_override
-                else (base_home / cls.DEFAULT_ARTIFACT_SUBDIR if base_home else cls._default_artifact_dir())
+                else (
+                    base_home / cls.DEFAULT_ARTIFACT_SUBDIR
+                    if base_home
+                    else cls._default_artifact_dir()
+                )
             )
             db_path = (
                 Path(db_override).expanduser()
@@ -242,7 +246,8 @@ class ArtifactStore:
             default_db_path=cls._default_db_path(),
             legacy_artifact_dir=legacy_artifact_dir,
             legacy_db_path=legacy_db_path,
-            using_legacy=active_artifact_dir == legacy_artifact_dir and active_db_path == legacy_db_path,
+            using_legacy=active_artifact_dir == legacy_artifact_dir
+            and active_db_path == legacy_db_path,
         )
 
     @classmethod
@@ -925,7 +930,9 @@ class ArtifactStore:
                 if path.is_file()
             )
             if source_files != target_files:
-                raise RuntimeError("Artifact migration verification failed: copied file set mismatch.")
+                raise RuntimeError(
+                    "Artifact migration verification failed: copied file set mismatch."
+                )
 
         if source_db_path.exists():
             source_conn = sqlite3.connect(source_db_path)
@@ -937,7 +944,9 @@ class ArtifactStore:
                 source_conn.close()
                 target_conn.close()
             if source_ok != ("ok",) or target_ok != ("ok",):
-                raise RuntimeError("Ledger migration verification failed: SQLite integrity check failed.")
+                raise RuntimeError(
+                    "Ledger migration verification failed: SQLite integrity check failed."
+                )
 
         return StorageMigrationResult(
             source_artifact_dir=source_artifact_dir,

@@ -1623,9 +1623,7 @@ class TestOpenRouterProviderEnvModel:
             "additionalProperties": False,
         }
 
-    def test_build_request_body_disables_strict_when_schema_has_optional_properties(
-        self, caplog
-    ):
+    def test_build_request_body_disables_strict_when_schema_has_optional_properties(self, caplog):
         """Optional object fields should keep their semantics instead of being made required."""
         provider = OpenRouterProvider(api_key="sk-or-test")
         schema = {

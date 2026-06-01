@@ -222,6 +222,7 @@ class TestCLIDoctor:
 
     def test_doctor_deep_probe_reports_generation_readiness(self):
         """Deep doctor should surface whether a provider can answer a trivial prompt."""
+
         @asynccontextmanager
         async def fake_slot(_name: str, *, timeout_seconds: float | None = None):
             assert timeout_seconds == 5.0
@@ -336,7 +337,10 @@ class TestCLIDoctor:
 
             assert result.exit_code == 0
             assert '"probe_ok": false' in result.stdout
-            assert "OpenRouter probe failed for configured model 'qwen/qwen3.6-plus:free'" in result.stdout
+            assert (
+                "OpenRouter probe failed for configured model 'qwen/qwen3.6-plus:free'"
+                in result.stdout
+            )
             assert "The free model has been deprecated." in result.stdout
             assert "use --models" in result.stdout
 
@@ -788,9 +792,7 @@ class TestMarkdownOutputFormat:
             mock_council_class.return_value = MagicMock()
             mock_run.return_value = mock_result
 
-            result = runner.invoke(
-                app, ["run", "router", "Test task", "--format", "markdown"]
-            )
+            result = runner.invoke(app, ["run", "router", "Test task", "--format", "markdown"])
             assert result.exit_code == 0
             assert "# Council Result: SUCCESS" in result.stdout
             assert "## Metrics" in result.stdout
@@ -832,9 +834,7 @@ class TestMarkdownOutputFormat:
             mock_council_class.return_value = MagicMock()
             mock_run.return_value = mock_result
 
-            result = runner.invoke(
-                app, ["run", "router", "Test task", "--format", "json"]
-            )
+            result = runner.invoke(app, ["run", "router", "Test task", "--format", "json"])
             assert result.exit_code == 0
             assert "Council Result" not in result.stdout
             assert '"success": true' in result.stdout
@@ -852,9 +852,7 @@ class TestMarkdownOutputFormat:
             mock_council_class.return_value = MagicMock()
             mock_run.return_value = self._success_result()
 
-            result = runner.invoke(
-                app, ["run", "router", "Test task", "--format", "yaml"]
-            )
+            result = runner.invoke(app, ["run", "router", "Test task", "--format", "yaml"])
             assert result.exit_code == 1
             assert "Invalid --format" in result.stdout
 
@@ -975,7 +973,14 @@ class TestCLIContextMetadata:
 
             result = runner.invoke(
                 app,
-                ["run", "critic", "Review the benchmark plan", "--files", str(missing_file), "--json"],
+                [
+                    "run",
+                    "critic",
+                    "Review the benchmark plan",
+                    "--files",
+                    str(missing_file),
+                    "--json",
+                ],
             )
 
         assert result.exit_code in [0, 1]
