@@ -31,7 +31,12 @@ from llm_council.providers.base import (
     classify_error,
 )
 from llm_council.providers.cli.claude_code import ClaudeCodeCLIProvider
-from llm_council.providers.cli.codex import CodexCLIProvider
+from llm_council.providers.cli.codex import (
+    CodexCLIProvider,
+    _LiveCodexState,
+    _extract_error_message,
+    _ingest_codex_stdout_line,
+)
 from llm_council.providers.cli.gemini_cli import GeminiCLIProvider
 from llm_council.providers.gemini import (
     DEFAULT_MODEL as GEMINI_DEFAULT_MODEL,
@@ -975,6 +980,23 @@ class TestCLIProviderTimeouts:
         assert mock_exec.await_args.kwargs["start_new_session"] is True
 
     @pytest.mark.asyncio
+    async def test_claude_cli_pipes_prompt_via_stdin(self):
+        provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude", use_bare=False)
+        process = AsyncMock()
+        process.communicate.return_value = (b'{"result": "ok"}', b"")
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt="hello world"))
+
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        cmd_args = mock_exec.await_args.args
+        assert "hello world" not in cmd_args
+        assert "--bare" not in cmd_args
+        process.stdin.write.assert_called_once_with(b"hello world")
+        process.stdin.close.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_claude_cli_parses_list_envelopes(self):
         provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude")
         process = AsyncMock()
@@ -1019,10 +1041,15 @@ class TestCLIProviderTimeouts:
         assert mock_exec.await_args.args[:5] == (
             "/opt/homebrew/bin/gemini",
             "-p",
-            "test",
+            "Use the piped stdin as the full request.",
             "--approval-mode",
             "default",
         )
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        assert "test" not in mock_exec.await_args.args
+        assert "--skip-trust" in mock_exec.await_args.args
+        process.stdin.write.assert_called_once_with(b"test")
+        process.stdin.close.assert_called_once()
         assert "-m" in mock_exec.await_args.args
         assert "--output-format" in mock_exec.await_args.args
 
@@ -1213,6 +1240,7 @@ class TestCLIProviderTimeouts:
 
         class HangingCodexProcess:
             def __init__(self) -> None:
+                self.stdin = None  # generate() guards on `is not None`
                 self.stdout = asyncio.StreamReader()
                 self.stderr = asyncio.StreamReader()
                 self.returncode: int | None = None
@@ -1225,10 +1253,22 @@ class TestCLIProviderTimeouts:
         process = HangingCodexProcess()
 
         async def _emit_stdout() -> None:
+            # Real codex 0.129.0+ may emit several agent_message events before
+            # the canonical ``turn.completed`` marker. Council must wait for
+            # turn.completed and use the *latest* agent_message, not the first.
             process.stdout.feed_data(b'{"type":"thread.started","thread_id":"abc"}\n')
             await asyncio.sleep(0.01)
             process.stdout.feed_data(
+                b'{"type":"item.completed","item":{"type":"agent_message",'
+                b'"text":"I\'m looking up the files first."}}\n'
+            )
+            await asyncio.sleep(0.05)
+            process.stdout.feed_data(
                 b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}\n'
+            )
+            await asyncio.sleep(0.01)
+            process.stdout.feed_data(
+                b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
             )
 
         async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
@@ -1247,6 +1287,7 @@ class TestCLIProviderTimeouts:
             asyncio.create_task(_emit_stdout())
             response = await provider.generate(GenerateRequest(prompt="test", timeout_seconds=5))
 
+        # The final agent_message (after turn.completed) wins, not the preamble.
         assert response.text == "READY"
         mock_terminate.assert_awaited_once()
 
@@ -1256,6 +1297,7 @@ class TestCLIProviderTimeouts:
 
         class HangingCodexProcess:
             def __init__(self) -> None:
+                self.stdin = None  # generate() guards on `is not None`
                 self.stdout = asyncio.StreamReader()
                 self.stderr = asyncio.StreamReader()
                 self.returncode: int | None = None
@@ -1699,3 +1741,195 @@ class TestOpenRouterProviderEnvModel:
         )
 
         assert body["reasoning_effort"] == "high"
+
+
+class TestCodexTurnFailedHandling:
+    """Regression tests for the silent codex hang bug.
+
+    Three related failure modes were collapsing to "Provider codex failed:
+    unknown" with empty error_message:
+
+    1. ``turn.failed`` JSONL events were ignored. Codex exits cleanly (rc 0)
+       even after emitting them, so the post-loop logic returned empty
+       success.
+    2. ``_extract_error_message`` only knew about ``error`` events, not
+       ``turn.failed``.
+    3. The subprocess inherited the parent's stdin and codex blocked reading
+       it forever (Windows asyncio Proactor + an open pipe with no writer).
+
+    Together these caused full-phase timeouts (~239s with 2 retries) and no
+    actionable diagnostic.
+    """
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_pipes_prompt_via_stdin(self):
+        """Codex subprocess receives the prompt via stdin, not as a CLI arg.
+
+        On Windows, codex.cmd is a cmd.exe batch wrapper and cmd.exe enforces
+        an 8191-char command-line limit. Council's prompts (system + JSON
+        schema + user task) routinely exceed that, producing
+        "The command line is too long." failures even on simple tasks.
+        Reading the prompt from stdin keeps the command line tiny on every
+        platform; we use ``-`` as the prompt placeholder per codex's
+        ``--help`` ("If not provided as an argument (or if `-` is used),
+        instructions are read from stdin").
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+                b'"text":"ok"}}\n'
+                b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+            ),
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt="hello world"))
+
+        # stdin must be a writable PIPE so we can deliver the prompt + EOF
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        env = mock_exec.await_args.kwargs["env"]
+        assert env["CODEX_HOME"] == str(Path(env["HOME"]) / ".codex")
+        assert env["USERPROFILE"] == env["HOME"]
+        # The cmd should end with the stdin placeholder, not the prompt text
+        cmd_args = mock_exec.await_args.args
+        assert cmd_args[-1] == "-"
+        assert "hello world" not in cmd_args
+        # And the prompt should have been written to the subprocess stdin
+        process.stdin.write.assert_called_once_with(b"hello world")
+        process.stdin.close.assert_called_once()
+
+    def test_ingest_codex_stdout_line_captures_turn_failed(self):
+        """`_ingest_codex_stdout_line` must extract error_message from turn.failed."""
+        state = _LiveCodexState()
+        line = (
+            '{"type":"turn.failed","error":{"message":'
+            '"The \'gpt-5.5\' model requires a newer version of Codex."}}'
+        )
+
+        _ingest_codex_stdout_line(line, state)
+
+        assert "gpt-5.5" in state.error_message
+        assert "newer version of Codex" in state.error_message
+
+    def test_ingest_codex_stdout_line_ignores_turn_failed_without_message(self):
+        """Malformed turn.failed events shouldn't crash the parser."""
+        state = _LiveCodexState()
+
+        _ingest_codex_stdout_line('{"type":"turn.failed"}', state)
+        _ingest_codex_stdout_line('{"type":"turn.failed","error":null}', state)
+        _ingest_codex_stdout_line('{"type":"turn.failed","error":{}}', state)
+
+        assert state.error_message == ""
+
+    def test_extract_error_message_recognizes_turn_failed(self):
+        """`_extract_error_message` must surface turn.failed errors."""
+        stdout = (
+            '{"type":"thread.started","thread_id":"abc"}\n'
+            '{"type":"turn.started"}\n'
+            '{"type":"turn.failed","error":{"message":"unsupported model"}}\n'
+        )
+
+        assert _extract_error_message(stdout) == "unsupported model"
+
+    def test_extract_error_message_still_handles_error_events(self):
+        """Existing ``error`` event extraction must not regress."""
+        stdout = (
+            '{"type":"thread.started","thread_id":"abc"}\n'
+            '{"type":"error","message":"client rejected schema"}\n'
+        )
+
+        assert _extract_error_message(stdout) == "client rejected schema"
+
+    def test_extract_error_message_returns_empty_when_no_error(self):
+        """Successful runs should yield an empty error string."""
+        stdout = (
+            '{"type":"thread.started","thread_id":"abc"}\n'
+            '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
+            '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
+        )
+
+        assert _extract_error_message(stdout) == ""
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_raises_when_clean_exit_emits_turn_failed(self):
+        """Production bug: codex exits 0 but emits turn.failed -> classified error.
+
+        Before the fix, this scenario returned an empty success and the
+        orchestrator silently waited the full phase timeout.
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            (
+                b'{"type":"thread.started","thread_id":"abc"}\n'
+                b'{"type":"turn.started"}\n'
+                b'{"type":"turn.failed","error":{"message":'
+                b'"The \'gpt-5.5\' model requires a newer version of Codex. '
+                b'Please upgrade to the latest app or CLI and try again."}}\n'
+            ),
+            b"",
+        )
+        process.returncode = 0  # clean exit despite the failed turn
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            pytest.raises(RuntimeError, match="newer version of Codex"),
+        ):
+            await provider.generate(GenerateRequest(prompt="test"))
+
+
+class TestCodexIsolatedHomeStateCopy:
+    """Regression tests for the missing-config.toml bug in the isolated HOME.
+
+    Before the fix, ``_copy_isolated_runtime_state`` only copied auth files,
+    so user model/trust preferences were dropped. The codex subprocess then
+    fell back to the CLI's built-in default, which could be incompatible
+    with the installed CLI version (silent hang in combination with bug #1).
+    """
+
+    def test_copy_isolated_runtime_state_includes_config_toml(self, tmp_path):
+        """`config.toml` must be copied alongside auth files."""
+        # Arrange a fake user ~/.codex directory
+        fake_home = tmp_path / "home"
+        source_codex = fake_home / ".codex"
+        source_codex.mkdir(parents=True)
+        (source_codex / "auth.json").write_text('{"token": "secret"}')
+        (source_codex / "config.toml").write_text(
+            'model = "gpt-5.4"\nmodel_reasoning_effort = "medium"\n'
+        )
+
+        target_codex = tmp_path / "iso" / ".codex"
+        target_codex.mkdir(parents=True)
+
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        with patch("llm_council.providers.cli.codex.Path.home", return_value=fake_home):
+            provider._copy_isolated_runtime_state(target_codex)
+
+        assert (target_codex / "auth.json").exists()
+        assert (target_codex / "config.toml").exists()
+        assert "gpt-5.4" in (target_codex / "config.toml").read_text()
+
+    def test_copy_isolated_runtime_state_skips_missing_files(self, tmp_path):
+        """Missing source files must be silently skipped (no crash)."""
+        fake_home = tmp_path / "home"
+        source_codex = fake_home / ".codex"
+        source_codex.mkdir(parents=True)
+        # Only auth.json exists; config.toml is intentionally missing
+        (source_codex / "auth.json").write_text('{"token": "secret"}')
+
+        target_codex = tmp_path / "iso" / ".codex"
+        target_codex.mkdir(parents=True)
+
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        # Must not raise even though config.toml is missing
+        with patch("llm_council.providers.cli.codex.Path.home", return_value=fake_home):
+            provider._copy_isolated_runtime_state(target_codex)
+
+        assert (target_codex / "auth.json").exists()
+        assert not (target_codex / "config.toml").exists()

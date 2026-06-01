@@ -33,7 +33,10 @@ from llm_council.providers.base import (
     classify_error,
     get_billing_help_url,
 )
-from llm_council.providers.cli._subprocess import terminate_process_tree
+from llm_council.providers.cli._subprocess import (
+    terminate_process_tree,
+    write_stdin_and_close,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,22 @@ _UNSAFE_WARNING = (
 _COMMON_ENV_ALLOWLIST = {
     "PATH",
     "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "ComSpec",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "PROGRAMDATA",
+    "ProgramData",
+    "PROGRAMFILES",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
     "TERM",
     "LANG",
     "LC_ALL",
@@ -264,7 +283,10 @@ class GeminiCLIProvider(ProviderAdapter):
     def _load_existing_auth_settings(self) -> dict[str, Any] | None:
         """Load the user's existing Gemini auth settings so subprocess isolation preserves auth."""
 
-        settings_path = Path.home() / ".gemini" / "settings.json"
+        try:
+            settings_path = Path.home() / ".gemini" / "settings.json"
+        except RuntimeError:
+            return None
         with contextlib.suppress(OSError, json.JSONDecodeError):
             payload = json.loads(settings_path.read_text(encoding="utf-8"))
             security = payload.get("security")
@@ -277,8 +299,16 @@ class GeminiCLIProvider(ProviderAdapter):
     def _copy_isolated_runtime_state(self, gemini_dir: Path) -> None:
         """Copy the minimal Gemini runtime state needed for isolated subprocesses."""
 
-        source_dir = Path.home() / ".gemini"
-        for filename in ("projects.json", "google_accounts.json"):
+        try:
+            source_dir = Path.home() / ".gemini"
+        except RuntimeError:
+            return
+        for filename in (
+            "projects.json",
+            "google_accounts.json",
+            "oauth_creds.json",
+            "installation_id",
+        ):
             source = source_dir / filename
             target = gemini_dir / filename
             if source.exists():
@@ -314,8 +344,13 @@ class GeminiCLIProvider(ProviderAdapter):
             float(request.timeout_seconds) if request.timeout_seconds is not None else self._timeout
         )
 
-    def _build_command(self, request: GenerateRequest) -> list[str]:
-        """Build CLI command as argument list (safe from injection)."""
+    def _build_command(self, request: GenerateRequest) -> tuple[list[str], str]:
+        """Build CLI command and extract the prompt.
+
+        Gemini CLI appends stdin to the ``--prompt`` value. Keep the argument
+        short and send the full council prompt over stdin to avoid Windows
+        command-line length limits.
+        """
         if not self._cli_path:
             raise RuntimeError("Gemini CLI not found.")
 
@@ -328,11 +363,12 @@ class GeminiCLIProvider(ProviderAdapter):
         else:
             raise ValueError("Either 'messages' or 'prompt' required")
 
-        cmd = [self._cli_path, "-p", prompt]
+        cmd = [self._cli_path, "-p", "Use the piped stdin as the full request."]
         cmd.extend(["--approval-mode", self._approval_mode])
+        cmd.append("--skip-trust")
         cmd.extend(["-m", request.model or self._default_model])
         cmd.extend(["--output-format", "json"])
-        return cmd
+        return cmd, prompt
 
     async def generate(
         self, request: GenerateRequest
@@ -342,7 +378,7 @@ class GeminiCLIProvider(ProviderAdapter):
             raise NotImplementedError("Streaming not supported for CLI")
 
         self._check_unsafe_mode()
-        cmd = self._build_command(request)
+        cmd, prompt_text = self._build_command(request)
         cli_home, auth_settings = self._create_isolated_cli_home()
         env = self._get_minimal_env(auth_settings)
         env["GEMINI_CLI_HOME"] = cli_home
@@ -352,11 +388,16 @@ class GeminiCLIProvider(ProviderAdapter):
             proc = await asyncio.create_subprocess_exec(
                 cmd[0],
                 *cmd[1:],
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
                 start_new_session=True,
             )
+
+            if proc.stdin is not None:
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    await write_stdin_and_close(proc.stdin, prompt_text)
 
             timeout = self._request_timeout(request)
             try:
@@ -372,7 +413,12 @@ class GeminiCLIProvider(ProviderAdapter):
 
             if proc.returncode != 0:
                 stderr_text = stderr.decode("utf-8", errors="replace")
-                error_type = classify_error(stderr_text, proc.returncode or 0)
+                error_details = (
+                    stderr_text.strip()
+                    or stdout_text.strip()
+                    or f"Gemini CLI exited with code {proc.returncode}"
+                )
+                error_type = classify_error(error_details, proc.returncode or 0)
 
                 # Provide actionable error messages based on error type
                 if error_type == ErrorType.BILLING:
@@ -380,21 +426,21 @@ class GeminiCLIProvider(ProviderAdapter):
                     raise RuntimeError(
                         f"BILLING ERROR: Google API credits exhausted. "
                         f"Check billing at {billing_url}\n"
-                        f"Details: {stderr_text[:200]}"
+                        f"Details: {error_details[:200]}"
                     )
                 elif error_type == ErrorType.AUTH:
                     raise RuntimeError(
                         "AUTH ERROR: Gemini CLI authentication failed. "
                         "Check the auth method configured in ~/.gemini/settings.json "
                         "and the matching environment variables.\n"
-                        f"Details: {stderr_text[:200]}"
+                        f"Details: {error_details[:200]}"
                     )
                 elif error_type == ErrorType.RATE_LIMIT:
                     raise RuntimeError(
-                        f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {stderr_text[:200]}"
+                        f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {error_details[:200]}"
                     )
                 else:
-                    raise RuntimeError(f"CLI failed ({error_type.value}): {stderr_text}")
+                    raise RuntimeError(f"CLI failed ({error_type.value}): {error_details}")
 
             output = ""
             usage = None
