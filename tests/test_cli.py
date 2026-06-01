@@ -702,6 +702,208 @@ class TestOutputFormatConfig:
                 assert "{" in result.stdout or "providers" in result.stdout
 
 
+class TestMarkdownOutputFormat:
+    """Tests for --format markdown human-readable output."""
+
+    def _success_result(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            success=True,
+            output={"result": "ship it"},
+            critique="The draft is solid but verbose.",
+            duration_ms=4321,
+            synthesis_attempts=2,
+            cost_estimate=SimpleNamespace(estimated_cost_usd=0.0456),
+            run_id="run-123",
+            execution_plan={"mode": "impl", "providers": ["openrouter"]},
+            routed=False,
+            routing_decision=None,
+            validation_errors=None,
+        )
+
+    def test_render_markdown_success(self):
+        """Formatter emits Markdown headings, output, critique, and metrics."""
+        from llm_council.cli.main import _render_result_markdown
+
+        md = _render_result_markdown(
+            self._success_result(),
+            resolved_mode="impl",
+            provider_list=["openrouter"],
+        )
+        assert md.startswith("# Council Result: SUCCESS")
+        assert "## Output" in md
+        assert '"result": "ship it"' in md
+        assert "## Critique" in md
+        assert "The draft is solid but verbose." in md
+        assert "## Metrics" in md
+        assert "- Duration: 4321ms" in md
+        assert "- Synthesis attempts: 2" in md
+        assert "- Estimated cost: $0.0456" in md
+        assert "- Run ID: run-123" in md
+        assert "- Mode: impl" in md
+        assert "- Providers: openrouter" in md
+        assert md.endswith("\n")
+
+    def test_render_markdown_failure_lists_errors(self):
+        """Failed results render an Errors section with validation messages."""
+        from types import SimpleNamespace
+
+        from llm_council.cli.main import _render_result_markdown
+
+        result = SimpleNamespace(
+            success=False,
+            output=None,
+            critique=None,
+            duration_ms=12,
+            synthesis_attempts=1,
+            cost_estimate=None,
+            run_id=None,
+            execution_plan={},
+            routed=False,
+            routing_decision=None,
+            validation_errors=["missing key 'foo'", "bad type"],
+        )
+        md = _render_result_markdown(result, include_metrics=False)
+        assert md.startswith("# Council Result: FAILED")
+        assert "## Errors" in md
+        assert "- missing key 'foo'" in md
+        assert "- bad type" in md
+        assert "## Metrics" not in md
+
+    def test_run_format_markdown_stdout(self):
+        """--format markdown renders Markdown to stdout (no rich panel, no raw JSON dump)."""
+        mock_result = self._success_result()
+        # model_dump should NOT be used for markdown output
+        mock_result.model_dump = MagicMock(side_effect=AssertionError("model_dump used"))
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(
+                app, ["run", "router", "Test task", "--format", "markdown"]
+            )
+            assert result.exit_code == 0
+            assert "# Council Result: SUCCESS" in result.stdout
+            assert "## Metrics" in result.stdout
+
+    def test_run_format_md_alias(self):
+        """--format md is accepted as an alias for markdown."""
+        mock_result = self._success_result()
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(app, ["run", "router", "Test task", "--format", "md"])
+            assert result.exit_code == 0
+            assert "# Council Result: SUCCESS" in result.stdout
+
+    def test_run_format_json_matches_json_flag(self):
+        """--format json behaves like --json (raw JSON, no rich panel)."""
+        mock_result = self._success_result()
+        mock_result.model_dump = MagicMock(
+            return_value={"success": True, "output": {"result": "ship it"}}
+        )
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(
+                app, ["run", "router", "Test task", "--format", "json"]
+            )
+            assert result.exit_code == 0
+            assert "Council Result" not in result.stdout
+            assert '"success": true' in result.stdout
+
+    def test_run_format_invalid_value_errors(self):
+        """An unknown --format value exits with an error before running the council."""
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = self._success_result()
+
+            result = runner.invoke(
+                app, ["run", "router", "Test task", "--format", "yaml"]
+            )
+            assert result.exit_code == 1
+            assert "Invalid --format" in result.stdout
+
+    def test_run_format_markdown_writes_file(self, tmp_path):
+        """--format markdown with --output writes Markdown (not JSON) to the file."""
+        out_file = tmp_path / "result.md"
+        mock_result = self._success_result()
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(
+                app,
+                ["run", "router", "Test task", "--format", "markdown", "-o", str(out_file)],
+            )
+            assert result.exit_code == 0
+            assert out_file.exists()
+            content = out_file.read_text()
+            assert content.startswith("# Council Result: SUCCESS")
+            assert "## Metrics" in content
+
+    def test_run_config_output_format_markdown(self):
+        """config output_format: markdown renders Markdown when no CLI flag is given."""
+        mock_result = self._success_result()
+
+        with (
+            patch("llm_council.Council") as mock_council_class,
+            patch("asyncio.run") as mock_run,
+            patch(
+                "llm_council.cli.main._load_config_defaults",
+                return_value={"output_format": "markdown"},
+            ),
+        ):
+            mock_council_class.return_value = MagicMock()
+            mock_run.return_value = mock_result
+
+            result = runner.invoke(app, ["run", "router", "Test task"])
+            assert result.exit_code == 0
+            assert "# Council Result: SUCCESS" in result.stdout
+
+
 class TestCLIContextMetadata:
     """Tests for file-ingestion metadata passed into council runs."""
 
