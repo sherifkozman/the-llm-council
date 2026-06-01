@@ -100,10 +100,10 @@ def compile_request_for_provider(
 
         if compiled.reasoning and compiled.reasoning.enabled:
             if _openai_supports_reasoning(model):
-                if compiled.reasoning.effort == "none" and model.startswith(REASONING_MODEL_PREFIXES):
-                    update(
-                        reasoning=compiled.reasoning.model_copy(update={"effort": "medium"})
-                    )
+                if compiled.reasoning.effort == "none" and model.startswith(
+                    REASONING_MODEL_PREFIXES
+                ):
+                    update(reasoning=compiled.reasoning.model_copy(update={"effort": "medium"}))
                     decide(
                         "reasoning.effort",
                         "transformed",
@@ -144,9 +144,14 @@ def compile_request_for_provider(
         if compiled.tool_choice is not None:
             update(tool_choice=None)
             decide("tool_choice", "dropped", "Anthropic adapter does not support tool_choice")
-        if compiled.reasoning and compiled.reasoning.enabled and compiled.temperature not in (
-            None,
-            1,
+        if (
+            compiled.reasoning
+            and compiled.reasoning.enabled
+            and compiled.temperature
+            not in (
+                None,
+                1,
+            )
         ):
             update(temperature=1.0)
             decide(
@@ -169,7 +174,11 @@ def compile_request_for_provider(
         if compiled.tool_choice is not None:
             update(tool_choice=None)
             decide("tool_choice", "dropped", "Gemini API adapter does not support tool_choice")
-        if compiled.reasoning and compiled.reasoning.enabled and compiled.reasoning.effort is not None:
+        if (
+            compiled.reasoning
+            and compiled.reasoning.enabled
+            and compiled.reasoning.effort is not None
+        ):
             update(reasoning=compiled.reasoning.model_copy(update={"effort": None}))
             decide("reasoning.effort", "ignored", "Gemini uses thinking_level/budget, not effort")
         if compiled.structured_output:
@@ -213,11 +222,17 @@ def compile_request_for_provider(
         else:
             if compiled.tools:
                 update(tools=None)
-                decide("tools", "dropped", "Vertex Gemini path does not yet forward tool definitions")
+                decide(
+                    "tools", "dropped", "Vertex Gemini path does not yet forward tool definitions"
+                )
             if compiled.tool_choice is not None:
                 update(tool_choice=None)
                 decide("tool_choice", "dropped", "Vertex Gemini path does not support tool_choice")
-            if compiled.reasoning and compiled.reasoning.enabled and compiled.reasoning.effort is not None:
+            if (
+                compiled.reasoning
+                and compiled.reasoning.enabled
+                and compiled.reasoning.effort is not None
+            ):
                 update(reasoning=compiled.reasoning.model_copy(update={"effort": None}))
                 decide(
                     "reasoning.effort",
@@ -343,6 +358,8 @@ def _drop_cli_only_options(
             "dropped",
             f"{provider_label} does not support structured output",
         )
+
+
 def _openai_supports_structured_output(model: str) -> bool:
     return model in OPENAI_STRUCTURED_OUTPUT_MODELS or any(
         model.startswith(prefix) for prefix in OPENAI_STRUCTURED_OUTPUT_MODEL_PREFIXES

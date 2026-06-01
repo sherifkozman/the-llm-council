@@ -507,13 +507,9 @@ class TestOrchestratorValidation:
             orch = Orchestrator(providers=["vertex-ai"], config=config)
 
         assert orch._provider_request_timeout_seconds("draft", provider_name="vertex-ai") == 59.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="vertex-ai") == 45.0
         assert (
-            orch._provider_request_timeout_seconds("critique", provider_name="vertex-ai")
-            == 45.0
-        )
-        assert (
-            orch._provider_request_timeout_seconds("synthesis", provider_name="vertex-ai")
-            == 59.0
+            orch._provider_request_timeout_seconds("synthesis", provider_name="vertex-ai") == 59.0
         )
         assert orch._provider_request_timeout_seconds("draft", provider_name="gemini") == 59.0
         assert orch._provider_request_timeout_seconds("critique", provider_name="gemini") == 45.0
@@ -528,8 +524,12 @@ class TestOrchestratorValidation:
             orch = Orchestrator(providers=["gemini-cli"], config=config)
 
         assert orch._provider_request_timeout_seconds("draft", provider_name="gemini-cli") == 90.0
-        assert orch._provider_request_timeout_seconds("critique", provider_name="gemini-cli") == 60.0
-        assert orch._provider_request_timeout_seconds("synthesis", provider_name="gemini-cli") == 119.0
+        assert (
+            orch._provider_request_timeout_seconds("critique", provider_name="gemini-cli") == 60.0
+        )
+        assert (
+            orch._provider_request_timeout_seconds("synthesis", provider_name="gemini-cli") == 119.0
+        )
 
     def test_bounded_runtime_profile_allows_longer_openai_and_claude_caps(self):
         """OpenAI and Claude get larger bounded caps than the generic profile defaults."""
@@ -1116,9 +1116,10 @@ class TestOrchestratorRuntimeTruthfulness:
         assert decisions["vertex-ai"]["strategy"] == "chunked_context"
         assert decisions["openrouter"]["estimate_method"].startswith("chars_div_4")
         assert decisions["vertex-ai"]["estimate_method"].startswith("chars_div_3.6")
-        assert decisions["openrouter"]["safe_envelope_tokens"] < decisions["vertex-ai"][
-            "safe_envelope_tokens"
-        ]
+        assert (
+            decisions["openrouter"]["safe_envelope_tokens"]
+            < decisions["vertex-ai"]["safe_envelope_tokens"]
+        )
         assert preflight["request_strategy"] == "chunked_context"
 
     def test_prepare_run_warns_when_budget_policy_falls_back_to_default(self):
@@ -1233,7 +1234,9 @@ class TestOrchestratorRuntimeTruthfulness:
             "queue_wait_risk",
         }
         assert orch._execution_plan["draft_execution"]["estimate_method"].startswith("chars_div_4")
-        assert orch._execution_plan["draft_budget_decisions"]["openrouter"]["minimum_chunk_count"] >= 2
+        assert (
+            orch._execution_plan["draft_budget_decisions"]["openrouter"]["minimum_chunk_count"] >= 2
+        )
 
     @pytest.mark.asyncio
     async def test_chunked_openrouter_later_phases_use_normalized_handoff(self):
@@ -1574,8 +1577,7 @@ class TestOrchestratorRuntimeTruthfulness:
         assert result.data["recommendations"]
         assert result.data["issues"][0]["location"]["file"].startswith("docs/research/plan.md")
         assert any(
-            "used conservative reviewer fallback built from chunked draft evidence"
-            in error
+            "used conservative reviewer fallback built from chunked draft evidence" in error
             for error in (result.errors or [])
         )
 
@@ -1623,7 +1625,9 @@ class TestOrchestratorRuntimeTruthfulness:
             orch = Orchestrator(providers=["openrouter"], config=config)
 
         orch._execution_plan = {}
-        orch._provider_init_errors["openrouter"] = "The operation did not complete (read) (_ssl.c:2588)"
+        orch._provider_init_errors["openrouter"] = (
+            "The operation did not complete (read) (_ssl.c:2588)"
+        )
 
         restored = orch._restore_transient_draft_providers(
             {"openrouter": "draft text"},
@@ -1680,7 +1684,10 @@ class TestOrchestratorRuntimeTruthfulness:
         assert "=== FILE:" not in critique_prompt
         assert "=== FILE:" not in synthesis_prompt
         assert orch._execution_plan is not None
-        assert orch._execution_plan["phase_prompt_metrics"]["synthesis"][0]["structured_output"] is True
+        assert (
+            orch._execution_plan["phase_prompt_metrics"]["synthesis"][0]["structured_output"]
+            is True
+        )
 
     @pytest.mark.asyncio
     async def test_run_continues_without_critique_when_critique_fails(self):

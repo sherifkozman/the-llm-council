@@ -58,9 +58,11 @@ def _schema_is_strict_compatible(schema: Any) -> bool:
     properties = schema.get("properties")
     if schema_type == "object" and isinstance(properties, dict) and properties:
         required = schema.get("required")
-        required_set = {
-            item for item in required if isinstance(item, str)
-        } if isinstance(required, list) else set()
+        required_set = (
+            {item for item in required if isinstance(item, str)}
+            if isinstance(required, list)
+            else set()
+        )
         if required_set != set(properties):
             return False
     if schema_type == "object" and schema.get("additionalProperties") is not False:

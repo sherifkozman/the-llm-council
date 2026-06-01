@@ -81,21 +81,103 @@ _LARGE_SINGLE_RUN_WARNING_TOKENS = 12_000
 _DEFAULT_ESTIMATE_METHOD = "chars_div_4_padded"
 _PHASE_PROMPT_PROFILES: dict[str, list[dict[str, int | None]]] = {
     "critique": [
-        {"draft_limit": 1_800, "excerpt_limit": 320, "max_sources": 2, "max_findings": 5, "critique_limit": None},
-        {"draft_limit": 1_200, "excerpt_limit": 220, "max_sources": 2, "max_findings": 4, "critique_limit": None},
-        {"draft_limit": 800, "excerpt_limit": 160, "max_sources": 1, "max_findings": 3, "critique_limit": None},
-        {"draft_limit": 500, "excerpt_limit": 120, "max_sources": 1, "max_findings": 2, "critique_limit": None},
-        {"draft_limit": 300, "excerpt_limit": 80, "max_sources": 0, "max_findings": 2, "critique_limit": None},
+        {
+            "draft_limit": 1_800,
+            "excerpt_limit": 320,
+            "max_sources": 2,
+            "max_findings": 5,
+            "critique_limit": None,
+        },
+        {
+            "draft_limit": 1_200,
+            "excerpt_limit": 220,
+            "max_sources": 2,
+            "max_findings": 4,
+            "critique_limit": None,
+        },
+        {
+            "draft_limit": 800,
+            "excerpt_limit": 160,
+            "max_sources": 1,
+            "max_findings": 3,
+            "critique_limit": None,
+        },
+        {
+            "draft_limit": 500,
+            "excerpt_limit": 120,
+            "max_sources": 1,
+            "max_findings": 2,
+            "critique_limit": None,
+        },
+        {
+            "draft_limit": 300,
+            "excerpt_limit": 80,
+            "max_sources": 0,
+            "max_findings": 2,
+            "critique_limit": None,
+        },
     ],
     "synthesis": [
-        {"draft_limit": 1_200, "excerpt_limit": 220, "max_sources": 2, "max_findings": 3, "critique_limit": 12_000},
-        {"draft_limit": 900, "excerpt_limit": 160, "max_sources": 1, "max_findings": 3, "critique_limit": 8_000},
-        {"draft_limit": 650, "excerpt_limit": 120, "max_sources": 1, "max_findings": 2, "critique_limit": 5_000},
-        {"draft_limit": 450, "excerpt_limit": 80, "max_sources": 1, "max_findings": 2, "critique_limit": 3_000},
-        {"draft_limit": 300, "excerpt_limit": 0, "max_sources": 0, "max_findings": 1, "critique_limit": 1_800},
-        {"draft_limit": 220, "excerpt_limit": 0, "max_sources": 0, "max_findings": 1, "critique_limit": 1_200},
-        {"draft_limit": 0, "excerpt_limit": 0, "max_sources": 0, "max_findings": 0, "critique_limit": 1_800, "omit_drafts": 1, "omit_context": 1},
-        {"draft_limit": 0, "excerpt_limit": 0, "max_sources": 0, "max_findings": 0, "critique_limit": 1_000, "omit_drafts": 1, "omit_context": 1},
+        {
+            "draft_limit": 1_200,
+            "excerpt_limit": 220,
+            "max_sources": 2,
+            "max_findings": 3,
+            "critique_limit": 12_000,
+        },
+        {
+            "draft_limit": 900,
+            "excerpt_limit": 160,
+            "max_sources": 1,
+            "max_findings": 3,
+            "critique_limit": 8_000,
+        },
+        {
+            "draft_limit": 650,
+            "excerpt_limit": 120,
+            "max_sources": 1,
+            "max_findings": 2,
+            "critique_limit": 5_000,
+        },
+        {
+            "draft_limit": 450,
+            "excerpt_limit": 80,
+            "max_sources": 1,
+            "max_findings": 2,
+            "critique_limit": 3_000,
+        },
+        {
+            "draft_limit": 300,
+            "excerpt_limit": 0,
+            "max_sources": 0,
+            "max_findings": 1,
+            "critique_limit": 1_800,
+        },
+        {
+            "draft_limit": 220,
+            "excerpt_limit": 0,
+            "max_sources": 0,
+            "max_findings": 1,
+            "critique_limit": 1_200,
+        },
+        {
+            "draft_limit": 0,
+            "excerpt_limit": 0,
+            "max_sources": 0,
+            "max_findings": 0,
+            "critique_limit": 1_800,
+            "omit_drafts": 1,
+            "omit_context": 1,
+        },
+        {
+            "draft_limit": 0,
+            "excerpt_limit": 0,
+            "max_sources": 0,
+            "max_findings": 0,
+            "critique_limit": 1_000,
+            "omit_drafts": 1,
+            "omit_context": 1,
+        },
     ],
 }
 _STOPWORDS = frozenset(
@@ -839,9 +921,11 @@ class Orchestrator:
                     "You are the synthesizer. Combine drafts and critique into a single response. "
                     "Return ONLY valid JSON that matches the provided schema."
                 )
-                supports_structured_output = bool(schema) and await adapter.supports(
-                    "structured_output"
-                ) and not force_inline_schema
+                supports_structured_output = (
+                    bool(schema)
+                    and await adapter.supports("structured_output")
+                    and not force_inline_schema
+                )
                 use_raw_drafts = bool(errors) and any(
                     handoff.get("findings") for handoff in self._draft_handoffs.values()
                 )
@@ -849,25 +933,24 @@ class Orchestrator:
                     provider_name=provider_name,
                     phase="synthesis",
                     system_prompt=system_prompt,
-                    prompt_builder=lambda profile, *,
-                    _errors=tuple(errors),
-                    _use_raw_drafts=use_raw_drafts,
-                    _inline_schema=not supports_structured_output: self._format_synthesis_prompt(
-                        task=self._task,
-                        drafts=drafts,
-                        critique=critique,
-                        schema=schema,
-                        errors=_errors,
-                        context_override=self._phase_context_override,
-                        use_raw_drafts=_use_raw_drafts,
-                        draft_limit=profile.get("draft_limit"),
-                        excerpt_limit=int(profile.get("excerpt_limit") or 320),
-                        max_sources=profile.get("max_sources"),
-                        max_findings=profile.get("max_findings"),
-                        critique_limit=profile.get("critique_limit"),
-                        omit_drafts=bool(profile.get("omit_drafts")),
-                        inline_schema=_inline_schema,
-                        omit_context=bool(profile.get("omit_context")),
+                    prompt_builder=lambda profile, *, _errors=tuple(errors), _use_raw_drafts=use_raw_drafts, _inline_schema=not supports_structured_output: (
+                        self._format_synthesis_prompt(
+                            task=self._task,
+                            drafts=drafts,
+                            critique=critique,
+                            schema=schema,
+                            errors=_errors,
+                            context_override=self._phase_context_override,
+                            use_raw_drafts=_use_raw_drafts,
+                            draft_limit=profile.get("draft_limit"),
+                            excerpt_limit=int(profile.get("excerpt_limit") or 320),
+                            max_sources=profile.get("max_sources"),
+                            max_findings=profile.get("max_findings"),
+                            critique_limit=profile.get("critique_limit"),
+                            omit_drafts=bool(profile.get("omit_drafts")),
+                            inline_schema=_inline_schema,
+                            omit_context=bool(profile.get("omit_context")),
+                        )
                     ),
                 )
 
@@ -1660,7 +1743,9 @@ class Orchestrator:
             system_prompt = self._system_prompt
             user_prompt = self._format_draft_prompt(self._task)
             decisions = {
-                provider_name: self._draft_budget_decision(provider_name, system_prompt, user_prompt)
+                provider_name: self._draft_budget_decision(
+                    provider_name, system_prompt, user_prompt
+                )
                 for provider_name in self._provider_names
             }
         return max(
@@ -1807,7 +1892,9 @@ class Orchestrator:
         phase_timeout = self._provider_request_timeout_seconds(phase, provider_name=provider_name)
         queue_headroom = float(budget["queue_wait_headroom_seconds"][phase])
         safe_envelope = int(budget["safe_input_tokens"][phase])
-        timeout_factor = max(min((phase_timeout - queue_headroom) / max(phase_timeout, 1.0), 1.0), 0.55)
+        timeout_factor = max(
+            min((phase_timeout - queue_headroom) / max(phase_timeout, 1.0), 1.0), 0.55
+        )
         effective_envelope = max(int(safe_envelope * timeout_factor), 1)
         estimated_tokens, estimate_method, _padding = self._estimate_tokens_for_provider(
             provider_name, system_prompt, user_prompt
@@ -1839,7 +1926,9 @@ class Orchestrator:
 
         if self._execution_plan is None:
             return
-        entries = self._execution_plan.setdefault("phase_prompt_compaction", {}).setdefault(phase, [])
+        entries = self._execution_plan.setdefault("phase_prompt_compaction", {}).setdefault(
+            phase, []
+        )
         entries.append(dict(decision))
 
     def _prompt_profile_candidates(self, phase: str) -> list[dict[str, int | None]]:
@@ -1898,7 +1987,9 @@ class Orchestrator:
             return self._prepared_reference_context
         return self._config.system_context or ""
 
-    def _extract_file_context_blocks_from_text(self, context: str) -> tuple[str, list[tuple[str, str]]]:
+    def _extract_file_context_blocks_from_text(
+        self, context: str
+    ) -> tuple[str, list[tuple[str, str]]]:
         """Parse CLI-injected file blocks from arbitrary reference context."""
 
         if not context:
@@ -2021,7 +2112,9 @@ class Orchestrator:
         anchor = re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
         return anchor or None
 
-    def _slice_markdown_block(self, path: str, content: str) -> tuple[str, list[dict[str, Any]], bool]:
+    def _slice_markdown_block(
+        self, path: str, content: str
+    ) -> tuple[str, list[dict[str, Any]], bool]:
         """Prepare a markdown block by keeping the most relevant sections."""
 
         keywords = self._task_keywords()
@@ -2176,7 +2269,9 @@ class Orchestrator:
             provider_name, system_prompt, user_prompt
         )
         safe_envelope = int(budget["safe_input_tokens"]["draft"])
-        timeout_factor = max(min((phase_timeout - queue_headroom) / max(phase_timeout, 1.0), 1.0), 0.55)
+        timeout_factor = max(
+            min((phase_timeout - queue_headroom) / max(phase_timeout, 1.0), 1.0), 0.55
+        )
         effective_envelope = max(int(safe_envelope * timeout_factor), 1)
 
         forced_reason = "none"
@@ -2216,7 +2311,10 @@ class Orchestrator:
                 f"Large bounded draft for {provider_name} remained single-run "
                 f"({estimated_tokens} estimated tokens; {len(blocks)} file block(s))."
             )
-        if budget["budget_source"] == "default" and self._provider_identity(provider_name) != "default":
+        if (
+            budget["budget_source"] == "default"
+            and self._provider_identity(provider_name) != "default"
+        ):
             warnings.append(
                 f"Using default draft budget fallback for provider identity "
                 f"'{self._provider_identity(provider_name)}'."
@@ -2246,9 +2344,7 @@ class Orchestrator:
             "evidence_pack_chars": len(self._prepared_reference_context or ""),
         }
 
-    def _evidence_sources_for_chunk(
-        self, chunk: Sequence[tuple[str, str]]
-    ) -> list[dict[str, Any]]:
+    def _evidence_sources_for_chunk(self, chunk: Sequence[tuple[str, str]]) -> list[dict[str, Any]]:
         """Build anchored evidence metadata for a prepared context chunk."""
 
         sources: list[dict[str, Any]] = []
@@ -2556,9 +2652,7 @@ class Orchestrator:
             summary_basis = "; ".join(issue["description"] for issue in issues[:2])
         else:
             verdict = "approve_with_comments"
-            summary_basis = (
-                "Draft findings were incomplete, so this result is based on bounded evidence fallback."
-            )
+            summary_basis = "Draft findings were incomplete, so this result is based on bounded evidence fallback."
 
         review_summary = self._compact_text(
             f"Fallback reviewer synthesis based on bounded chunk evidence: {summary_basis}",
@@ -2578,7 +2672,9 @@ class Orchestrator:
             "review_type": "code_quality",
             "confidence": 58 if issues else 42,
             "blocking_issues": [
-                issue["description"] for issue in issues if issue["severity"] in {"critical", "high"}
+                issue["description"]
+                for issue in issues
+                if issue["severity"] in {"critical", "high"}
             ][:5],
         }
 
@@ -2666,7 +2762,11 @@ class Orchestrator:
             if len(stripped) < 20:
                 continue
             lower = stripped.lower()
-            if lower.startswith("chunk ") or lower.startswith("provider:") or lower.startswith("source anchors:"):
+            if (
+                lower.startswith("chunk ")
+                or lower.startswith("provider:")
+                or lower.startswith("source anchors:")
+            ):
                 continue
             if stripped not in candidates:
                 candidates.append(stripped)
@@ -2690,7 +2790,10 @@ class Orchestrator:
         """Infer a reviewer issue category from issue text."""
 
         lowered = description.lower()
-        if any(token in lowered for token in ("security", "auth", "exposure", "injection", "vulnerability")):
+        if any(
+            token in lowered
+            for token in ("security", "auth", "exposure", "injection", "vulnerability")
+        ):
             return "security"
         if any(token in lowered for token in ("performance", "latency", "slow", "timeout")):
             return "performance"
@@ -2698,7 +2801,10 @@ class Orchestrator:
             return "testing"
         if any(token in lowered for token in ("doc", "documentation", "readme")):
             return "documentation"
-        if any(token in lowered for token in ("logic", "contradict", "ambigu", "overclaim", "comparable")):
+        if any(
+            token in lowered
+            for token in ("logic", "contradict", "ambigu", "overclaim", "comparable")
+        ):
             return "logic"
         if any(token in lowered for token in ("maintain", "refactor", "complex")):
             return "maintainability"
@@ -2731,11 +2837,7 @@ class Orchestrator:
             if not recommendation or recommendation in seen:
                 continue
             seen.add(recommendation)
-            priority = (
-                "must_fix"
-                if issue.get("severity") in {"critical", "high"}
-                else "should_fix"
-            )
+            priority = "must_fix" if issue.get("severity") in {"critical", "high"} else "should_fix"
             recommendations.append(
                 {
                     "priority": priority,
@@ -2927,9 +3029,7 @@ class Orchestrator:
         if self._execution_plan is not None:
             budgets = self._execution_plan.setdefault("draft_budget_decisions", {})
             budgets[provider_name] = {
-                key: value
-                for key, value in decision.items()
-                if key not in {"chunks"}
+                key: value for key, value in decision.items() if key not in {"chunks"}
             }
             if decision["warnings"]:
                 self._execution_plan.setdefault("warnings", []).extend(decision["warnings"])
@@ -3009,7 +3109,11 @@ class Orchestrator:
                 "has_file_blocks": has_file_blocks,
             },
             "provider_decisions": provider_decisions,
-            "warnings": [warning for decision in provider_decisions.values() for warning in decision["warnings"]],
+            "warnings": [
+                warning
+                for decision in provider_decisions.values()
+                for warning in decision["warnings"]
+            ],
         }
 
     @contextmanager

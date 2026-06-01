@@ -114,9 +114,7 @@ def _normalize_usage(raw_stats: Any) -> dict[str, int] | None:
 
     if not isinstance(raw_stats, dict):
         return None
-    prompt_tokens = int(
-        raw_stats.get("inputTokenCount", raw_stats.get("input_tokens", 0)) or 0
-    )
+    prompt_tokens = int(raw_stats.get("inputTokenCount", raw_stats.get("input_tokens", 0)) or 0)
     completion_tokens = int(
         raw_stats.get("outputTokenCount", raw_stats.get("output_tokens", 0)) or 0
     )
@@ -229,7 +227,9 @@ class GeminiCLIProvider(ProviderAdapter):
                 value = os.environ.get(key)
                 if value:
                     env[key] = value
-            has_vertex_project = bool(env.get("GOOGLE_CLOUD_PROJECT") or env.get("GOOGLE_CLOUD_PROJECT_ID"))
+            has_vertex_project = bool(
+                env.get("GOOGLE_CLOUD_PROJECT") or env.get("GOOGLE_CLOUD_PROJECT_ID")
+            )
             has_vertex_location = bool(env.get("GOOGLE_CLOUD_LOCATION"))
             # Gemini CLI's Vertex path will prefer GOOGLE_API_KEY over ADC/project
             # config. Drop the API key when full Vertex project config is available
@@ -401,7 +401,9 @@ class GeminiCLIProvider(ProviderAdapter):
             try:
                 payload = _extract_json_payload(stdout_text)
                 if isinstance(payload, dict) and payload.get("error"):
-                    raise RuntimeError(f"Gemini CLI error: {_format_gemini_error(payload['error'])}")
+                    raise RuntimeError(
+                        f"Gemini CLI error: {_format_gemini_error(payload['error'])}"
+                    )
                 output = _extract_text_payload(payload)
                 if isinstance(payload, dict):
                     usage = _normalize_usage(payload.get("stats"))

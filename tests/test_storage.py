@@ -74,7 +74,9 @@ class TestArtifactStore:
             db_path=tmp_path / ".claude" / "council-ledger.db",
         )
         run = legacy_store.create_run(subagent="test", task="legacy")
-        legacy_artifact = legacy_store.store_artifact(run.run_id, "legacy content", ArtifactType.DRAFT)
+        legacy_artifact = legacy_store.store_artifact(
+            run.run_id, "legacy content", ArtifactType.DRAFT
+        )
 
         result = ArtifactStore.migrate_legacy_storage()
 
