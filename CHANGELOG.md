@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.17] - 2026-06-01
+
+### Added
+- `council run --format <json|markdown>` (alias `md`) renders council results as clean, human-readable Markdown — status heading, Output/Errors, Critique, Metrics, and Routing sections — honored for both stdout and `--output` file writes. Precedence: `--format` > `--json` > config `output_format`; default behavior (rich panel) is unchanged and `--json` now maps to `--format json`.
+
+### Changed
+- Refreshed `CLAUDE.md` to v0.7.17: documented the new `--format` option, corrected the version header, and replaced stale issue references with current state.
+
 ## [0.7.16] - 2026-04-09
 
 ### Fixed

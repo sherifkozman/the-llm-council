@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Multi-LLM Council Framework (v0.6.0) that orchestrates multiple LLM backends for adversarial debate, cross-validation, and structured decision-making. Published as `the-llm-council` on PyPI.
+Multi-LLM Council Framework (v0.7.17) that orchestrates multiple LLM backends for adversarial debate, cross-validation, and structured decision-making. Published as `the-llm-council` on PyPI.
 
 - **Python**: >=3.10 (tested 3.10, 3.11, 3.12)
 - **Build**: hatchling
@@ -120,7 +120,8 @@ council run <subagent> "<task>" [OPTIONS]
 | `--context, --system` | Additional system context/instructions |
 | `--schema` | Custom output schema JSON file |
 | `--no-artifacts` | Disable artifact storage |
-| `--json` | Output structured JSON |
+| `--format` | Output format: `json` or `markdown` (alias `md`). Renders to clean human-readable Markdown on stdout and to `--output` files. Precedence: `--format` > `--json` > config `output_format`; default keeps the rich panel |
+| `--json` | Output structured JSON (shorthand for `--format json`) |
 | `--verbose, -v` | Show detailed output with metrics |
 | `--dry-run` | Show what would run without executing |
 
@@ -295,15 +296,22 @@ pip install -e ".[all]"
 
 ## Known Issues
 
-See `gh issue list` for current open issues. Key themes:
-- Provider consistency: env var fallback only works for vertex-ai (#27)
+No open issues are currently tracked. Check `gh issue list` (or the GitHub repo)
+for the latest. Standing maintenance debt to be aware of:
+- **mypy not clean**: ~78 structural errors remain (typer `untyped-decorator`
+  pattern in `cli/main.py`, missing third-party stubs e.g. `types-PyYAML`).
+  Not regressions, but `mypy --strict` is not yet green.
 
-### Resolved in v0.6.2
-- ~~Config wiring: `providers[].default_model` not passed to provider constructors (#26, #28)~~ — Fixed in v0.6.0
-- ~~Model defaults: hardcoded Gemini model name outdated (#30)~~ — Fixed in v0.6.0
-- ~~File injection: `--files` via wrapper not reaching models (#31)~~ — Native `--files` flag added in v0.6.2
-- ~~Config defaults: no `output_format` config option (#29)~~ — Fixed in v0.6.0
-- ~~`council version` shows stale version (#35)~~ — Fixed in v0.6.2
+### Resolved (historical, v0.6.x)
+- ~~Config wiring: `providers[].default_model` not passed to provider constructors~~ — Fixed in v0.6.0
+- ~~Model defaults: hardcoded Gemini model name outdated~~ — Fixed in v0.6.0
+- ~~File injection: `--files` via wrapper not reaching models~~ — Native `--files` flag added in v0.6.2
+- ~~Config defaults: no `output_format` config option~~ — Fixed in v0.6.0
+- ~~`council version` shows stale version~~ — Fixed in v0.6.2
+
+### Recent additions (v0.7.x)
+- Human-readable Markdown output via `council run --format markdown` (and the
+  `output_format` config key); honored for both stdout and `--output` writes.
 
 ## Troubleshooting
 

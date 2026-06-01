@@ -296,6 +296,93 @@ def _set_nested_value(data: dict[str, Any], key: str, value: Any) -> None:
     current[parts[-1]] = final_value
 
 
+def _render_result_markdown(
+    result: Any,
+    *,
+    resolved_mode: str | None = None,
+    provider_list: list[str] | None = None,
+    include_metrics: bool = True,
+) -> str:
+    """Render a CouncilResult as clean, human-readable Markdown.
+
+    Covers the council output (or validation errors), the adversarial critique,
+    and a metrics summary. Used both for stdout rendering and ``--output`` writes
+    when ``--format markdown`` is requested.
+    """
+    lines: list[str] = []
+    success = bool(getattr(result, "success", False))
+    status = "SUCCESS" if success else "FAILED"
+    lines.append(f"# Council Result: {status}")
+    lines.append("")
+
+    if success:
+        output = getattr(result, "output", None)
+        lines.append("## Output")
+        lines.append("")
+        if output:
+            lines.append("```json")
+            lines.append(json.dumps(output, indent=2, default=str))
+            lines.append("```")
+        else:
+            lines.append("_No output produced._")
+        lines.append("")
+    else:
+        lines.append("## Errors")
+        lines.append("")
+        errors = getattr(result, "validation_errors", None) or []
+        top_error = getattr(result, "error", None)
+        if top_error:
+            errors = [top_error, *errors]
+        if errors:
+            for err in errors:
+                lines.append(f"- {err}")
+        else:
+            lines.append("- Unknown error")
+        lines.append("")
+
+    critique = getattr(result, "critique", None)
+    if critique:
+        lines.append("## Critique")
+        lines.append("")
+        lines.append(str(critique).strip())
+        lines.append("")
+
+    if include_metrics:
+        lines.append("## Metrics")
+        lines.append("")
+        lines.append(f"- Duration: {getattr(result, 'duration_ms', 0)}ms")
+        lines.append(f"- Synthesis attempts: {getattr(result, 'synthesis_attempts', 1)}")
+        cost_estimate = getattr(result, "cost_estimate", None)
+        if cost_estimate is not None:
+            cost = getattr(cost_estimate, "estimated_cost_usd", None)
+            if cost is not None:
+                lines.append(f"- Estimated cost: ${cost:.4f}")
+        run_id = getattr(result, "run_id", None)
+        if run_id:
+            lines.append(f"- Run ID: {run_id}")
+
+        execution_plan = getattr(result, "execution_plan", None) or {}
+        plan_mode = execution_plan.get("mode") or resolved_mode
+        if plan_mode:
+            lines.append(f"- Mode: {plan_mode}")
+        plan_providers = execution_plan.get("providers") or provider_list
+        if plan_providers:
+            lines.append(f"- Providers: {', '.join(plan_providers)}")
+        lines.append("")
+
+    routing_decision = getattr(result, "routing_decision", None)
+    if getattr(result, "routed", False) and routing_decision:
+        lines.append("## Routing")
+        lines.append("")
+        routing_mode = routing_decision.get("mode")
+        mode_suffix = f" --mode {routing_mode}" if isinstance(routing_mode, str) else ""
+        lines.append(f"- Routed to: {routing_decision.get('subagent_to_run')}{mode_suffix}")
+        lines.append(f"- Router reasoning: {routing_decision.get('reasoning') or 'n/a'}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 @app.command()
 def run(
     subagent: Annotated[str, typer.Argument(help="Subagent type (drafter, critic, planner, etc.)")],
@@ -320,6 +407,14 @@ def run(
         bool,
         typer.Option("--json", help="Output as JSON"),
     ] = False,
+    output_format: Annotated[
+        str | None,
+        typer.Option(
+            "--format",
+            help="Output format: 'json' or 'markdown' (alias 'md'). "
+            "Default preserves the rich/JSON behavior.",
+        ),
+    ] = None,
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Show detailed output"),
@@ -484,9 +579,35 @@ def run(
     # Load defaults from config file
     config_defaults = _load_config_defaults()
 
-    # Apply output_format default from config (CLI flag takes precedence)
-    if not output_json:
-        output_json = config_defaults.get("output_format") == "json"
+    # Resolve the effective output format. Precedence:
+    #   1. --format CLI flag (json | markdown/md)
+    #   2. --json flag (back-compat shorthand for --format json)
+    #   3. config output_format (json | markdown/md | rich)
+    # Default preserves the existing rich/JSON behavior.
+    _format_aliases = {"json": "json", "markdown": "markdown", "md": "markdown"}
+    markdown_output = False
+    if output_format is not None:
+        normalized_format = _format_aliases.get(output_format.strip().lower())
+        if normalized_format is None:
+            console.print(
+                f"[red]Error:[/red] Invalid --format '{output_format}'. "
+                "Valid values: json, markdown (alias: md)."
+            )
+            raise typer.Exit(1)
+        if normalized_format == "json":
+            output_json = True
+        else:
+            markdown_output = True
+            output_json = False
+    elif output_json:
+        # Explicit --json flag already enables JSON output.
+        pass
+    else:
+        config_format = (config_defaults.get("output_format") or "").strip().lower()
+        if config_format == "json":
+            output_json = True
+        elif _format_aliases.get(config_format) == "markdown":
+            markdown_output = True
 
     # Resolve agent aliases
     resolved_agent, resolved_mode, was_deprecated = _resolve_agent_alias(subagent, mode)
@@ -593,13 +714,22 @@ def run(
             council.run(task=task_text, subagent=resolved_agent, follow_router=route)
         )
 
-        output_payload = json.dumps(result.model_dump(), indent=2, default=str)
+        if markdown_output:
+            output_payload = _render_result_markdown(
+                result,
+                resolved_mode=resolved_mode,
+                provider_list=provider_list,
+            )
+        else:
+            output_payload = json.dumps(result.model_dump(), indent=2, default=str)
 
         # Write to file or stdout
         if output_file:
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(output_payload)
             _print(f"[green]Output written to {output_file}[/green]")
+        elif markdown_output:
+            print(output_payload, end="" if output_payload.endswith("\n") else "\n")
         elif output_json:
             print(output_payload)
         else:
