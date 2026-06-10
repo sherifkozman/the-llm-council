@@ -66,6 +66,11 @@ routed handoff, capability planning, and deterministic eval tooling. Those
 capabilities materially extend the package runtime and make the public surface
 more explicit for planning, review, security, and research workflows.
 
+The `0.7.18` release adds provider-specific prompt-cache support. Cache request
+controls are adapter-owned, cache telemetry is normalized when providers return
+it, and Gemini/Vertex cached-content resources can be created, refreshed, and
+cleaned up with explicit lifecycle metadata.
+
 ## Why Use a Council?
 
 Single-model outputs have blind spots. By running multiple models in parallel and having them critique each other, the council:
@@ -84,6 +89,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 | **Adversarial Critique** | Built-in critique phase identifies weaknesses and blind spots |
 | **Schema Validation** | JSON schema validation with automatic retry for structured outputs |
 | **Provider Agnostic** | Swap between OpenRouter, direct APIs, or CLI-based providers |
+| **Prompt Cache Support** | Anthropic/OpenRouter controls, OpenAI telemetry, and Gemini/Vertex cached-content lifecycle handling |
 | **Deep Doctor** | `council doctor --deep` checks real non-interactive generation readiness |
 | **Graceful Degradation** | Automatic retry, fallback, and skip strategies for failures |
 | **Artifact Store** | Persistent storage of drafts with tiered summarization |

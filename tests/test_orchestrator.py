@@ -227,6 +227,97 @@ class TestCostEstimate:
         assert estimate.estimated_cost_usd == 0.0
 
 
+class TestCacheUsageReporting:
+    """Tests for normalized cache usage in execution metadata."""
+
+    def test_record_usage_adds_cache_summary_without_changing_token_totals(self):
+        orchestrator = Orchestrator(
+            providers=[],
+            config=OrchestratorConfig(enable_artifacts=False, enable_graceful_degradation=False),
+        )
+        orchestrator._execution_plan = {}
+
+        orchestrator._record_usage(
+            "anthropic",
+            {
+                "prompt_tokens": 130,
+                "completion_tokens": 5,
+                "total_tokens": 135,
+                "cache_read_tokens": 100,
+                "cache_creation_tokens": 20,
+                "cache_creation_5m_tokens": 12,
+            },
+        )
+
+        assert orchestrator._input_tokens["anthropic"] == 130
+        assert orchestrator._output_tokens["anthropic"] == 5
+        assert orchestrator._execution_plan["cache_usage"]["anthropic"] == {
+            "cache_read_tokens": 100,
+            "cache_creation_tokens": 20,
+            "cache_creation_5m_tokens": 12,
+        }
+
+    def test_record_usage_ignores_missing_zero_and_non_int_cache_values(self):
+        orchestrator = Orchestrator(
+            providers=[],
+            config=OrchestratorConfig(enable_artifacts=False, enable_graceful_degradation=False),
+        )
+        orchestrator._execution_plan = {}
+
+        orchestrator._record_usage(
+            "openai",
+            {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": "bad",
+            },
+        )
+
+        assert "cache_usage" not in orchestrator._execution_plan
+
+    def test_prompt_cache_observation_distinguishes_requested_forwarded_and_observed(self):
+        orchestrator = Orchestrator(
+            providers=[],
+            config=OrchestratorConfig(enable_artifacts=False, enable_graceful_degradation=False),
+        )
+        orchestrator._execution_plan = {}
+
+        orchestrator._record_prompt_cache_observation(
+            phase="draft",
+            provider_name="openrouter",
+            requested=True,
+            forwarded=False,
+            usage=None,
+        )
+        orchestrator._record_prompt_cache_observation(
+            phase="draft",
+            provider_name="anthropic",
+            requested=True,
+            forwarded=True,
+            usage={"cache_read_tokens": 100},
+        )
+
+        assert orchestrator._execution_plan["prompt_cache_observations"]["draft"] == [
+            {
+                "provider": "openrouter",
+                "requested": True,
+                "forwarded": False,
+                "metrics_available": False,
+                "observed": False,
+            },
+            {
+                "provider": "anthropic",
+                "requested": True,
+                "forwarded": True,
+                "metrics_available": True,
+                "observed": True,
+                "usage": {"cache_read_tokens": 100},
+            },
+        ]
+
+
 class TestCouncilResult:
     """Tests for CouncilResult model."""
 

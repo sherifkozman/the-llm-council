@@ -33,6 +33,7 @@ FAST_MODEL = "anthropic/claude-haiku-4-5"
 REASONING_MODEL = "anthropic/claude-opus-4-6"
 CODE_MODEL = "openai/gpt-5.4"
 CRITIC_MODEL = "anthropic/claude-sonnet-4-6"
+OPENROUTER_CACHE_CONTROL_MODEL_PREFIXES = ("anthropic/",)
 logger = logging.getLogger(__name__)
 
 
@@ -97,6 +98,32 @@ def _prepare_structured_output_schema(
     if not _schema_is_strict_compatible(sanitized):
         return sanitized, False
     return sanitized, True
+
+
+def _supports_cache_control_model(model: str) -> bool:
+    """Return True when the OpenRouter route is known to support top-level cache_control."""
+
+    return model.startswith(OPENROUTER_CACHE_CONTROL_MODEL_PREFIXES)
+
+
+def _cache_control_for_request(request: GenerateRequest, model: str) -> dict[str, str] | None:
+    """Build OpenRouter top-level cache_control only for explicitly allowed routes."""
+
+    if request.prompt_cache is None or not request.prompt_cache.enabled:
+        return None
+    if not _supports_cache_control_model(model):
+        return None
+
+    cache_control = {"type": "ephemeral"}
+    if request.prompt_cache.ttl == "1h":
+        cache_control["ttl"] = "1h"
+    return cache_control
+
+
+def _positive_int(value: Any) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return 0
 
 
 class OpenRouterProvider(ProviderAdapter):
@@ -183,8 +210,9 @@ class OpenRouterProvider(ProviderAdapter):
 
     def _build_request_body(self, request: GenerateRequest) -> dict[str, Any]:
         """Convert GenerateRequest to OpenRouter API format."""
+        model = request.model or self._default_model
         body: dict[str, Any] = {
-            "model": request.model or self._default_model,
+            "model": model,
         }
 
         # Handle messages vs prompt
@@ -213,6 +241,10 @@ class OpenRouterProvider(ProviderAdapter):
             body["tools"] = list(request.tools)
         if request.tool_choice is not None:
             body["tool_choice"] = request.tool_choice
+
+        cache_control = _cache_control_for_request(request, model)
+        if cache_control is not None:
+            body["cache_control"] = cache_control
 
         # Handle structured output - transform to OpenRouter's format (OpenAI-compatible)
         # See: https://openrouter.ai/docs/guides/features/structured-outputs
@@ -364,6 +396,17 @@ class OpenRouterProvider(ProviderAdapter):
                 "completion_tokens": usage.get("completion_tokens", 0) or 0,
                 "total_tokens": usage.get("total_tokens", 0) or 0,
             }
+            prompt_token_details = usage.get("prompt_tokens_details")
+            cached_tokens = 0
+            if isinstance(prompt_token_details, dict):
+                cached_tokens = _positive_int(prompt_token_details.get("cached_tokens"))
+            else:
+                cached_tokens = _positive_int(getattr(prompt_token_details, "cached_tokens", 0))
+            cache_write_tokens = _positive_int(usage.get("cache_write_tokens"))
+            if cached_tokens:
+                usage_dict["cache_read_tokens"] = cached_tokens
+            if cache_write_tokens:
+                usage_dict["cache_creation_tokens"] = cache_write_tokens
 
         return GenerateResponse(
             text=content,
@@ -397,9 +440,7 @@ class OpenRouterProvider(ProviderAdapter):
         Returns:
             True if the capability is supported.
         """
-        if not self.supports_capability_name(capability):
-            return False
-        return getattr(self.capabilities, capability, False)
+        return self.supports_capability(capability)
 
     async def doctor(self) -> DoctorResult:
         """Perform a health check on the OpenRouter API.

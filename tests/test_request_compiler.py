@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from llm_council.providers.base import GenerateRequest, ReasoningConfig, StructuredOutputConfig
+from llm_council.providers.base import (
+    GenerateRequest,
+    PromptCacheConfig,
+    ReasoningConfig,
+    StructuredOutputConfig,
+)
 from llm_council.providers.compiler import compile_request_for_provider
 
 
@@ -97,6 +102,191 @@ class TestRequestCompiler:
         assert ("temperature", "transformed") in actions
         assert ("top_p", "dropped") in actions
         assert ("tool_choice", "dropped") in actions
+
+    def test_anthropic_keeps_automatic_prompt_cache_config(self):
+        compiled = compile_request_for_provider(
+            "anthropic",
+            GenerateRequest(
+                prompt="test",
+                model="claude-opus-4-6",
+                prompt_cache=PromptCacheConfig(ttl="1h"),
+            ),
+        )
+
+        assert compiled.request.prompt_cache is not None
+        assert compiled.request.prompt_cache.ttl == "1h"
+        actions = {(decision.option, decision.action) for decision in compiled.decisions}
+        assert ("prompt_cache", "supported") in actions
+
+    def test_non_cache_control_providers_drop_prompt_cache_config(self):
+        for provider, model in (
+            ("openai", "gpt-5.4"),
+            ("gemini", "gemini-3.1-pro-preview"),
+            ("vertex-ai", "gemini-3.1-pro-preview"),
+        ):
+            compiled = compile_request_for_provider(
+                provider,
+                GenerateRequest(
+                    prompt="test",
+                    model=model,
+                    prompt_cache=PromptCacheConfig(),
+                ),
+            )
+
+            assert compiled.request.prompt_cache is None
+            assert any(
+                decision.option == "prompt_cache" and decision.action == "dropped"
+                for decision in compiled.decisions
+            )
+
+    def test_openrouter_keeps_prompt_cache_for_anthropic_routes(self):
+        compiled = compile_request_for_provider(
+            "openrouter",
+            GenerateRequest(
+                prompt="test",
+                model="anthropic/claude-opus-4-6",
+                prompt_cache=PromptCacheConfig(ttl="1h"),
+            ),
+        )
+
+        assert compiled.request.prompt_cache is not None
+        assert compiled.request.prompt_cache.ttl == "1h"
+        assert any(
+            decision.option == "prompt_cache" and decision.action == "supported"
+            for decision in compiled.decisions
+        )
+
+    def test_openrouter_drops_prompt_cache_for_unsupported_routes(self):
+        compiled = compile_request_for_provider(
+            "openrouter",
+            GenerateRequest(
+                prompt="test",
+                model="openai/gpt-5.4",
+                prompt_cache=PromptCacheConfig(),
+            ),
+        )
+
+        assert compiled.request.prompt_cache is None
+        assert any(
+            decision.option == "prompt_cache"
+            and decision.action == "dropped"
+            and "route-dependent" in decision.detail
+            for decision in compiled.decisions
+        )
+
+    def test_openrouter_virtual_provider_names_keep_prompt_cache_for_anthropic_routes(self):
+        compiled = compile_request_for_provider(
+            "anthropic/claude-opus-4-6",
+            GenerateRequest(
+                prompt="test",
+                model="anthropic/claude-opus-4-6",
+                prompt_cache=PromptCacheConfig(),
+            ),
+        )
+
+        assert compiled.request.prompt_cache is not None
+        assert any(
+            decision.option == "prompt_cache" and decision.action == "supported"
+            for decision in compiled.decisions
+        )
+
+    def test_gemini_keeps_cached_content_prompt_cache(self):
+        compiled = compile_request_for_provider(
+            "gemini",
+            GenerateRequest(
+                prompt="test",
+                model="gemini-3.1-pro-preview",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/example",
+                ),
+            ),
+        )
+
+        assert compiled.request.prompt_cache is not None
+        assert compiled.request.prompt_cache.mode == "cached_content"
+        assert any(
+            decision.option == "prompt_cache" and decision.action == "supported"
+            for decision in compiled.decisions
+        )
+
+    def test_gemini_drops_automatic_prompt_cache_request_controls(self):
+        compiled = compile_request_for_provider(
+            "gemini",
+            GenerateRequest(
+                prompt="test",
+                model="gemini-3.1-pro-preview",
+                prompt_cache=PromptCacheConfig(),
+            ),
+        )
+
+        assert compiled.request.prompt_cache is None
+        assert any(
+            decision.option == "prompt_cache"
+            and decision.action == "dropped"
+            and "cached-content" in decision.detail
+            for decision in compiled.decisions
+        )
+
+    def test_vertex_keeps_prompt_cache_for_split_paths(self):
+        claude = compile_request_for_provider(
+            "vertex-ai",
+            GenerateRequest(
+                prompt="test",
+                model="claude-opus-4-6@20260301",
+                prompt_cache=PromptCacheConfig(),
+            ),
+        )
+        gemini = compile_request_for_provider(
+            "vertex-ai",
+            GenerateRequest(
+                prompt="test",
+                model="gemini-3.1-pro-preview",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/example",
+                ),
+            ),
+        )
+
+        assert claude.request.prompt_cache is not None
+        assert gemini.request.prompt_cache is not None
+        actions = {(decision.option, decision.action) for decision in claude.decisions}
+        assert ("prompt_cache", "supported") in actions
+        actions = {(decision.option, decision.action) for decision in gemini.decisions}
+        assert ("prompt_cache", "supported") in actions
+
+    def test_vertex_drops_incompatible_prompt_cache_modes_for_split_paths(self):
+        claude = compile_request_for_provider(
+            "vertex-ai",
+            GenerateRequest(
+                prompt="test",
+                model="claude-opus-4-6@20260301",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/example",
+                ),
+            ),
+        )
+        gemini = compile_request_for_provider(
+            "vertex-ai",
+            GenerateRequest(
+                prompt="test",
+                model="gemini-3.1-pro-preview",
+                prompt_cache=PromptCacheConfig(),
+            ),
+        )
+
+        assert claude.request.prompt_cache is None
+        assert gemini.request.prompt_cache is None
+        assert any(
+            decision.option == "prompt_cache" and decision.action == "dropped"
+            for decision in claude.decisions
+        )
+        assert any(
+            decision.option == "prompt_cache" and decision.action == "dropped"
+            for decision in gemini.decisions
+        )
 
     def test_gemini_drops_tooling_and_ignores_reasoning_effort(self):
         compiled = compile_request_for_provider(

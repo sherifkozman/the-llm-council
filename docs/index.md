@@ -9,6 +9,7 @@ The public package now supports both:
 - the core three-phase council flow
 - a mode-aware execution path with lightweight capability
   planning, routed handoff, and evaluation tooling
+- provider-specific prompt-cache controls and cache telemetry where supported
 
 ## Overview
 
@@ -53,6 +54,12 @@ Swap between providers seamlessly:
 - **Direct APIs** - Anthropic, OpenAI, and Gemini API native SDKs
 - **CLI Providers** - `codex`, `gemini-cli`, and `claude` via local CLIs
 - **Custom Providers** - Plugin architecture via Python entry points
+
+### Prompt Cache Support
+Prompt caching is provider-specific. Anthropic and eligible OpenRouter routes
+receive explicit cache controls, OpenAI exposes cache telemetry when returned by
+the API, and Gemini API / Vertex Gemini support cached-content create, TTL
+refresh, expiry handling, and best-effort cleanup.
 
 ### Deep Doctor
 `council doctor --deep` distinguishes “installed/configured” from “can answer a

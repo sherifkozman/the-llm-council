@@ -210,10 +210,23 @@ class ProviderCapabilities(BaseModel):
     max_tokens: int | None = Field(
         default=None, description="Maximum tokens per response if enforced by the provider."
     )
+    prompt_caching: Literal["none", "implicit", "explicit", "context_object", "passthrough"] = (
+        Field(
+            default="none",
+            description=(
+                "Prompt-cache support shape: none, implicit, explicit, context_object, or passthrough."
+            ),
+        )
+    )
 
 
 ProviderCapabilityName = Literal[
-    "streaming", "tool_use", "structured_output", "multimodal", "max_tokens"
+    "streaming",
+    "tool_use",
+    "structured_output",
+    "multimodal",
+    "max_tokens",
+    "prompt_caching",
 ]
 
 
@@ -248,6 +261,77 @@ class StructuredOutputConfig(BaseModel):
         default=True,
         description="Enforce strict schema adherence where supported.",
     )
+
+
+class PromptCacheConfig(BaseModel):
+    """Configuration for provider-managed prompt caching.
+
+    Automatic cache controls are used by Anthropic-style providers. Cached-content
+    mode targets Google Gemini/Vertex cached-content resources. Callers may
+    provide an existing resource name or ask the adapter to create a temporary
+    resource from explicit stable source text.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable provider-managed prompt caching for this request.",
+    )
+    mode: Literal["auto", "cached_content"] = Field(
+        default="auto",
+        description="Prompt-cache mode. cached_content requires cached_content_name.",
+    )
+    ttl: Literal["5m", "1h"] = Field(
+        default="5m",
+        description="Requested cache lifetime where supported.",
+    )
+    cached_content_name: str | None = Field(
+        default=None,
+        description="Provider cache resource name for Gemini/Vertex cached-content mode.",
+    )
+    create_if_missing: bool = Field(
+        default=False,
+        description="Create a cached-content resource when cached_content_name is absent.",
+    )
+    refresh_ttl: bool = Field(
+        default=False,
+        description="Refresh cached-content TTL before generation where supported.",
+    )
+    delete_after: bool = Field(
+        default=False,
+        description="Best-effort delete of the cached-content resource after generation.",
+    )
+    source_text: str | None = Field(
+        default=None,
+        description="Stable source text used when creating a cached-content resource.",
+    )
+    display_name: str | None = Field(
+        default=None,
+        description="Optional provider display name for created cached-content resources.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_cached_content(self) -> PromptCacheConfig:
+        if self.mode == "cached_content":
+            if self.cached_content_name and "cachedContents/" not in self.cached_content_name:
+                raise ValueError("cached_content_name must be a cachedContents resource name.")
+            if self.create_if_missing and not self.source_text:
+                raise ValueError("cached_content create_if_missing requires explicit source_text.")
+            if not self.cached_content_name and not self.create_if_missing:
+                raise ValueError(
+                    "cached_content mode requires cached_content_name or create_if_missing."
+                )
+        elif (
+            self.cached_content_name is not None
+            or self.create_if_missing
+            or self.refresh_ttl
+            or self.delete_after
+            or self.source_text is not None
+            or self.display_name is not None
+        ):
+            raise ValueError("cached-content lifecycle fields require mode='cached_content'.")
+        return self
 
 
 class ReasoningConfig(BaseModel):
@@ -316,6 +400,12 @@ class GenerateRequest(BaseModel):
             "Structured output configuration. Each provider transforms this to their native format."
         ),
     )
+    prompt_cache: PromptCacheConfig | None = Field(
+        default=None,
+        description=(
+            "Optional provider-managed prompt-cache request. Only implemented providers honor it."
+        ),
+    )
     reasoning: ReasoningConfig | None = Field(
         default=None,
         description=(
@@ -350,6 +440,10 @@ class GenerateResponse(BaseModel):
     model: str | None = Field(default=None, description="Resolved model identifier.")
     finish_reason: str | None = Field(default=None, description="Stop reason.")
     raw: Any | None = Field(default=None, description="Raw provider response for debugging.")
+    prompt_cache: Mapping[str, Any] | None = Field(
+        default=None,
+        description="Provider prompt-cache lifecycle metadata, when returned by the adapter.",
+    )
 
 
 GenerateResult = GenerateResponse | AsyncIterator[GenerateResponse]
@@ -383,6 +477,8 @@ class ProviderAdapter(ABC):
       corresponding flag is ``True``.
     - ``max_tokens`` is treated as supported when it is not ``None``
       (i.e. the provider exposes a known limit).
+    - ``prompt_caching`` is treated as supported when its support shape is
+      not ``"none"``.
     """
 
     name: ClassVar[str]
@@ -430,4 +526,6 @@ class ProviderAdapter(ABC):
             return False
         if capability_name == "max_tokens":
             return cls.capabilities.max_tokens is not None
+        if capability_name == "prompt_caching":
+            return cls.capabilities.prompt_caching != "none"
         return bool(getattr(cls.capabilities, capability_name, False))

@@ -87,6 +87,12 @@ _CHUNKING_TARGET_CHARS = 60_000
 _CHUNKED_DRAFT_MAX_TOKENS = 900
 _LARGE_SINGLE_RUN_WARNING_TOKENS = 12_000
 _DEFAULT_ESTIMATE_METHOD = "chars_div_4_padded"
+_CACHE_USAGE_KEYS = (
+    "cache_read_tokens",
+    "cache_creation_tokens",
+    "cache_creation_5m_tokens",
+    "cache_creation_1h_tokens",
+)
 _PHASE_PROMPT_PROFILES: dict[str, list[dict[str, int | None]]] = {
     "critique": [
         {
@@ -1198,6 +1204,7 @@ class Orchestrator:
                     usage = dict(chunk.usage)
             return GenerateResponse(text="".join(text_parts), usage=usage)
 
+        prompt_cache_requested = bool(request.prompt_cache and request.prompt_cache.enabled)
         compiled = compile_request_for_provider(provider_name, request)
         self._record_request_compilation(
             phase=phase,
@@ -1205,6 +1212,7 @@ class Orchestrator:
             compilation=compiled.to_dict(),
         )
         request = compiled.request
+        prompt_cache_forwarded = bool(request.prompt_cache and request.prompt_cache.enabled)
 
         while True:
             try:
@@ -1233,6 +1241,13 @@ class Orchestrator:
                         )
 
                 self._record_usage(provider_name, response.usage)
+                self._record_prompt_cache_observation(
+                    phase=phase,
+                    provider_name=provider_name,
+                    requested=prompt_cache_requested,
+                    forwarded=prompt_cache_forwarded,
+                    usage=response.usage,
+                )
                 return response
 
             except Exception as exc:
@@ -2466,6 +2481,60 @@ class Orchestrator:
         completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         self._input_tokens[provider] = self._input_tokens.get(provider, 0) + prompt_tokens
         self._output_tokens[provider] = self._output_tokens.get(provider, 0) + completion_tokens
+        self._record_cache_usage(provider, usage)
+
+    def _record_cache_usage(self, provider: str, usage: Mapping[str, int]) -> None:
+        """Accumulate normalized cache-token fields in execution metadata."""
+
+        if self._execution_plan is None:
+            return
+
+        cache_usage: dict[str, int] = {}
+        for key in _CACHE_USAGE_KEYS:
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                cache_usage[key] = value
+
+        if not cache_usage:
+            return
+
+        provider_cache = self._execution_plan.setdefault("cache_usage", {}).setdefault(provider, {})
+        for key, value in cache_usage.items():
+            provider_cache[key] = provider_cache.get(key, 0) + value
+
+    def _record_prompt_cache_observation(
+        self,
+        *,
+        phase: str | None,
+        provider_name: str,
+        requested: bool,
+        forwarded: bool,
+        usage: Mapping[str, int] | None,
+    ) -> None:
+        """Record request-vs-observed prompt-cache state for one provider call."""
+
+        if self._execution_plan is None or not (requested or forwarded or usage):
+            return
+
+        cache_usage: dict[str, int] = {}
+        if usage:
+            for key in _CACHE_USAGE_KEYS:
+                value = usage.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    cache_usage[key] = value
+
+        entry: dict[str, Any] = {
+            "provider": provider_name,
+            "requested": requested,
+            "forwarded": forwarded,
+            "metrics_available": bool(cache_usage),
+            "observed": bool(cache_usage),
+        }
+        if cache_usage:
+            entry["usage"] = cache_usage
+
+        observations = self._execution_plan.setdefault("prompt_cache_observations", {})
+        observations.setdefault(phase or "unknown", []).append(entry)
 
     def _estimate_input_tokens(self, *parts: str) -> int:
         """Return a lightweight token estimate for prompt diagnostics."""
