@@ -220,6 +220,38 @@ Available models:
 - `gemini-3.1-pro-preview` - Most capable (recommended)
 - `gemini-3-flash-preview` - Fast and affordable
 
+### Prompt Cache Lifecycle
+
+Gemini prompt caching uses cached-content resources, not Anthropic-style inline
+cache markers. LLM Council can create a resource from explicit stable context,
+use it for generation, refresh its TTL, and delete it after the request:
+
+```python
+from llm_council.providers.base import GenerateRequest, PromptCacheConfig
+from llm_council.providers.gemini import GeminiProvider
+
+provider = GeminiProvider()
+response = await provider.generate(
+    GenerateRequest(
+        prompt="Answer using the cached context.",
+        prompt_cache=PromptCacheConfig(
+            mode="cached_content",
+            create_if_missing=True,
+            source_text="Long stable reference material...",
+            refresh_ttl=True,
+            delete_after=True,
+        ),
+    )
+)
+
+print(response.usage)
+print(response.prompt_cache)
+```
+
+Created or refreshed cached-content resources may incur storage-duration billing
+until TTL expiry or successful cleanup. Streaming responses include a final
+metadata-only chunk with cleanup status.
+
 ## Vertex AI (Enterprise GCP)
 
 Vertex AI provides enterprise access to Gemini and Claude models through Google Cloud with unified billing and IAM.
@@ -306,6 +338,15 @@ asyncio.run(main())
 - `claude-haiku-4-5@20250929` - Fast Claude
 
 **Note:** Claude models require version suffix (e.g., `@20251101`).
+
+### Vertex Gemini Prompt Cache Lifecycle
+
+Vertex Gemini uses the same cached-content lifecycle shape as the Gemini API,
+but resource names are scoped to the Google Cloud project and location, for
+example `projects/.../locations/.../cachedContents/...`. Use
+`PromptCacheConfig(mode="cached_content", ...)` with `create_if_missing`,
+`refresh_ttl`, or `delete_after` when you want Council to manage that resource
+for a request.
 
 ### When to Use Vertex AI vs Direct APIs
 

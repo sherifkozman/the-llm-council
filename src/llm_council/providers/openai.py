@@ -404,6 +404,11 @@ class OpenAIProvider(ProviderAdapter):
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
             }
+            prompt_token_details = getattr(response.usage, "prompt_tokens_details", None)
+            cached_tokens = getattr(prompt_token_details, "cached_tokens", 0) or 0
+            if isinstance(cached_tokens, int) and not isinstance(cached_tokens, bool):
+                if cached_tokens > 0:
+                    usage["cache_read_tokens"] = cached_tokens
 
         return GenerateResponse(
             text=message.content,
@@ -476,9 +481,7 @@ class OpenAIProvider(ProviderAdapter):
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""
-        if not self.supports_capability_name(capability):
-            return False
-        return getattr(self.capabilities, capability, False)
+        return self.supports_capability(capability)
 
     async def doctor(self) -> DoctorResult:
         """Perform a health check on the OpenAI API."""

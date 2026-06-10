@@ -574,6 +574,33 @@ See existing implementations:
 | Anthropic | `thinking` | `{type: "enabled", budget_tokens: 1024-128000}` + beta API |
 | Gemini API | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: 0-24576}` |
 
+### Prompt Caching
+
+Prompt caching is not a universal provider switch. The compiler decides whether
+to keep or drop `PromptCacheConfig`; adapters own the final wire format.
+Execution metadata distinguishes cache controls that were requested or forwarded
+from cache use that was actually observed in provider response telemetry.
+
+| Provider | Cache mode | Wire format |
+|----------|------------|-------------|
+| Anthropic | `auto` | `extra_body={"cache_control": {"type": "ephemeral"}}` |
+| OpenAI | Telemetry-only | No request mutation; parse `prompt_tokens_details.cached_tokens` |
+| OpenRouter | `auto` for allowlisted routes | Top-level `cache_control` only for `anthropic/*` routes |
+| Gemini API | `cached_content` | Create/reuse `cachedContents/...`, pass `config["cached_content"]`, refresh TTL, and optionally delete |
+| Vertex AI | Split path | Claude mirrors Anthropic; Gemini uses Vertex cached-content lifecycle APIs |
+
+Gemini-style cached content has an object lifecycle. `create_if_missing=True`
+requires explicit stable `source_text`, `refresh_ttl=True` updates the TTL
+before generation, and `delete_after=True` performs best-effort cleanup after
+generation. Cleanup warnings are returned in response metadata because cached
+content can incur storage-duration billing until TTL expiry or successful
+delete.
+
+Streaming cached-content requests retry expiry only before any chunk is yielded.
+After partial streamed output, expiry is propagated after cleanup to avoid
+duplicated or concatenated output. Successful streams include a final
+metadata-only response chunk containing cached-content cleanup status.
+
 ## Next Steps
 
 - [OpenRouter Quickstart](../quickstart/openrouter.md)

@@ -327,7 +327,9 @@ if result.cost_estimate:
 1. **Use cheaper models** - `claude-haiku-4-5` instead of `claude-opus-4-6`
 2. **Reduce token limits** - Lower `max_tokens` in config
 3. **Disable parallel drafts** - Use single provider mode
-4. **Use caching** - OpenRouter supports prompt caching for repeated requests
+4. **Use route-gated caching** - LLM Council only sends OpenRouter prompt-cache
+   controls for explicitly supported cache-capable routes such as `anthropic/*`;
+   other routes continue without cache controls.
 
 ### Example: Budget-Conscious Config
 

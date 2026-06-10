@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.18] - 2026-06-10
+
+### Added
+- Cross-provider prompt-cache support with provider-specific behavior instead
+  of a false universal cache switch.
+- Anthropic automatic prompt-cache controls, OpenRouter route-gated
+  `cache_control`, OpenAI cache telemetry parsing, and Gemini/Vertex
+  cached-content lifecycle support.
+- Gemini API and Vertex Gemini cached-content lifecycle handling for create,
+  TTL refresh, expiry recreation, best-effort cleanup, billing warnings, and
+  response metadata.
+- Streaming cached-content cleanup support with a final metadata-only response
+  chunk on successful streams.
+- Live proof for OpenRouter, Gemini API, and Vertex Gemini non-streaming cache
+  paths, plus regression tests for streaming cleanup and partial-output expiry
+  behavior.
+
+### Changed
+- Provider documentation now describes cache request controls separately from
+  observed cache telemetry and live-proof status.
+- Packaged council skill and development guide now target `0.7.18`.
+
+### Fixed
+- Streaming cached-content requests no longer bypass cleanup.
+- Streaming cached-content expiry retry is suppressed after partial output has
+  already been yielded, avoiding duplicated or concatenated streamed content.
+- Created cached-content resources are cleaned up on generation failure when
+  `delete_after=True`.
+
 ## [0.7.17] - 2026-06-01
 
 ### Added
@@ -640,7 +669,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.16...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.18...HEAD
+[0.7.18]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.17...v0.7.18
+[0.7.17]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.16...v0.7.17
 [0.7.16]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.15...v0.7.16
 [0.7.15]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.14...v0.7.15
 [0.7.14]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.13...v0.7.14

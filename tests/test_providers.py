@@ -25,6 +25,7 @@ from llm_council.providers.base import (
     GenerateRequest,
     GenerateResponse,
     Message,
+    PromptCacheConfig,
     ProviderCapabilities,
     ReasoningConfig,
     StructuredOutputConfig,
@@ -66,6 +67,7 @@ class TestProviderCapabilities:
         assert caps.structured_output is False
         assert caps.multimodal is False
         assert caps.max_tokens is None
+        assert caps.prompt_caching == "none"
 
     def test_custom_capabilities(self):
         """Test custom capability values."""
@@ -75,12 +77,14 @@ class TestProviderCapabilities:
             structured_output=True,
             multimodal=True,
             max_tokens=8192,
+            prompt_caching="explicit",
         )
         assert caps.streaming is True
         assert caps.tool_use is True
         assert caps.structured_output is True
         assert caps.multimodal is True
         assert caps.max_tokens == 8192
+        assert caps.prompt_caching == "explicit"
 
 
 class TestMessage:
@@ -145,6 +149,69 @@ class TestGenerateRequest:
         assert req.top_p == 0.9
         assert req.stop == ["END"]
         assert req.stream is True
+
+    def test_request_accepts_prompt_cache_config(self):
+        """Test request with automatic prompt-cache config."""
+        req = GenerateRequest(
+            prompt="Hello",
+            prompt_cache=PromptCacheConfig(ttl="1h"),
+        )
+
+        assert req.prompt_cache is not None
+        assert req.prompt_cache.enabled is True
+        assert req.prompt_cache.mode == "auto"
+        assert req.prompt_cache.ttl == "1h"
+
+    def test_prompt_cache_rejects_unsupported_ttl(self):
+        """Only known provider-safe TTL labels should be accepted."""
+        with pytest.raises(ValueError):
+            PromptCacheConfig(ttl="24h")
+
+    def test_request_accepts_cached_content_prompt_cache_config(self):
+        """Gemini-style cached-content passthrough should be explicit."""
+        req = GenerateRequest(
+            prompt="Hello",
+            prompt_cache=PromptCacheConfig(
+                mode="cached_content",
+                cached_content_name="cachedContents/example",
+            ),
+        )
+
+        assert req.prompt_cache is not None
+        assert req.prompt_cache.mode == "cached_content"
+        assert req.prompt_cache.cached_content_name == "cachedContents/example"
+
+    def test_cached_content_mode_requires_cache_resource_name(self):
+        """Cached-content mode should not be valid without a cache resource name."""
+        with pytest.raises(ValueError):
+            PromptCacheConfig(mode="cached_content")
+
+    def test_cached_content_mode_rejects_non_resource_names(self):
+        """Cached-content mode should use provider cache resource names."""
+        with pytest.raises(ValueError):
+            PromptCacheConfig(mode="cached_content", cached_content_name="local-cache")
+
+    def test_cached_content_lifecycle_create_requires_source_text(self):
+        """Creating a cache resource should require explicit stable source text."""
+        with pytest.raises(ValueError):
+            PromptCacheConfig(mode="cached_content", create_if_missing=True)
+
+    def test_cached_content_lifecycle_accepts_create_refresh_and_cleanup(self):
+        """Lifecycle controls should be explicit on cached-content mode."""
+        config = PromptCacheConfig(
+            mode="cached_content",
+            create_if_missing=True,
+            refresh_ttl=True,
+            delete_after=True,
+            source_text="stable context",
+            display_name="test cache",
+            ttl="5m",
+        )
+
+        assert config.create_if_missing is True
+        assert config.refresh_ttl is True
+        assert config.delete_after is True
+        assert config.source_text == "stable context"
 
 
 class TestGenerateResponse:
@@ -420,6 +487,203 @@ class TestAnthropicThinkingType:
         assert "budget_tokens" not in call_kwargs["thinking"]
 
 
+class TestAnthropicPromptCaching:
+    """Tests for Anthropic automatic prompt caching."""
+
+    @pytest.mark.asyncio
+    async def test_generate_sends_default_cache_control_through_extra_body(self):
+        provider = AnthropicProvider(api_key="test-key")
+        client = AsyncMock()
+        provider._client = client
+
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.messages.create = AsyncMock(return_value=response_obj)
+
+        await provider.generate(
+            GenerateRequest(
+                messages=[Message(role="user", content="test")],
+                model="claude-opus-4-6",
+                prompt_cache=PromptCacheConfig(),
+            )
+        )
+
+        call_kwargs = client.messages.create.await_args_list[0].kwargs
+        assert call_kwargs["extra_body"]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_generate_sends_one_hour_cache_control_through_extra_body(self):
+        provider = AnthropicProvider(api_key="test-key")
+        client = AsyncMock()
+        provider._client = client
+
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.messages.create = AsyncMock(return_value=response_obj)
+
+        await provider.generate(
+            GenerateRequest(
+                messages=[Message(role="user", content="test")],
+                model="claude-opus-4-6",
+                prompt_cache=PromptCacheConfig(ttl="1h"),
+            )
+        )
+
+        call_kwargs = client.messages.create.await_args_list[0].kwargs
+        assert call_kwargs["extra_body"]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+        assert "cache_control" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_generate_without_prompt_cache_omits_cache_control(self):
+        provider = AnthropicProvider(api_key="test-key")
+        client = AsyncMock()
+        provider._client = client
+
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.messages.create = AsyncMock(return_value=response_obj)
+
+        await provider.generate(
+            GenerateRequest(
+                messages=[Message(role="user", content="test")],
+                model="claude-opus-4-6",
+            )
+        )
+
+        call_kwargs = client.messages.create.await_args_list[0].kwargs
+        assert "cache_control" not in call_kwargs
+        assert "extra_body" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_generate_beta_path_preserves_cache_control(self):
+        """Structured-output beta calls should still receive prompt-cache controls."""
+        provider = AnthropicProvider(api_key="test-key")
+        client = AsyncMock()
+        provider._client = client
+
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text='{"ok":true}')],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.beta.messages.create = AsyncMock(return_value=response_obj)
+
+        await provider.generate(
+            GenerateRequest(
+                messages=[Message(role="user", content="test")],
+                model="claude-opus-4-6",
+                structured_output=StructuredOutputConfig(
+                    json_schema={
+                        "type": "object",
+                        "properties": {"ok": {"type": "boolean"}},
+                        "required": ["ok"],
+                        "additionalProperties": False,
+                    }
+                ),
+                prompt_cache=PromptCacheConfig(),
+            )
+        )
+
+        call_kwargs = client.beta.messages.create.await_args_list[0].kwargs
+        assert call_kwargs["extra_body"]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_generate_stream_path_preserves_cache_control(self):
+        """Streaming calls should receive the same prompt-cache request shape."""
+        provider = AnthropicProvider(api_key="test-key")
+        client = AsyncMock()
+        provider._client = client
+
+        async def stream_iter():
+            if False:
+                yield GenerateResponse(text="unused")
+
+        expected_stream = stream_iter()
+
+        with patch.object(provider, "_generate_stream", return_value=expected_stream) as stream:
+            result = await provider.generate(
+                GenerateRequest(
+                    messages=[Message(role="user", content="test")],
+                    model="claude-opus-4-6",
+                    stream=True,
+                    prompt_cache=PromptCacheConfig(),
+                )
+            )
+
+        assert result is expected_stream
+        call_kwargs = stream.call_args.args[1]
+        assert call_kwargs["extra_body"]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in call_kwargs
+
+    def test_parse_response_includes_cache_usage_tokens(self):
+        provider = AnthropicProvider(api_key="test-key")
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(
+                input_tokens=10,
+                cache_read_input_tokens=100,
+                cache_creation_input_tokens=20,
+                cache_creation=SimpleNamespace(
+                    ephemeral_5m_input_tokens=12,
+                    ephemeral_1h_input_tokens=8,
+                ),
+                output_tokens=5,
+            ),
+        )
+
+        response = provider._parse_response(response_obj)
+
+        assert response.usage == {
+            "prompt_tokens": 130,
+            "completion_tokens": 5,
+            "total_tokens": 135,
+            "cache_read_tokens": 100,
+            "cache_creation_tokens": 20,
+            "cache_creation_5m_tokens": 12,
+            "cache_creation_1h_tokens": 8,
+        }
+
+    def test_parse_response_includes_cache_hit_only_usage_tokens(self):
+        provider = AnthropicProvider(api_key="test-key")
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(
+                input_tokens=3,
+                cache_read_input_tokens=10988,
+                cache_creation_input_tokens=0,
+                output_tokens=16,
+            ),
+        )
+
+        response = provider._parse_response(response_obj)
+
+        assert response.usage == {
+            "prompt_tokens": 10991,
+            "completion_tokens": 16,
+            "total_tokens": 11007,
+            "cache_read_tokens": 10988,
+        }
+
+
 class TestAnthropicStructuredOutputFallback:
     """Tests for Anthropic structured-output fallback behavior."""
 
@@ -489,6 +753,12 @@ class TestMockProvider:
         """Test capability check."""
         assert await mock_provider.supports("structured_output") is True
         assert await mock_provider.supports("streaming") is False
+
+    @pytest.mark.asyncio
+    async def test_prompt_caching_support_is_not_truthy_for_default_none(self):
+        """String-valued prompt-caching capability should not make default providers truthy."""
+        assert await OpenAIProvider(api_key="test-key").supports("prompt_caching") is False
+        assert await AnthropicProvider(api_key="test-key").supports("prompt_caching") is True
 
     @pytest.mark.asyncio
     async def test_doctor_healthy(self, mock_provider):
@@ -586,6 +856,90 @@ class TestOpenAIProviderRequestParams:
 
         assert captured_kwargs["timeout"] == 19
 
+    @pytest.mark.asyncio
+    async def test_prompt_cache_request_does_not_add_openai_cache_controls(self):
+        """OpenAI prompt caching is automatic; request cache controls must not be sent."""
+        provider = OpenAIProvider(api_key="test-key")
+
+        captured_kwargs: dict[str, object] = {}
+
+        async def create(**kwargs):
+            captured_kwargs.update(kwargs)
+            message = MagicMock(content="ok", tool_calls=None)
+            choice = MagicMock(message=message, finish_reason="stop")
+            usage = MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+            return MagicMock(choices=[choice], usage=usage, model="gpt-5.4")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=create)
+        provider._client = mock_client
+
+        await provider.generate(
+            GenerateRequest(
+                model="gpt-5.4",
+                messages=[Message(role="user", content="test")],
+                prompt_cache=PromptCacheConfig(),
+            )
+        )
+
+        assert "prompt_cache" not in captured_kwargs
+        assert "cache_control" not in captured_kwargs
+        assert "extra_body" not in captured_kwargs
+
+    def test_parse_response_includes_openai_cached_token_telemetry(self):
+        provider = OpenAIProvider(api_key="test-key")
+        message = MagicMock(content="ok", tool_calls=None)
+        choice = MagicMock(message=message, finish_reason="stop")
+        response_obj = MagicMock(
+            choices=[choice],
+            usage=SimpleNamespace(
+                prompt_tokens=2000,
+                completion_tokens=100,
+                total_tokens=2100,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=1200),
+            ),
+            model="gpt-5.4",
+        )
+
+        response = provider._parse_response(response_obj)
+
+        assert response.usage == {
+            "prompt_tokens": 2000,
+            "completion_tokens": 100,
+            "total_tokens": 2100,
+            "cache_read_tokens": 1200,
+        }
+
+    def test_parse_response_omits_openai_cache_telemetry_when_missing_or_zero(self):
+        provider = OpenAIProvider(api_key="test-key")
+        message = MagicMock(content="ok", tool_calls=None)
+        choice = MagicMock(message=message, finish_reason="stop")
+
+        for usage in (
+            SimpleNamespace(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+            SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=2,
+                total_tokens=12,
+                prompt_tokens_details=SimpleNamespace(),
+            ),
+            SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=2,
+                total_tokens=12,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+        ):
+            response_obj = MagicMock(choices=[choice], usage=usage, model="gpt-5.4")
+
+            response = provider._parse_response(response_obj)
+
+            assert response.usage == {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+            }
+
 
 class TestProviderTransportDefaults:
     """Tests for provider-native timeout and retry configuration."""
@@ -653,6 +1007,260 @@ class TestProviderTransportDefaults:
         assert http_options.retry_options.attempts == 1
 
 
+class TestVertexPromptCaching:
+    """Tests for Vertex split-path prompt caching."""
+
+    @pytest.mark.asyncio
+    async def test_vertex_claude_path_passes_cache_control_through_extra_body(self):
+        provider = VertexAIProvider(default_model="claude-opus-4-6@20260301")
+        client = AsyncMock()
+        provider._claude_client = client
+
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6@20260301",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.messages.create = AsyncMock(return_value=response_obj)
+
+        await provider.generate(
+            GenerateRequest(
+                model="claude-opus-4-6@20260301",
+                messages=[Message(role="user", content="test")],
+                prompt_cache=PromptCacheConfig(),
+            )
+        )
+
+        call_kwargs = client.messages.create.await_args_list[0].kwargs
+        assert call_kwargs["extra_body"]["cache_control"] == {"type": "ephemeral"}
+
+    @pytest.mark.asyncio
+    async def test_vertex_gemini_path_passes_cached_content_in_config(self):
+        provider = VertexAIProvider(project="test-project", default_model="gemini-3.1-pro-preview")
+        client = MagicMock()
+        provider._gemini_client = client
+
+        response_obj = SimpleNamespace(
+            text="ok",
+            candidates=[],
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=1200,
+                candidates_token_count=10,
+                total_token_count=1210,
+            ),
+        )
+        client.aio.models.generate_content = AsyncMock(return_value=response_obj)
+
+        await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="test",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/example",
+                ),
+            )
+        )
+
+        call_kwargs = client.aio.models.generate_content.await_args_list[0].kwargs
+        assert call_kwargs["config"]["cached_content"] == "cachedContents/example"
+
+    def test_vertex_claude_parse_response_includes_cache_usage_tokens(self):
+        provider = VertexAIProvider(default_model="claude-opus-4-6@20260301")
+        response_obj = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            model="claude-opus-4-6@20260301",
+            stop_reason="end_turn",
+            usage=SimpleNamespace(
+                input_tokens=10,
+                cache_read_input_tokens=100,
+                cache_creation_input_tokens=20,
+                output_tokens=5,
+            ),
+        )
+
+        response = provider._parse_claude_response(response_obj)
+
+        assert response.usage == {
+            "prompt_tokens": 130,
+            "completion_tokens": 5,
+            "total_tokens": 135,
+            "cache_read_tokens": 100,
+            "cache_creation_tokens": 20,
+        }
+
+    def test_vertex_gemini_parse_response_includes_cached_content_token_count(self):
+        provider = VertexAIProvider(project="test-project", default_model="gemini-3.1-pro-preview")
+        response_obj = SimpleNamespace(
+            text="ok",
+            candidates=[],
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=1200,
+                candidates_token_count=10,
+                total_token_count=1210,
+                cached_content_token_count=900,
+            ),
+        )
+
+        response = provider._parse_response(response_obj)
+
+        assert response.usage == {
+            "prompt_tokens": 1200,
+            "completion_tokens": 10,
+            "total_tokens": 1210,
+            "cache_read_tokens": 900,
+        }
+
+    @pytest.mark.asyncio
+    async def test_vertex_gemini_creates_cached_content_when_name_is_missing(self):
+        provider = VertexAIProvider(project="test-project", default_model="gemini-3.1-pro-preview")
+        client = MagicMock()
+        provider._gemini_client = client
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/generated")
+        )
+        client.aio.models.generate_content = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                candidates=[],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=1200,
+                    candidates_token_count=10,
+                    total_token_count=1210,
+                ),
+            )
+        )
+
+        response = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    create_if_missing=True,
+                    source_text="stable context",
+                ),
+            )
+        )
+
+        create_kwargs = client.aio.caches.create.await_args_list[0].kwargs
+        assert create_kwargs["config"]["contents"] == "stable context"
+        assert response.prompt_cache["cache_name"] == "cachedContents/generated"
+
+    @pytest.mark.asyncio
+    async def test_vertex_gemini_refreshes_and_deletes_cached_content(self):
+        provider = VertexAIProvider(project="test-project", default_model="gemini-3.1-pro-preview")
+        client = MagicMock()
+        provider._gemini_client = client
+
+        client.aio.caches.update = AsyncMock(return_value=SimpleNamespace())
+        client.aio.caches.delete = AsyncMock(return_value=None)
+        client.aio.models.generate_content = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                candidates=[],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=1200,
+                    candidates_token_count=10,
+                    total_token_count=1210,
+                ),
+            )
+        )
+
+        response = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/existing",
+                    refresh_ttl=True,
+                    delete_after=True,
+                ),
+            )
+        )
+
+        client.aio.caches.update.assert_awaited_once()
+        client.aio.caches.delete.assert_awaited_once_with(name="cachedContents/existing")
+        assert response.prompt_cache["deleted"] is True
+
+    @pytest.mark.asyncio
+    async def test_vertex_gemini_stream_deletes_created_cache_after_success(self):
+        provider = VertexAIProvider(project="test-project", default_model="gemini-3.1-pro-preview")
+        client = MagicMock()
+        provider._gemini_client = client
+
+        async def stream_chunks():
+            yield SimpleNamespace(text="ok")
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/tmp")
+        )
+        client.aio.caches.delete = AsyncMock(return_value=None)
+        client.aio.models.generate_content_stream = AsyncMock(return_value=stream_chunks())
+
+        stream = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                stream=True,
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    create_if_missing=True,
+                    delete_after=True,
+                    source_text="stable context",
+                ),
+            )
+        )
+
+        chunks = [chunk async for chunk in stream]
+
+        assert chunks[0].text == "ok"
+        assert chunks[-1].prompt_cache["deleted"] is True
+        client.aio.caches.delete.assert_awaited_once_with(name="cachedContents/tmp")
+
+    @pytest.mark.asyncio
+    async def test_stream_does_not_retry_expiry_after_partial_output(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        async def failing_stream():
+            yield SimpleNamespace(text="partial")
+            raise RuntimeError("cached content expired")
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/tmp")
+        )
+        client.aio.caches.delete = AsyncMock(return_value=None)
+        client.aio.models.generate_content_stream = AsyncMock(return_value=failing_stream())
+
+        stream = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                stream=True,
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    create_if_missing=True,
+                    delete_after=True,
+                    source_text="stable context",
+                ),
+            )
+        )
+
+        chunks = []
+        with pytest.raises(RuntimeError, match="cached content expired"):
+            async for chunk in stream:
+                chunks.append(chunk.text)
+
+        assert chunks == ["partial"]
+        client.aio.caches.create.assert_awaited_once()
+        client.aio.caches.delete.assert_awaited_once_with(name="cachedContents/tmp")
+
+
 class TestAnthropicProviderEnvModel:
     """Tests for ANTHROPIC_MODEL env var fallback in AnthropicProvider."""
 
@@ -704,6 +1312,347 @@ class TestGeminiProviderEnvModel:
         monkeypatch.setenv("GOOGLE_MODEL", "gemini-3-flash-preview")
         provider = GeminiProvider(default_model="gemini-3.1-pro-preview")
         assert provider._default_model == "gemini-3.1-pro-preview"
+
+
+class TestGeminiPromptCaching:
+    """Tests for Gemini cached-content passthrough."""
+
+    @pytest.mark.asyncio
+    async def test_generate_passes_cached_content_name_in_config(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        response_obj = SimpleNamespace(
+            text="ok",
+            candidates=[],
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=1200,
+                candidates_token_count=10,
+                total_token_count=1210,
+            ),
+        )
+        client.aio.models.generate_content = AsyncMock(return_value=response_obj)
+
+        await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="test",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/example",
+                ),
+            )
+        )
+
+        call_kwargs = client.aio.models.generate_content.await_args_list[0].kwargs
+        assert call_kwargs["config"]["cached_content"] == "cachedContents/example"
+
+    @pytest.mark.asyncio
+    async def test_generate_without_prompt_cache_omits_cached_content(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        response_obj = SimpleNamespace(
+            text="ok",
+            candidates=[],
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=1,
+                candidates_token_count=1,
+                total_token_count=2,
+            ),
+        )
+        client.aio.models.generate_content = AsyncMock(return_value=response_obj)
+
+        await provider.generate(GenerateRequest(model="gemini-3.1-pro-preview", prompt="test"))
+
+        call_kwargs = client.aio.models.generate_content.await_args_list[0].kwargs
+        assert call_kwargs["config"] is None
+
+    def test_parse_response_includes_cached_content_token_count(self):
+        provider = GeminiProvider(api_key="test-key")
+        response_obj = SimpleNamespace(
+            text="ok",
+            candidates=[],
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=1200,
+                candidates_token_count=10,
+                total_token_count=1210,
+                cached_content_token_count=900,
+            ),
+        )
+
+        response = provider._parse_response(response_obj)
+
+        assert response.usage == {
+            "prompt_tokens": 1200,
+            "completion_tokens": 10,
+            "total_tokens": 1210,
+            "cache_read_tokens": 900,
+        }
+
+    @pytest.mark.asyncio
+    async def test_generate_creates_cached_content_when_name_is_missing(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/generated")
+        )
+        client.aio.models.generate_content = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                candidates=[],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=1200,
+                    candidates_token_count=10,
+                    total_token_count=1210,
+                    cached_content_token_count=900,
+                ),
+            )
+        )
+
+        response = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    create_if_missing=True,
+                    source_text="stable context",
+                    display_name="llm-council-test",
+                ),
+            )
+        )
+
+        create_kwargs = client.aio.caches.create.await_args_list[0].kwargs
+        assert create_kwargs["model"] == "gemini-3.1-pro-preview"
+        assert create_kwargs["config"]["contents"] == "stable context"
+        assert create_kwargs["config"]["display_name"] == "llm-council-test"
+        assert create_kwargs["config"]["ttl"] == "300s"
+        call_kwargs = client.aio.models.generate_content.await_args_list[0].kwargs
+        assert call_kwargs["config"]["cached_content"] == "cachedContents/generated"
+        assert response.prompt_cache["cache_name"] == "cachedContents/generated"
+        assert response.prompt_cache["created"] is True
+        assert response.prompt_cache["billing_warning"]
+
+    @pytest.mark.asyncio
+    async def test_generate_refreshes_ttl_for_existing_cached_content(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        client.aio.caches.update = AsyncMock(return_value=SimpleNamespace())
+        client.aio.models.generate_content = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                candidates=[],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=1200,
+                    candidates_token_count=10,
+                    total_token_count=1210,
+                ),
+            )
+        )
+
+        await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/existing",
+                    refresh_ttl=True,
+                    ttl="1h",
+                ),
+            )
+        )
+
+        update_kwargs = client.aio.caches.update.await_args_list[0].kwargs
+        assert update_kwargs["name"] == "cachedContents/existing"
+        assert update_kwargs["config"]["ttl"] == "3600s"
+
+    @pytest.mark.asyncio
+    async def test_generate_deletes_created_cache_after_success(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/tmp")
+        )
+        client.aio.caches.delete = AsyncMock(return_value=None)
+        client.aio.models.generate_content = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                candidates=[],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=1200,
+                    candidates_token_count=10,
+                    total_token_count=1210,
+                ),
+            )
+        )
+
+        response = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    create_if_missing=True,
+                    delete_after=True,
+                    source_text="stable context",
+                ),
+            )
+        )
+
+        client.aio.caches.delete.assert_awaited_once_with(name="cachedContents/tmp")
+        assert response.prompt_cache["deleted"] is True
+
+    @pytest.mark.asyncio
+    async def test_generate_warns_when_cache_cleanup_fails(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/tmp")
+        )
+        client.aio.caches.delete = AsyncMock(side_effect=RuntimeError("delete denied"))
+        client.aio.models.generate_content = AsyncMock(
+            return_value=SimpleNamespace(
+                text="ok",
+                candidates=[],
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=1200,
+                    candidates_token_count=10,
+                    total_token_count=1210,
+                ),
+            )
+        )
+
+        response = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    create_if_missing=True,
+                    delete_after=True,
+                    source_text="stable context",
+                ),
+            )
+        )
+
+        assert response.prompt_cache["deleted"] is False
+        assert "cleanup failed" in response.prompt_cache["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_generate_recreates_expired_cached_content_once(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/recreated")
+        )
+        client.aio.models.generate_content = AsyncMock(
+            side_effect=[
+                RuntimeError("cached content expired"),
+                SimpleNamespace(
+                    text="ok",
+                    candidates=[],
+                    usage_metadata=SimpleNamespace(
+                        prompt_token_count=1200,
+                        candidates_token_count=10,
+                        total_token_count=1210,
+                    ),
+                ),
+            ]
+        )
+
+        response = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    cached_content_name="cachedContents/old",
+                    create_if_missing=True,
+                    source_text="stable context",
+                ),
+            )
+        )
+
+        assert client.aio.models.generate_content.await_count == 2
+        assert response.prompt_cache["cache_name"] == "cachedContents/recreated"
+        assert response.prompt_cache["recreated_after_expiry"] is True
+
+    @pytest.mark.asyncio
+    async def test_stream_deletes_created_cache_after_success(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        async def stream_chunks():
+            yield SimpleNamespace(text="ok")
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/tmp")
+        )
+        client.aio.caches.delete = AsyncMock(return_value=None)
+        client.aio.models.generate_content_stream = AsyncMock(return_value=stream_chunks())
+
+        stream = await provider.generate(
+            GenerateRequest(
+                model="gemini-3.1-pro-preview",
+                prompt="question",
+                stream=True,
+                prompt_cache=PromptCacheConfig(
+                    mode="cached_content",
+                    create_if_missing=True,
+                    delete_after=True,
+                    source_text="stable context",
+                ),
+            )
+        )
+
+        chunks = [chunk async for chunk in stream]
+
+        assert chunks[0].text == "ok"
+        assert chunks[-1].prompt_cache["deleted"] is True
+        client.aio.caches.delete.assert_awaited_once_with(name="cachedContents/tmp")
+
+    @pytest.mark.asyncio
+    async def test_generate_deletes_created_cache_after_generation_failure(self):
+        provider = GeminiProvider(api_key="test-key")
+        client = MagicMock()
+        provider._client = client
+
+        client.aio.caches.create = AsyncMock(
+            return_value=SimpleNamespace(name="cachedContents/tmp")
+        )
+        client.aio.caches.delete = AsyncMock(return_value=None)
+        client.aio.models.generate_content = AsyncMock(side_effect=RuntimeError("network failed"))
+
+        with pytest.raises(RuntimeError, match="network failed"):
+            await provider.generate(
+                GenerateRequest(
+                    model="gemini-3.1-pro-preview",
+                    prompt="question",
+                    prompt_cache=PromptCacheConfig(
+                        mode="cached_content",
+                        create_if_missing=True,
+                        delete_after=True,
+                        source_text="stable context",
+                    ),
+                )
+            )
+
+        client.aio.caches.delete.assert_awaited_once_with(name="cachedContents/tmp")
 
 
 class TestGeminiCLIProviderDoctor:
@@ -1697,3 +2646,92 @@ class TestOpenRouterProviderEnvModel:
         )
 
         assert body["reasoning_effort"] == "high"
+
+    def test_build_request_body_adds_cache_control_for_anthropic_routes(self):
+        """OpenRouter cache controls are passed only for known Anthropic routes."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+
+        body = provider._build_request_body(
+            GenerateRequest(
+                model="anthropic/claude-opus-4-6",
+                prompt="test",
+                prompt_cache=PromptCacheConfig(ttl="1h"),
+            )
+        )
+
+        assert body["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_build_request_body_omits_cache_control_for_unsupported_routes(self):
+        """Direct adapter calls should not leak cache controls to unsupported routes."""
+        provider = OpenRouterProvider(api_key="sk-or-test")
+
+        body = provider._build_request_body(
+            GenerateRequest(
+                model="openai/gpt-5.4",
+                prompt="test",
+                prompt_cache=PromptCacheConfig(),
+            )
+        )
+
+        assert "cache_control" not in body
+
+    def test_parse_response_includes_openrouter_cache_telemetry(self):
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        data = {
+            "model": "anthropic/claude-opus-4-6",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "ok"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 2000,
+                "completion_tokens": 100,
+                "total_tokens": 2100,
+                "prompt_tokens_details": {"cached_tokens": 1200},
+                "cache_write_tokens": 800,
+            },
+        }
+
+        response = provider._parse_response(data)
+
+        assert response.usage == {
+            "prompt_tokens": 2000,
+            "completion_tokens": 100,
+            "total_tokens": 2100,
+            "cache_read_tokens": 1200,
+            "cache_creation_tokens": 800,
+        }
+
+    def test_parse_response_tolerates_missing_or_malformed_openrouter_usage(self):
+        provider = OpenRouterProvider(api_key="sk-or-test")
+        base_data = {
+            "model": "anthropic/claude-opus-4-6",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "ok"},
+                }
+            ],
+        }
+
+        assert provider._parse_response(base_data).usage is None
+
+        malformed = {
+            **base_data,
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+                "prompt_tokens_details": "unexpected",
+            },
+        }
+
+        response = provider._parse_response(malformed)
+
+        assert response.usage == {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }

@@ -152,6 +152,7 @@ class AnthropicProvider(ProviderAdapter):
         structured_output=True,
         multimodal=True,
         max_tokens=8192,
+        prompt_caching="explicit",
     )
 
     def __init__(
@@ -223,6 +224,10 @@ class AnthropicProvider(ProviderAdapter):
             kwargs["stop_sequences"] = list(request.stop)
         if request.tools:
             kwargs["tools"] = list(request.tools)
+        cache_control = self._cache_control_for_request(request)
+        if cache_control is not None:
+            # anthropic 0.75.0 does not expose cache_control as a typed keyword yet.
+            kwargs["extra_body"] = {"cache_control": cache_control}
 
         # Handle structured output - requires beta header and output_format
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
@@ -362,6 +367,17 @@ class AnthropicProvider(ProviderAdapter):
         # Check if model starts with any supported prefix (Claude 4.x family)
         return any(model.startswith(prefix) for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES)
 
+    def _cache_control_for_request(self, request: GenerateRequest) -> dict[str, str] | None:
+        """Build Anthropic top-level automatic cache control."""
+
+        if request.prompt_cache is None or not request.prompt_cache.enabled:
+            return None
+
+        cache_control = {"type": "ephemeral"}
+        if request.prompt_cache.ttl == "1h":
+            cache_control["ttl"] = "1h"
+        return cache_control
+
     def _parse_response(self, response: Any) -> GenerateResponse:
         """Parse Anthropic API response."""
         text = ""
@@ -384,12 +400,32 @@ class AnthropicProvider(ProviderAdapter):
         usage = None
         if hasattr(response, "usage") and response.usage:
             input_tokens = response.usage.input_tokens or 0
+            cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            cache_creation_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
             output_tokens = response.usage.output_tokens or 0
+            prompt_tokens = input_tokens + cache_read_tokens + cache_creation_tokens
             usage = {
-                "prompt_tokens": input_tokens,
+                "prompt_tokens": prompt_tokens,
                 "completion_tokens": output_tokens,
-                "total_tokens": input_tokens + output_tokens,
+                "total_tokens": prompt_tokens + output_tokens,
             }
+            if cache_read_tokens:
+                usage["cache_read_tokens"] = cache_read_tokens
+            if cache_creation_tokens:
+                usage["cache_creation_tokens"] = cache_creation_tokens
+
+            cache_creation = getattr(response.usage, "cache_creation", None)
+            if cache_creation is not None:
+                cache_creation_5m_tokens = (
+                    getattr(cache_creation, "ephemeral_5m_input_tokens", 0) or 0
+                )
+                cache_creation_1h_tokens = (
+                    getattr(cache_creation, "ephemeral_1h_input_tokens", 0) or 0
+                )
+                if cache_creation_5m_tokens:
+                    usage["cache_creation_5m_tokens"] = cache_creation_5m_tokens
+                if cache_creation_1h_tokens:
+                    usage["cache_creation_1h_tokens"] = cache_creation_1h_tokens
 
         return GenerateResponse(
             text=text,
@@ -403,9 +439,7 @@ class AnthropicProvider(ProviderAdapter):
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""
-        if not self.supports_capability_name(capability):
-            return False
-        return getattr(self.capabilities, capability, False)
+        return self.supports_capability(capability)
 
     async def doctor(self) -> DoctorResult:
         """Perform a health check on the Anthropic API."""

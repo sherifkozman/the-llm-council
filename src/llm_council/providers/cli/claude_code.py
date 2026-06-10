@@ -265,9 +265,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         )
 
     async def supports(self, capability: str) -> bool:
-        if not self.supports_capability_name(capability):
-            return False
-        return getattr(self.capabilities, capability, False)
+        return self.supports_capability(capability)
 
     async def doctor(self) -> DoctorResult:
         if not self._cli_path:

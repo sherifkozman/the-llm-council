@@ -7,11 +7,12 @@ Direct integration with the Gemini API via Google's ``google-genai`` SDK.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -140,6 +141,36 @@ def _strip_schema_meta_fields(
 logger = logging.getLogger(__name__)
 
 
+def _positive_int(value: Any) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return 0
+
+
+def _cache_ttl_seconds(ttl: str) -> str:
+    return "3600s" if ttl == "1h" else "300s"
+
+
+def _cache_billing_warning() -> str:
+    return (
+        "Gemini cached-content resources can incur storage-duration billing until "
+        "TTL expiry or successful cleanup."
+    )
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _is_cached_content_expiry_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "cached" in message and (
+        "expired" in message or "not found" in message or "404" in message
+    )
+
+
 class GeminiProvider(ProviderAdapter):
     """Gemini API provider adapter.
 
@@ -245,6 +276,116 @@ class GeminiProvider(ProviderAdapter):
             self._client = self._build_client(timeout_ms=resolved_timeout)
         return self._client
 
+    def _cache_client(self, client: Any) -> Any:
+        aio_client = getattr(client, "aio", None)
+        caches = getattr(aio_client, "caches", None)
+        if caches is not None:
+            return caches
+        return client.caches
+
+    def _cache_create_config(self, request: GenerateRequest) -> dict[str, Any]:
+        prompt_cache = request.prompt_cache
+        if prompt_cache is None or prompt_cache.source_text is None:
+            raise ValueError("cached-content creation requires source_text.")
+
+        config: dict[str, Any] = {
+            "contents": prompt_cache.source_text,
+            "ttl": _cache_ttl_seconds(prompt_cache.ttl),
+        }
+        if prompt_cache.display_name:
+            config["display_name"] = prompt_cache.display_name
+        return config
+
+    async def _create_cached_content(
+        self, client: Any, model: str, request: GenerateRequest
+    ) -> str:
+        cache = await _maybe_await(
+            self._cache_client(client).create(
+                model=model,
+                config=self._cache_create_config(request),
+            )
+        )
+        cache_name = getattr(cache, "name", None)
+        if not cache_name:
+            raise ValueError("cached-content create response did not include a resource name.")
+        return cast(str, cache_name)
+
+    async def _refresh_cached_content_ttl(
+        self, client: Any, cache_name: str, request: GenerateRequest
+    ) -> None:
+        prompt_cache = request.prompt_cache
+        if prompt_cache is None:
+            return
+        await _maybe_await(
+            self._cache_client(client).update(
+                name=cache_name,
+                config={"ttl": _cache_ttl_seconds(prompt_cache.ttl)},
+            )
+        )
+
+    async def _delete_cached_content(self, client: Any, cache_name: str) -> None:
+        await _maybe_await(self._cache_client(client).delete(name=cache_name))
+
+    def _new_cache_metadata(self, cache_name: str | None) -> dict[str, Any]:
+        return {
+            "cache_name": cache_name,
+            "created": False,
+            "refreshed": False,
+            "deleted": None,
+            "recreated_after_expiry": False,
+            "warnings": [],
+            "billing_warning": _cache_billing_warning(),
+        }
+
+    async def _prepare_cached_content(
+        self,
+        client: Any,
+        model: str,
+        request: GenerateRequest,
+        config: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        prompt_cache = request.prompt_cache
+        if (
+            prompt_cache is None
+            or not prompt_cache.enabled
+            or prompt_cache.mode != "cached_content"
+        ):
+            return None
+
+        metadata = self._new_cache_metadata(prompt_cache.cached_content_name)
+        cache_name = prompt_cache.cached_content_name
+        if not cache_name and prompt_cache.create_if_missing:
+            cache_name = await self._create_cached_content(client, model, request)
+            metadata["cache_name"] = cache_name
+            metadata["created"] = True
+
+        if cache_name and prompt_cache.refresh_ttl:
+            try:
+                await self._refresh_cached_content_ttl(client, cache_name, request)
+                metadata["refreshed"] = True
+            except Exception as exc:
+                metadata["warnings"].append(f"ttl refresh failed: {exc}")
+
+        if cache_name:
+            config["cached_content"] = cache_name
+        return metadata
+
+    async def _cleanup_cached_content(
+        self, client: Any, request: GenerateRequest, metadata: dict[str, Any] | None
+    ) -> None:
+        prompt_cache = request.prompt_cache
+        if metadata is None or prompt_cache is None or not prompt_cache.delete_after:
+            return
+        cache_name = metadata.get("cache_name")
+        if not cache_name:
+            return
+        try:
+            await self._delete_cached_content(client, str(cache_name))
+            metadata["deleted"] = True
+        except Exception as exc:
+            metadata["deleted"] = False
+            metadata["warnings"].append(f"cleanup failed: {exc}")
+
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
@@ -275,6 +416,7 @@ class GeminiProvider(ProviderAdapter):
             config["top_p"] = request.top_p
         if request.stop:
             config["stop_sequences"] = list(request.stop)
+        cache_metadata = await self._prepare_cached_content(client, model, request, config)
 
         # Handle structured output - requires response_mime_type and response_schema
         # See: https://ai.google.dev/gemini-api/docs/structured-output
@@ -318,15 +460,92 @@ class GeminiProvider(ProviderAdapter):
                 }
 
         if request.stream:
-            return self._generate_stream(client, model, contents, config)
+            return self._generate_stream_with_cache_lifecycle(
+                client, model, contents, config, request, cache_metadata
+            )
 
         # Use async client for generate_content
-        response = await client.aio.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config if config else None,
-        )
-        return self._parse_response(response)
+        try:
+            try:
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config if config else None,
+                )
+            except Exception as exc:
+                prompt_cache = request.prompt_cache
+                if (
+                    cache_metadata is not None
+                    and prompt_cache is not None
+                    and prompt_cache.create_if_missing
+                    and prompt_cache.source_text
+                    and _is_cached_content_expiry_error(exc)
+                ):
+                    cache_name = await self._create_cached_content(client, model, request)
+                    cache_metadata["cache_name"] = cache_name
+                    cache_metadata["created"] = True
+                    cache_metadata["recreated_after_expiry"] = True
+                    cache_metadata["warnings"].append(
+                        "cached-content resource expired or was unavailable; recreated once"
+                    )
+                    config["cached_content"] = cache_name
+                    response = await client.aio.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=config if config else None,
+                    )
+                else:
+                    raise
+        finally:
+            await self._cleanup_cached_content(client, request, cache_metadata)
+        return self._parse_response(response, prompt_cache=cache_metadata)
+
+    async def _generate_stream_with_cache_lifecycle(
+        self,
+        client: Any,
+        model: str,
+        contents: Any,
+        config: dict[str, Any],
+        request: GenerateRequest,
+        cache_metadata: dict[str, Any] | None,
+    ) -> AsyncIterator[GenerateResponse]:
+        """Stream with cached-content expiry retry and cleanup."""
+        completed = False
+        yielded_chunk = False
+        try:
+            try:
+                async for chunk in self._generate_stream(client, model, contents, config):
+                    yielded_chunk = True
+                    yield chunk
+                completed = True
+            except Exception as exc:
+                prompt_cache = request.prompt_cache
+                if (
+                    not yielded_chunk
+                    and cache_metadata is not None
+                    and prompt_cache is not None
+                    and prompt_cache.create_if_missing
+                    and prompt_cache.source_text
+                    and _is_cached_content_expiry_error(exc)
+                ):
+                    cache_name = await self._create_cached_content(client, model, request)
+                    cache_metadata["cache_name"] = cache_name
+                    cache_metadata["created"] = True
+                    cache_metadata["recreated_after_expiry"] = True
+                    cache_metadata["warnings"].append(
+                        "cached-content resource expired or was unavailable; recreated once"
+                    )
+                    config["cached_content"] = cache_name
+                    async for chunk in self._generate_stream(client, model, contents, config):
+                        yielded_chunk = True
+                        yield chunk
+                    completed = True
+                else:
+                    raise
+        finally:
+            await self._cleanup_cached_content(client, request, cache_metadata)
+        if completed and cache_metadata is not None:
+            yield GenerateResponse(prompt_cache=cache_metadata)
 
     async def _generate_stream(
         self, client: Any, model: str, contents: Any, config: dict[str, Any]
@@ -342,7 +561,9 @@ class GeminiProvider(ProviderAdapter):
             if chunk.text:
                 yield GenerateResponse(text=chunk.text, content=chunk.text)
 
-    def _parse_response(self, response: Any) -> GenerateResponse:
+    def _parse_response(
+        self, response: Any, *, prompt_cache: dict[str, Any] | None = None
+    ) -> GenerateResponse:
         """Parse Gemini API response."""
         text = ""
         try:
@@ -364,6 +585,9 @@ class GeminiProvider(ProviderAdapter):
                 "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
                 "total_tokens": getattr(um, "total_token_count", 0) or 0,
             }
+            cache_read_tokens = _positive_int(getattr(um, "cached_content_token_count", 0))
+            if cache_read_tokens:
+                usage["cache_read_tokens"] = cache_read_tokens
 
         finish_reason = None
         if hasattr(response, "candidates") and response.candidates:
@@ -377,6 +601,7 @@ class GeminiProvider(ProviderAdapter):
             usage=usage,
             finish_reason=finish_reason,
             raw=response,
+            prompt_cache=prompt_cache,
         )
 
     def _model_supports_structured_output(self, model: str) -> bool:
@@ -407,9 +632,7 @@ class GeminiProvider(ProviderAdapter):
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""
-        if not self.supports_capability_name(capability):
-            return False
-        return getattr(self.capabilities, capability, False)
+        return self.supports_capability(capability)
 
     async def doctor(self) -> DoctorResult:
         """Perform a health check on the Gemini API."""

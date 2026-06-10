@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +35,14 @@ _BUDGET_CLASS_ORDER: dict[BudgetClass, int] = {
     "normal": 1,
     "premium": 2,
 }
+
+
+def _is_execution_profile(value: str | None) -> TypeGuard[ExecutionProfile]:
+    return value in _EXECUTION_PROFILE_ORDER
+
+
+def _is_budget_class(value: str | None) -> TypeGuard[BudgetClass]:
+    return value in _BUDGET_CLASS_ORDER
 
 
 _CAPABILITY_POLICY: dict[tuple[str, str | None], CapabilityPlan] = {
@@ -197,9 +205,7 @@ def _apply_capability_overrides(
     """
 
     normalized_execution_profile = (
-        requested_execution_profile
-        if requested_execution_profile in _EXECUTION_PROFILE_ORDER
-        else None
+        requested_execution_profile if _is_execution_profile(requested_execution_profile) else None
     )
     if normalized_execution_profile is not None:
         if (
@@ -209,7 +215,7 @@ def _apply_capability_overrides(
             plan.execution_profile = normalized_execution_profile
 
     normalized_budget_class = (
-        requested_budget_class if requested_budget_class in _BUDGET_CLASS_ORDER else None
+        requested_budget_class if _is_budget_class(requested_budget_class) else None
     )
     if normalized_budget_class is not None:
         if _BUDGET_CLASS_ORDER[normalized_budget_class] > _BUDGET_CLASS_ORDER[plan.budget_class]:

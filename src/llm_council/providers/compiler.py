@@ -30,7 +30,12 @@ from llm_council.providers.openai import (
 from llm_council.providers.openai import (
     STRUCTURED_OUTPUT_MODELS as OPENAI_STRUCTURED_OUTPUT_MODELS,
 )
-from llm_council.providers.openrouter import _prepare_structured_output_schema
+from llm_council.providers.openrouter import (
+    _prepare_structured_output_schema,
+)
+from llm_council.providers.openrouter import (
+    _supports_cache_control_model as _openrouter_supports_cache_control_model,
+)
 from llm_council.providers.registry import provider_identity
 from llm_council.providers.vertex import CLAUDE_MODEL_PREFIXES
 
@@ -92,6 +97,92 @@ def compile_request_for_provider(
 
     def decide(option: str, action: CompilationAction, detail: str) -> None:
         decisions.append(CompilationDecision(option=option, action=action, detail=detail))
+
+    if compiled.prompt_cache is not None:
+        if not compiled.prompt_cache.enabled:
+            update(prompt_cache=None)
+            decide("prompt_cache", "ignored", "Prompt cache config is disabled")
+        elif identity == "anthropic":
+            if compiled.prompt_cache.mode == "auto":
+                decide("prompt_cache", "supported", "Anthropic supports automatic prompt caching")
+            else:
+                update(prompt_cache=None)
+                decide(
+                    "prompt_cache",
+                    "dropped",
+                    "Anthropic prompt caching supports only automatic cache controls",
+                )
+        elif identity == "openrouter":
+            route_model = model or provider_name
+            if compiled.prompt_cache.mode != "auto":
+                update(prompt_cache=None)
+                decide(
+                    "prompt_cache",
+                    "dropped",
+                    "OpenRouter prompt caching supports only automatic cache controls",
+                )
+            elif _openrouter_supports_cache_control_model(route_model):
+                decide(
+                    "prompt_cache",
+                    "supported",
+                    "OpenRouter route is in the cache-control allowlist",
+                )
+            else:
+                update(prompt_cache=None)
+                decide(
+                    "prompt_cache",
+                    "dropped",
+                    "OpenRouter prompt caching is route-dependent; model is not in cache-control allowlist",
+                )
+        elif identity == "gemini":
+            if compiled.prompt_cache.mode == "cached_content":
+                decide(
+                    "prompt_cache",
+                    "supported",
+                    "Gemini supports cached-content resource passthrough",
+                )
+            else:
+                update(prompt_cache=None)
+                decide(
+                    "prompt_cache",
+                    "dropped",
+                    "Gemini request caching requires cached-content mode",
+                )
+        elif identity == "vertex-ai":
+            if _vertex_is_claude_model(model):
+                if compiled.prompt_cache.mode == "auto":
+                    decide(
+                        "prompt_cache",
+                        "supported",
+                        "Vertex Claude path supports automatic cache controls",
+                    )
+                else:
+                    update(prompt_cache=None)
+                    decide(
+                        "prompt_cache",
+                        "dropped",
+                        "Vertex Claude path supports only automatic cache controls",
+                    )
+            elif compiled.prompt_cache.mode == "cached_content":
+                decide(
+                    "prompt_cache",
+                    "supported",
+                    "Vertex Gemini path supports cached-content resource passthrough",
+                )
+            else:
+                update(prompt_cache=None)
+                decide(
+                    "prompt_cache",
+                    "dropped",
+                    "Vertex Gemini path requires cached-content mode",
+                )
+        else:
+            update(prompt_cache=None)
+            decide(
+                "prompt_cache",
+                "dropped",
+                f"{provider_name} prompt caching is not implemented in the Anthropic proof slice",
+            )
 
     if identity == "openai":
         if compiled.temperature is not None and not _openai_supports_temperature(model):
