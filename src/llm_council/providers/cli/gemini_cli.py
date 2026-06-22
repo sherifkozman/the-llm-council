@@ -319,20 +319,23 @@ class GeminiCLIProvider(ProviderAdapter):
         if not self._cli_path:
             raise RuntimeError("Gemini CLI not found.")
 
-        prompt = ""
-        if request.messages:
-            parts = [m.content for m in request.messages if m.role == "user"]
-            prompt = "\n\n".join(parts)
-        elif request.prompt:
-            prompt = request.prompt
-        else:
-            raise ValueError("Either 'messages' or 'prompt' required")
-
-        cmd = [self._cli_path, "-p", prompt]
+        # prompt is fed via stdin in generate(); -p "" keeps headless
+        # mode without putting it on argv (Windows ~32KB command-line cap).
+        cmd = [self._cli_path, "-p", ""]
         cmd.extend(["--approval-mode", self._approval_mode])
         cmd.extend(["-m", request.model or self._default_model])
         cmd.extend(["--output-format", "json"])
         return cmd
+
+    @staticmethod
+    def _prompt_text(request: GenerateRequest) -> str:
+        if request.messages:
+            text = "\n\n".join(m.content for m in request.messages if m.role == "user")
+        elif request.prompt:
+            text = request.prompt
+        else:
+            raise ValueError("Either 'messages' or 'prompt' required")
+        return text
 
     async def generate(
         self, request: GenerateRequest
@@ -347,11 +350,19 @@ class GeminiCLIProvider(ProviderAdapter):
         env = self._get_minimal_env(auth_settings)
         env["GEMINI_CLI_HOME"] = cli_home
 
+        stdin_fd, stdin_path = tempfile.mkstemp(
+            prefix="llm-council-gemini-prompt-", suffix=".txt"
+        )
+        with os.fdopen(stdin_fd, "w", encoding="utf-8") as stdin_file:
+            stdin_file.write(self._prompt_text(request))
+        stdin_fh = open(stdin_path, "rb")
+
         # Use minimal environment to reduce secret exposure
         try:
             proc = await asyncio.create_subprocess_exec(
                 cmd[0],
                 *cmd[1:],
+                stdin=stdin_fh,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
@@ -424,6 +435,10 @@ class GeminiCLIProvider(ProviderAdapter):
                 raw={"stdout": stdout_text},
             )
         finally:
+            with contextlib.suppress(OSError):
+                stdin_fh.close()
+            with contextlib.suppress(OSError):
+                os.unlink(stdin_path)
             shutil.rmtree(cli_home, ignore_errors=True)
 
     async def supports(self, capability: str) -> bool:
