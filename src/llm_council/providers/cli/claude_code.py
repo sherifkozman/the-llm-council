@@ -158,21 +158,24 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             request.model or self._default_model,
         ]
 
-        # Build prompt from messages or prompt field
-        prompt = ""
+        # system prompt stays on argv (smaller); the user prompt is
+        # fed via stdin in generate() to dodge Windows' ~32KB cmdline cap.
         if request.messages:
             system_parts = [m.content for m in request.messages if m.role == "system"]
-            user_parts = [m.content for m in request.messages if m.role == "user"]
             if system_parts:
                 cmd.extend(["--system-prompt", "\n\n".join(str(p) for p in system_parts)])
-            prompt = "\n\n".join(str(p) for p in user_parts)
+        return cmd
+
+    @staticmethod
+    def _prompt_text(request: GenerateRequest) -> str:
+        if request.messages:
+            user_parts = [m.content for m in request.messages if m.role == "user"]
+            text = "\n\n".join(str(p) for p in user_parts)
         elif request.prompt:
-            prompt = request.prompt
+            text = request.prompt
         else:
             raise ValueError("Either 'messages' or 'prompt' must be provided")
-
-        cmd.append(prompt)
-        return cmd
+        return text
 
     def _get_minimal_env(self) -> dict[str, str]:
         """Get minimal environment with only allowlisted variables."""
@@ -194,19 +197,23 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
 
         cmd = self._build_command(request)
 
+        prompt_bytes = self._prompt_text(request).encode("utf-8")
+
+        timeout = self._request_timeout(request)
         # Safe: uses argument list via create_subprocess_exec, no shell spawned
         proc = await asyncio.create_subprocess_exec(
             cmd[0],
             *cmd[1:],
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._get_minimal_env(),
             start_new_session=True,
         )
-
-        timeout = self._request_timeout(request)
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt_bytes), timeout=timeout
+            )
         except asyncio.TimeoutError:
             await terminate_process_tree(proc)
             raise RuntimeError(

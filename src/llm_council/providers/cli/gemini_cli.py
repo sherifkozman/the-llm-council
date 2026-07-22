@@ -319,20 +319,23 @@ class GeminiCLIProvider(ProviderAdapter):
         if not self._cli_path:
             raise RuntimeError("Gemini CLI not found.")
 
-        prompt = ""
-        if request.messages:
-            parts = [m.content for m in request.messages if m.role == "user"]
-            prompt = "\n\n".join(parts)
-        elif request.prompt:
-            prompt = request.prompt
-        else:
-            raise ValueError("Either 'messages' or 'prompt' required")
-
-        cmd = [self._cli_path, "-p", prompt]
+        # prompt is fed via stdin in generate(); -p "" keeps headless
+        # mode without putting it on argv (Windows ~32KB command-line cap).
+        cmd = [self._cli_path, "-p", ""]
         cmd.extend(["--approval-mode", self._approval_mode])
         cmd.extend(["-m", request.model or self._default_model])
         cmd.extend(["--output-format", "json"])
         return cmd
+
+    @staticmethod
+    def _prompt_text(request: GenerateRequest) -> str:
+        if request.messages:
+            text = "\n\n".join(m.content for m in request.messages if m.role == "user")
+        elif request.prompt:
+            text = request.prompt
+        else:
+            raise ValueError("Either 'messages' or 'prompt' required")
+        return text
 
     async def generate(
         self, request: GenerateRequest
@@ -347,11 +350,14 @@ class GeminiCLIProvider(ProviderAdapter):
         env = self._get_minimal_env(auth_settings)
         env["GEMINI_CLI_HOME"] = cli_home
 
+        prompt_bytes = self._prompt_text(request).encode("utf-8")
+
         # Use minimal environment to reduce secret exposure
         try:
             proc = await asyncio.create_subprocess_exec(
                 cmd[0],
                 *cmd[1:],
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
@@ -360,7 +366,9 @@ class GeminiCLIProvider(ProviderAdapter):
 
             timeout = self._request_timeout(request)
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(input=prompt_bytes), timeout=timeout
+                )
             except asyncio.TimeoutError:
                 await terminate_process_tree(proc)
                 raise RuntimeError(

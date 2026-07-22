@@ -156,7 +156,13 @@ def _extract_agent_message(stdout_text: str) -> str:
 
 
 def _extract_error_message(stdout_text: str) -> str:
-    """Extract a Codex error payload from JSONL stdout when stderr is empty."""
+    """Extract a Codex error payload from JSONL stdout when stderr is empty.
+
+    Recognizes both ``type: "error"`` events (synchronous client-side errors,
+    e.g. an invalid JSON schema) and ``type: "turn.failed"`` events (server-side
+    rejections such as an unsupported model). The latter arrives with exit
+    code 0, so callers must consult this before assuming success.
+    """
 
     for line in reversed(stdout_text.splitlines()):
         stripped = line.strip()
@@ -166,11 +172,19 @@ def _extract_error_message(stdout_text: str) -> str:
             payload = json.loads(stripped)
         except json.JSONDecodeError:
             continue
-        if not isinstance(payload, dict) or payload.get("type") != "error":
+        if not isinstance(payload, dict):
             continue
-        message = payload.get("message")
-        if isinstance(message, str):
-            return message
+        event_type = payload.get("type")
+        if event_type == "error":
+            message = payload.get("message")
+            if isinstance(message, str) and message:
+                return message
+        elif event_type == "turn.failed":
+            error_payload = payload.get("error")
+            if isinstance(error_payload, dict):
+                message = error_payload.get("message")
+                if isinstance(message, str) and message:
+                    return message
     return ""
 
 
@@ -227,6 +241,16 @@ def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
             }
+    elif event_type == "turn.failed":
+        # Codex emits turn.failed with exit code 0 when the server rejects the
+        # request -- e.g. a model this CLI version does not support. Capture the
+        # message so the post-loop handler surfaces it instead of an empty success.
+        state.saw_turn_completed = True
+        error_payload = payload.get("error")
+        if isinstance(error_payload, dict):
+            message = error_payload.get("message")
+            if isinstance(message, str) and message:
+                state.error_message = message
     elif event_type == "error":
         message = payload.get("message")
         if isinstance(message, str):
@@ -347,16 +371,8 @@ class CodexCLIProvider(ProviderAdapter):
         if output_last_message_path:
             cmd.extend(["-o", output_last_message_path])
 
-        prompt = ""
-        if request.messages:
-            parts = [m.content for m in request.messages if m.role == "user"]
-            prompt = "\n\n".join(parts)
-        elif request.prompt:
-            prompt = request.prompt
-        else:
-            raise ValueError("Either 'messages' or 'prompt' must be provided")
-
-        cmd.append(prompt)
+        # prompt is fed via stdin in generate(), NOT argv. Windows
+        # CreateProcess caps the command line at ~32KB; schema+prompt exceed it.
         return cmd
 
     def _check_unsafe_flags(self) -> None:
@@ -486,6 +502,7 @@ class CodexCLIProvider(ProviderAdapter):
         cli_home: str | None = None
         output_path: str | None = None
         schema_path: str | None = None
+        stdin_path: str | None = None
 
         try:
             cli_home = self._create_isolated_cli_home()
@@ -502,6 +519,18 @@ class CodexCLIProvider(ProviderAdapter):
                         _prepare_schema_for_codex(dict(request.structured_output.json_schema)),
                         schema_file,
                     )
+            prompt_text = ""
+            if request.messages:
+                prompt_text = "\n\n".join(m.content for m in request.messages if m.role == "user")
+            elif request.prompt:
+                prompt_text = request.prompt
+            if not prompt_text:
+                raise ValueError("Either 'messages' or 'prompt' must be provided")
+            stdin_fd, stdin_path = tempfile.mkstemp(
+                prefix="llm-council-codex-prompt-", suffix=".txt"
+            )
+            with os.fdopen(stdin_fd, "w", encoding="utf-8") as stdin_file:
+                stdin_file.write(prompt_text)
             cmd = self._build_command(
                 request,
                 model=model,
@@ -510,15 +539,19 @@ class CodexCLIProvider(ProviderAdapter):
             )
             env = self._get_subprocess_env()
             env["HOME"] = cli_home
-            # Safe: uses argument list, no shell; minimal environment
-            proc = await asyncio.create_subprocess_exec(
-                cmd[0],
-                *cmd[1:],
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                start_new_session=True,
-            )
+            # Safe: uses argument list, no shell; minimal environment.
+            # The prompt is handed over as the child's stdin: the child gets its
+            # own dup of the descriptor, so the parent's handle closes here.
+            with open(stdin_path, "rb") as stdin_fh:
+                proc = await asyncio.create_subprocess_exec(
+                    cmd[0],
+                    *cmd[1:],
+                    stdin=stdin_fh,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                    start_new_session=True,
+                )
 
             timeout = self._request_timeout(request)
             if (
@@ -537,8 +570,10 @@ class CodexCLIProvider(ProviderAdapter):
 
                 stdout_text = stdout.decode("utf-8", errors="replace")
                 stderr_text = stderr.decode("utf-8", errors="replace")
-                if proc.returncode != 0:
-                    error_text = stderr_text or _extract_error_message(stdout_text)
+                # turn.failed is reported with exit code 0, so check stdout too.
+                batch_error = _extract_error_message(stdout_text)
+                if proc.returncode != 0 or batch_error:
+                    error_text = stderr_text or batch_error
                     error_details = self._error_details(error_text)
                     error_type = classify_error(error_details or stderr_text, proc.returncode or 0)
 
@@ -641,8 +676,13 @@ class CodexCLIProvider(ProviderAdapter):
 
             stdout_text = "".join(state.stdout_parts)
             stderr_text = "".join(state.stderr_parts)
-            if proc.returncode != 0 and not terminated_after_output:
-                error_text = stderr_text or _extract_error_message(stdout_text)
+            # turn.failed arrives with exit code 0, so a non-zero return code is
+            # not the only failure signal -- state.error_message covers it.
+            failed = proc.returncode != 0 or bool(state.error_message)
+            if failed and not terminated_after_output:
+                error_text = (
+                    stderr_text or state.error_message or _extract_error_message(stdout_text)
+                )
                 error_details = self._error_details(error_text)
                 error_type = classify_error(error_details or stderr_text, proc.returncode or 0)
 
@@ -683,7 +723,7 @@ class CodexCLIProvider(ProviderAdapter):
                 raw={"stdout": stdout_text},
             )
         finally:
-            for temp_path in (output_path, schema_path):
+            for temp_path in (output_path, schema_path, stdin_path):
                 if temp_path:
                     with contextlib.suppress(OSError):
                         os.unlink(temp_path)
