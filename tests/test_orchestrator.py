@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from llm_council.config.models import ModelPack, get_model_for_pack
+from llm_council.engine.capabilities import CapabilityPlan
+from llm_council.engine.evidence import EvidenceBundle
 from llm_council.engine.orchestrator import (
     CostEstimate,
     CouncilResult,
@@ -636,6 +638,30 @@ class TestOrchestratorValidation:
         assert orch._provider_request_timeout_seconds("draft", provider_name="claude") == 59.0
         assert orch._provider_request_timeout_seconds("critique", provider_name="claude") == 45.0
         assert orch._provider_request_timeout_seconds("synthesis", provider_name="claude") == 59.0
+
+    def test_default_runtime_profile_floors_sakana_at_200_seconds(self):
+        """Fugu's slow drafts need a floor so callers don't need a large --timeout."""
+        config = OrchestratorConfig(timeout=120)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["sakana"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="sakana") == 200.0
+
+    def test_bounded_runtime_profile_still_floors_sakana_at_200_seconds(self):
+        """Sakana is exempt from the generic bounded ceiling: 30s would guarantee failure."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=300)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["sakana"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="sakana") == 200.0
 
 
 class TestOrchestratorDoctor:

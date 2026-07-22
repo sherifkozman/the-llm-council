@@ -1741,7 +1741,24 @@ class Orchestrator:
                     "critique": 60.0,
                     "synthesis": 120.0,
                 }
+            elif provider_name == "sakana":
+                # Sakana is exempt from the generic bounded ceiling: at 30s it would
+                # be guaranteed to fail (see the 200s floor below), so shipping it
+                # under `bounded` would silently doom every call. Bounded still caps
+                # it, just at the floor that actually gives it a chance to answer.
+                bounded_caps = {
+                    "draft": 200.0,
+                    "critique": 200.0,
+                    "synthesis": 200.0,
+                }
             return max(min(base_timeout, bounded_caps.get(phase, base_timeout)), 1.0)
+
+        if provider_name == "sakana":
+            # Fugu is a slow multi-agent orchestrator; observed draft latency ranged
+            # 8s-100s+ within a single session, close enough to the previous 119s
+            # default (timeout=120) that runs were a coin-flip. Floor it so callers
+            # don't have to remember a large `--timeout` for reliable participation.
+            return max(base_timeout, 200.0)
 
         return base_timeout
 

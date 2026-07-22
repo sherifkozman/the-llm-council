@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from llm_council.providers.anthropic import (
@@ -54,6 +55,7 @@ from llm_council.providers.openrouter import (
     OpenRouterProvider,
 )
 from llm_council.providers.registry import ProviderRegistry, get_registry
+from llm_council.providers.sakana import SakanaProvider
 from llm_council.providers.vertex import VertexAIProvider
 
 
@@ -2663,6 +2665,110 @@ class TestOpenRouterProviderEnvModel:
         )
 
         assert body["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
+class TestSakanaProviderReasoningEffort:
+    """Regression tests for the Fugu reasoning_effort 400.
+
+    Fugu (Sakana) rejects any ``reasoning_effort`` value outside
+    ``{high, xhigh, max}`` with an HTTP 400. The orchestrator's ``light``
+    reasoning profile downgrades effort to ``"low"``, which the inherited
+    OpenRouter request builder forwards verbatim, so every draft/critique
+    request under that profile failed until ``SakanaProvider`` overrode
+    ``_build_request_body`` to sanitize the value.
+    """
+
+    @pytest.mark.parametrize(
+        ("input_effort", "expected_effort"),
+        [
+            # "xhigh"/"max" aren't tested here: ReasoningConfig.effort is a Pydantic
+            # Literal["low", "medium", "high", "none"], so the orchestrator can never
+            # actually produce them — only "high" passes through unchanged in practice.
+            ("low", "high"),
+            ("medium", "high"),
+            ("high", "high"),
+        ],
+    )
+    def test_build_request_body_clamps_unsupported_effort_to_high(
+        self, input_effort, expected_effort
+    ):
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                reasoning=ReasoningConfig(enabled=True, effort=input_effort),
+            )
+        )
+
+        assert body["reasoning_effort"] == expected_effort
+
+    def test_build_request_body_drops_none_sentinel(self):
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                reasoning=ReasoningConfig(enabled=True, effort="none"),
+            )
+        )
+
+        assert "reasoning_effort" not in body
+
+    def test_build_request_body_omits_reasoning_effort_when_disabled(self):
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(GenerateRequest(prompt="test"))
+
+        assert "reasoning_effort" not in body
+
+    def test_build_request_body_still_omits_reasoning_effort_for_structured_output(self):
+        """The inherited structured-output guard must still apply through the override."""
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                structured_output=StructuredOutputConfig(
+                    json_schema={
+                        "type": "object",
+                        "properties": {"result": {"type": "string"}},
+                        "required": ["result"],
+                        "additionalProperties": False,
+                    },
+                    name="test_schema",
+                    strict=True,
+                ),
+                reasoning=ReasoningConfig(enabled=True, effort="low"),
+            )
+        )
+
+        assert "reasoning_effort" not in body
+
+
+class TestSakanaProviderErrorSurfacing:
+    """Regression test: Fugu's HTTP error body was invisible in propagated errors.
+
+    ``httpx.HTTPStatusError.__str__`` never includes the response body, so a
+    rejected-parameter 400 surfaced only as an opaque "400 Bad Request" with no
+    indication of what was actually wrong with the request.
+    """
+
+    @pytest.mark.asyncio
+    async def test_generate_appends_response_body_to_http_status_error(self):
+        def handler(request):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "reasoning_effort must be one of high, xhigh, max"}},
+                request=request,
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = SakanaProvider(api_key="sk-fugu-test", http_client=client)
+
+        try:
+            with pytest.raises(httpx.HTTPStatusError) as exc_info:
+                await provider.generate(GenerateRequest(prompt="test"))
+
+            assert "reasoning_effort must be one of high, xhigh, max" in str(exc_info.value)
+        finally:
+            await client.aclose()
 
     def test_build_request_body_omits_cache_control_for_unsupported_routes(self):
         """Direct adapter calls should not leak cache controls to unsupported routes."""
