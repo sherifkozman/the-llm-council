@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import shutil
-import tempfile
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
@@ -198,38 +197,29 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
 
         cmd = self._build_command(request)
 
-        stdin_fd, stdin_path = tempfile.mkstemp(
-            prefix="llm-council-claude-prompt-", suffix=".txt"
-        )
-        with os.fdopen(stdin_fd, "w", encoding="utf-8") as stdin_file:
-            stdin_file.write(self._prompt_text(request))
-        stdin_fh = open(stdin_path, "rb")
+        prompt_bytes = self._prompt_text(request).encode("utf-8")
 
         timeout = self._request_timeout(request)
+        # Safe: uses argument list via create_subprocess_exec, no shell spawned
+        proc = await asyncio.create_subprocess_exec(
+            cmd[0],
+            *cmd[1:],
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._get_minimal_env(),
+            start_new_session=True,
+        )
         try:
-            # Safe: uses argument list via create_subprocess_exec, no shell spawned
-            proc = await asyncio.create_subprocess_exec(
-                cmd[0],
-                *cmd[1:],
-                stdin=stdin_fh,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=self._get_minimal_env(),
-                start_new_session=True,
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt_bytes), timeout=timeout
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
-                await terminate_process_tree(proc)
-                raise RuntimeError(
-                    f"Claude Code CLI timed out after {timeout}s. "
-                    "Consider increasing timeout or simplifying the task."
-                )
-        finally:
-            with contextlib.suppress(OSError):
-                stdin_fh.close()
-            with contextlib.suppress(OSError):
-                os.unlink(stdin_path)
+        except asyncio.TimeoutError:
+            await terminate_process_tree(proc)
+            raise RuntimeError(
+                f"Claude Code CLI timed out after {timeout}s. "
+                "Consider increasing timeout or simplifying the task."
+            )
 
         stdout_text = stdout.decode("utf-8", errors="replace")
         stderr_text = stderr.decode("utf-8", errors="replace")

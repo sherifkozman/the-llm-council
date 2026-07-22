@@ -350,19 +350,14 @@ class GeminiCLIProvider(ProviderAdapter):
         env = self._get_minimal_env(auth_settings)
         env["GEMINI_CLI_HOME"] = cli_home
 
-        stdin_fd, stdin_path = tempfile.mkstemp(
-            prefix="llm-council-gemini-prompt-", suffix=".txt"
-        )
-        with os.fdopen(stdin_fd, "w", encoding="utf-8") as stdin_file:
-            stdin_file.write(self._prompt_text(request))
-        stdin_fh = open(stdin_path, "rb")
+        prompt_bytes = self._prompt_text(request).encode("utf-8")
 
         # Use minimal environment to reduce secret exposure
         try:
             proc = await asyncio.create_subprocess_exec(
                 cmd[0],
                 *cmd[1:],
-                stdin=stdin_fh,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
@@ -371,7 +366,9 @@ class GeminiCLIProvider(ProviderAdapter):
 
             timeout = self._request_timeout(request)
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(input=prompt_bytes), timeout=timeout
+                )
             except asyncio.TimeoutError:
                 await terminate_process_tree(proc)
                 raise RuntimeError(
@@ -435,10 +432,6 @@ class GeminiCLIProvider(ProviderAdapter):
                 raw={"stdout": stdout_text},
             )
         finally:
-            with contextlib.suppress(OSError):
-                stdin_fh.close()
-            with contextlib.suppress(OSError):
-                os.unlink(stdin_path)
             shutil.rmtree(cli_home, ignore_errors=True)
 
     async def supports(self, capability: str) -> bool:

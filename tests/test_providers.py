@@ -1965,10 +1965,12 @@ class TestCLIProviderTimeouts:
             "completion_tokens": 3,
             "total_tokens": 8,
         }
+        # -p stays (it selects headless mode) but carries no value; the prompt
+        # itself is piped in on stdin. See TestCLIPromptOnStdin.
         assert mock_exec.await_args.args[:5] == (
             "/opt/homebrew/bin/gemini",
             "-p",
-            "test",
+            "",
             "--approval-mode",
             "default",
         )
@@ -2735,3 +2737,107 @@ class TestOpenRouterProviderEnvModel:
             "completion_tokens": 1,
             "total_tokens": 2,
         }
+
+
+class TestCLIPromptOnStdin:
+    """Prompts must travel via stdin, not argv.
+
+    Windows caps a command line at ~32KB (CreateProcess), so a large prompt --
+    or a prompt plus an inlined schema -- makes the spawn fail outright. These
+    guard the delivery mechanism, not just the returned text.
+    """
+
+    LONG_PROMPT = "x" * 50_000
+
+    @pytest.mark.asyncio
+    async def test_claude_code_sends_prompt_via_stdin(self):
+        provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude")
+        process = AsyncMock()
+        process.communicate.return_value = (b'{"result":"ok"}', b"")
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt=self.LONG_PROMPT))
+
+        argv = list(mock_exec.await_args.args)
+        assert self.LONG_PROMPT not in argv
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        assert process.communicate.await_args.kwargs["input"] == self.LONG_PROMPT.encode("utf-8")
+
+    @pytest.mark.asyncio
+    async def test_gemini_cli_sends_prompt_via_stdin(self):
+        provider = GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini")
+        process = AsyncMock()
+        process.communicate.return_value = (b'{"response":"ok"}', b"")
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt=self.LONG_PROMPT))
+
+        argv = list(mock_exec.await_args.args)
+        assert self.LONG_PROMPT not in argv
+        # headless mode still needs -p, but with an empty value
+        assert "-p" in argv and argv[argv.index("-p") + 1] == ""
+        assert mock_exec.await_args.kwargs["stdin"] == asyncio.subprocess.PIPE
+        assert process.communicate.await_args.kwargs["input"] == self.LONG_PROMPT.encode("utf-8")
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_sends_prompt_via_stdin_file(self):
+        """Codex streams stdout itself, so the prompt is handed over as a file."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}',
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt=self.LONG_PROMPT))
+
+        argv = list(mock_exec.await_args.args)
+        assert self.LONG_PROMPT not in argv
+        stdin_arg = mock_exec.await_args.kwargs["stdin"]
+        # the handle is closed by the time we inspect it; re-read by name
+        assert stdin_arg.name.endswith(".txt")
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_stdin_file_holds_the_prompt(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        captured: dict[str, bytes] = {}
+
+        async def _fake_exec(*args, **kwargs):
+            captured["stdin"] = kwargs["stdin"].read()
+            process = AsyncMock()
+            process.communicate.return_value = (
+                b'{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"ok"}}',
+                b"",
+            )
+            process.returncode = 0
+            return process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec):
+            await provider.generate(GenerateRequest(prompt="hello council"))
+
+        assert captured["stdin"] == b"hello council"
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_removes_prompt_tempfile(self):
+        """The prompt is written to disk; it must not outlive the call."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        seen: dict[str, str] = {}
+
+        async def _fake_exec(*args, **kwargs):
+            seen["path"] = kwargs["stdin"].name
+            process = AsyncMock()
+            process.communicate.return_value = (
+                b'{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"ok"}}',
+                b"",
+            )
+            process.returncode = 0
+            return process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec):
+            await provider.generate(GenerateRequest(prompt="secret prompt"))
+
+        assert not Path(seen["path"]).exists()
