@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -213,12 +214,46 @@ def _load_config_defaults() -> dict[str, Any]:
     return defaults if isinstance(defaults, dict) else {}
 
 
+def _normalize_provider_flags(name: str, raw: Any) -> str | None:
+    """Normalize a user-supplied ``default_flags`` value into a CLI flag string.
+
+    Accepts either a shell-style string or a list of tokens (a natural YAML
+    shape). Anything else -- or a string the shell lexer cannot parse -- is
+    dropped with a warning, so a malformed config never reaches a provider
+    constructor and fails mid-run.
+    """
+    if isinstance(raw, str):
+        candidate = raw.strip()
+    elif isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        candidate = shlex.join(raw)
+    else:
+        _warn(
+            f"[yellow]Warning:[/yellow] ignoring provider '{name}' default_flags: "
+            "expected a string or a list of strings"
+        )
+        return None
+
+    if not candidate:
+        return None
+
+    try:
+        shlex.split(candidate)
+    except ValueError as exc:
+        _warn(
+            f"[yellow]Warning:[/yellow] ignoring provider '{name}' default_flags: "
+            f"unparseable flag string ({exc})"
+        )
+        return None
+
+    return candidate
+
+
 def _load_provider_configs() -> dict[str, dict[str, Any]]:
     """Extract per-provider configs from config file.
 
     Reads the ``providers`` list from config.yaml and returns a
     dict keyed by provider name with constructor kwargs
-    (e.g. ``api_key`` and ``default_model``).
+    (e.g. ``api_key``, ``default_model`` and ``default_flags``).
 
     Example config.yaml::
 
@@ -227,11 +262,14 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
             default_model: gpt-5.4
           - name: gemini
             default_model: gemini-3.1-pro-preview
+          - name: codex
+            default_flags: --sandbox read-only -c model_reasoning_effort=high
 
     Returns::
 
         {"openai": {"api_key": "sk-...", "default_model": "gpt-5.4"},
-         "gemini": {"api_key": "AIza...", "default_model": "gemini-3.1-pro-preview"}}
+         "gemini": {"api_key": "AIza...", "default_model": "gemini-3.1-pro-preview"},
+         "codex": {"default_flags": "--sandbox read-only -c model_reasoning_effort=high"}}
     """
     config = _load_config()
     providers_list = config.get("providers", [])
@@ -251,6 +289,12 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
             kwargs["api_key"] = entry["api_key"]
         if "default_model" in entry:
             kwargs["default_model"] = entry["default_model"]
+        if "default_flags" in entry:
+            # CLI-backed providers (e.g. codex) accept a raw flag string; it is
+            # the escape hatch for options council does not model natively.
+            flags = _normalize_provider_flags(name, entry["default_flags"])
+            if flags is not None:
+                kwargs["default_flags"] = flags
         if kwargs:
             result[name] = kwargs
     return result

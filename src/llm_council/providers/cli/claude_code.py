@@ -5,6 +5,12 @@ Wraps the ``claude`` CLI (Claude Code) for non-interactive generation.
 Uses --bare mode to skip hooks/LSP/plugins and prevent recursion
 when council is invoked from within Claude Code.
 
+LIMITATION: ``request.reasoning`` is not honored. The ``claude`` CLI exposes no
+flag for thinking budget or effort, so a subagent's reasoning config is silently
+inert here (unlike the Anthropic HTTP adapter, which maps it to a ``thinking``
+block, and the Codex CLI adapter, which maps effort to a ``-c`` override). Use
+the ``anthropic`` provider when reasoning control matters.
+
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
 No shell is spawned; arguments are passed as a list directly to the binary.

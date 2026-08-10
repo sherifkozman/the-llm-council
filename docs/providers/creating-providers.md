@@ -520,6 +520,36 @@ if request.reasoning and request.reasoning.enabled:
 **Gemini 3.x Thinking Levels:** MINIMAL, LOW, MEDIUM, HIGH
 **Gemini 2.5 Budget Range:** 0 - 24576 tokens
 
+#### Codex CLI Format
+
+CLI-backed providers translate `ReasoningConfig` into command-line arguments instead of
+request fields. The Codex adapter maps `effort` to a config override:
+
+```python
+# codex exec ... -c model_reasoning_effort=high
+if reasoning and reasoning.enabled and reasoning.effort:
+    cmd.extend(["-c", f"model_reasoning_effort={reasoning.effort}"])
+```
+
+Two CLI-specific rules apply:
+
+- An explicit `model_reasoning_effort` in the provider's `default_flags` wins over the
+  request config. `default_flags` is operator-supplied configuration, so it is the escape
+  hatch; set it in `config.yaml` to pin effort for every run.
+- `enabled=True` with `effort=None` emits nothing, leaving the CLI's own default in place
+  rather than restating a hardcoded `"medium"` like the HTTP adapters do.
+
+Note that Codex runs execute in an isolated `HOME` that carries auth material only, so
+`~/.codex/config.toml` does not apply to council runs (importing it would let ambient
+sandbox/approval/MCP settings widen a nested run's least-privilege defaults). The subagent
+`reasoning` config and `default_flags` are the two supported levers.
+
+#### Claude Code CLI: not supported
+
+The `claude` CLI exposes no flag for thinking budget or effort, so `ClaudeCodeCLIProvider`
+ignores `request.reasoning` entirely — a subagent's reasoning config is inert there. Use the
+`anthropic` HTTP provider when reasoning control matters. Do not synthesize a flag for it.
+
 ### Reasoning API Quick Reference
 
 | Provider | Field | Format |
@@ -527,6 +557,8 @@ if request.reasoning and request.reasoning.enabled:
 | OpenAI | `reasoning_effort` | `"low"`, `"medium"`, `"high"` |
 | Anthropic | `thinking` | `{type: "enabled", budget_tokens: N}` + beta API |
 | Gemini API | `thinking_config` | `{thinking_level: "HIGH"}` or `{thinking_budget: N}` |
+| Codex CLI | `-c model_reasoning_effort=<effort>` | CLI argument; `default_flags` wins |
+| Claude Code CLI | — | not supported by the CLI |
 
 ## Provider Implementation Checklist
 

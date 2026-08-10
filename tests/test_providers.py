@@ -3017,3 +3017,150 @@ class TestCLIAdapterAuthAndIsolation:
         assert "llm-council-claude-cwd-" in cwd
         # scratch dir is removed after the call
         assert not Path(cwd).exists()
+
+
+class TestCodexReasoningEffort:
+    """Codex CLI must translate ReasoningConfig into a `-c` effort override (#58)."""
+
+    @staticmethod
+    def _effort_overrides(argv) -> list[str]:
+        """Return every model_reasoning_effort value present in an argv sequence."""
+        values = []
+        for token in argv:
+            candidate = token
+            if candidate.startswith("--config="):
+                candidate = candidate[len("--config=") :]
+            key, _, value = candidate.partition("=")
+            if key == "model_reasoning_effort":
+                values.append(value)
+        return values
+
+    def test_build_command_maps_effort_to_config_override(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        cmd = provider._build_command(
+            model="gpt-5.4",
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+
+        assert "-c" in cmd
+        effort_index = cmd.index("-c")
+        assert cmd[effort_index + 1] == "model_reasoning_effort=high"
+        assert self._effort_overrides(cmd) == ["high"]
+
+    def test_build_command_passes_effort_none_through(self):
+        """`effort='none'` is an explicit request to disable reasoning, not a no-op."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        cmd = provider._build_command(
+            model="gpt-5.4",
+            reasoning=ReasoningConfig(enabled=True, effort="none"),
+        )
+
+        assert self._effort_overrides(cmd) == ["none"]
+
+    def test_build_command_omits_override_when_reasoning_disabled(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        cmd = provider._build_command(
+            model="gpt-5.4",
+            reasoning=ReasoningConfig(enabled=False, effort="high"),
+        )
+
+        assert self._effort_overrides(cmd) == []
+
+    def test_build_command_omits_override_without_reasoning_config(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        cmd = provider._build_command(model="gpt-5.4")
+
+        assert self._effort_overrides(cmd) == []
+
+    def test_build_command_omits_override_when_effort_unset(self):
+        """Enabled-but-effortless config must not restate a hardcoded default."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        cmd = provider._build_command(
+            model="gpt-5.4",
+            reasoning=ReasoningConfig(enabled=True, budget_tokens=8192),
+        )
+
+        assert self._effort_overrides(cmd) == []
+
+    def test_default_flags_effort_wins_over_request(self):
+        """Operator-supplied default_flags is the escape hatch and takes precedence."""
+        provider = CodexCLIProvider(
+            cli_path="/usr/local/bin/codex",
+            default_flags="--sandbox read-only -c model_reasoning_effort=low",
+        )
+
+        cmd = provider._build_command(
+            model="gpt-5.4",
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+
+        assert self._effort_overrides(cmd) == ["low"]
+
+    def test_default_flags_effort_wins_with_long_config_form(self):
+        provider = CodexCLIProvider(
+            cli_path="/usr/local/bin/codex",
+            default_flags="--config=model_reasoning_effort=minimal",
+        )
+
+        cmd = provider._build_command(
+            model="gpt-5.4",
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+
+        assert self._effort_overrides(cmd) == ["minimal"]
+
+    def test_unrelated_default_flags_do_not_block_request_effort(self):
+        provider = CodexCLIProvider(
+            cli_path="/usr/local/bin/codex",
+            default_flags="-c model_reasoning_summary=detailed",
+        )
+
+        cmd = provider._build_command(
+            model="gpt-5.4",
+            reasoning=ReasoningConfig(enabled=True, effort="medium"),
+        )
+
+        assert self._effort_overrides(cmd) == ["medium"]
+
+    @pytest.mark.asyncio
+    async def test_generate_forwards_request_reasoning_to_cli(self):
+        """The request-level reasoning config must reach the actual argv (#58)."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}',
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            response = await provider.generate(
+                GenerateRequest(
+                    prompt="test",
+                    reasoning=ReasoningConfig(enabled=True, effort="high"),
+                )
+            )
+
+        assert response.text == "READY"
+        argv = mock_exec.await_args.args
+        assert self._effort_overrides(argv) == ["high"]
+
+    @pytest.mark.asyncio
+    async def test_generate_without_reasoning_leaves_cli_defaults(self):
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = AsyncMock()
+        process.communicate.return_value = (
+            b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}',
+            b"",
+        )
+        process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
+            await provider.generate(GenerateRequest(prompt="test"))
+
+        assert self._effort_overrides(mock_exec.await_args.args) == []

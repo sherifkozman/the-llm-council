@@ -1374,6 +1374,66 @@ class TestProviderConfigLoading:
             result = _load_provider_configs()
             assert result == {}
 
+    def test_load_provider_configs_forwards_default_flags(self):
+        """CLI providers can carry a flag string from config.yaml (#58)."""
+        config_data = {
+            "providers": [
+                {
+                    "name": "codex",
+                    "default_flags": "--sandbox read-only -c model_reasoning_effort=high",
+                },
+            ],
+        }
+
+        with patch(
+            "llm_council.cli.main._load_config",
+            return_value=config_data,
+        ):
+            result = _load_provider_configs()
+
+        assert result == {
+            "codex": {"default_flags": "--sandbox read-only -c model_reasoning_effort=high"}
+        }
+
+    def test_load_provider_configs_joins_default_flags_list(self):
+        """A YAML list of tokens is normalized into a shell-style flag string."""
+        config_data = {
+            "providers": [
+                {
+                    "name": "codex",
+                    "default_flags": ["--sandbox", "read-only", "-c", "model_reasoning_effort=low"],
+                },
+            ],
+        }
+
+        with patch(
+            "llm_council.cli.main._load_config",
+            return_value=config_data,
+        ):
+            result = _load_provider_configs()
+
+        assert result == {
+            "codex": {"default_flags": "--sandbox read-only -c model_reasoning_effort=low"}
+        }
+
+    def test_load_provider_configs_drops_invalid_default_flags(self):
+        """Malformed default_flags is dropped rather than passed to the provider."""
+        config_data = {
+            "providers": [
+                {"name": "codex", "default_model": "gpt-5.4", "default_flags": {"sandbox": True}},
+                {"name": "gemini-cli", "default_flags": "--sandbox 'read-only"},
+                {"name": "claude-code", "default_flags": "   "},
+            ],
+        }
+
+        with patch(
+            "llm_council.cli.main._load_config",
+            return_value=config_data,
+        ):
+            result = _load_provider_configs()
+
+        assert result == {"codex": {"default_model": "gpt-5.4"}}
+
 
 class TestCLIRun:
     """Tests for run command."""

@@ -268,6 +268,10 @@ providers:
   - name: openrouter
     default_model: anthropic/claude-opus-4-6
 
+  # CLI-backed providers also accept a raw flag string (or a list of tokens)
+  - name: codex
+    default_flags: --sandbox read-only -c model_reasoning_effort=high
+
 defaults:
   providers:
     - openrouter
@@ -276,6 +280,11 @@ defaults:
   summary_tier: actions
   enable_degradation: true
 ```
+
+**CLI provider reasoning:** the `codex` adapter maps a subagent's `reasoning.effort` to
+`-c model_reasoning_effort=<effort>`; an effort pinned in `default_flags` wins over the
+subagent config. The `claude-code` CLI has no equivalent flag, so `reasoning` is ignored
+there — use the `anthropic` provider when reasoning control matters.
 
 ## Development
 

@@ -242,12 +242,18 @@ providers:
     api_key: ${ANTHROPIC_API_KEY}
     default_model: claude-sonnet-4-6
 
+  # CLI-backed providers accept a raw flag string (string or list of tokens)
+  - name: codex
+    default_flags: --sandbox read-only -c model_reasoning_effort=high
+
 defaults:
   timeout: 120              # Timeout per API call (seconds)
   max_retries: 3            # Max synthesis retry attempts
   summary_tier: actions     # Artifact summarization depth
   enable_schema_validation: true
 ```
+
+`default_flags` is passed straight to the adapter constructor, so set it only on providers that accept it (the CLI-backed ones, e.g. `codex`) — the same rule that already applies to `api_key`. A value that is neither a string nor a list of strings, or that cannot be parsed as a shell command line, is dropped with a warning instead of reaching the adapter.
 
 Config values support standard shell-style environment expansion such as `${OPENROUTER_API_KEY}` at load time. That expansion only affects values declared in `config.yaml`; if a provider config omits a field, the adapter still falls back to its normal provider-specific environment variables. For ad hoc provider selection, you can still override the model at runtime with `--models`.
 

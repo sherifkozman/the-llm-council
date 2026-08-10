@@ -5,6 +5,13 @@ Wraps the ``codex`` CLI for non-interactive generation via ``codex exec``.
 Useful for agent-to-agent delegation and environments where CLI auth
 is available but API keys may not be.
 
+Reasoning: a request-level ``ReasoningConfig`` is translated into a
+``-c model_reasoning_effort=<effort>`` CLI override. Because runs execute in an
+isolated ``HOME`` that intentionally carries auth material only, the user's
+``~/.codex/config.toml`` does not apply; the two supported ways to control
+effort are the subagent's ``reasoning`` config and the provider's
+``default_flags`` (the latter wins when both set an effort).
+
 SECURITY NOTE: Uses asyncio.create_subprocess_exec with argument lists,
 which is safe from shell injection (equivalent to execFile in Node.js).
 """
@@ -33,6 +40,7 @@ from llm_council.providers.base import (
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    ReasoningConfig,
     classify_error,
     get_billing_help_url,
 )
@@ -44,6 +52,10 @@ DEFAULT_MODEL = "gpt-5.4"
 # Override via CODEX_CLI_FLAGS env var or default_flags param for agentic mode
 DEFAULT_FLAGS = "--sandbox read-only --skip-git-repo-check"
 _CODEX_SUFFIX = "-codex"
+# Codex resolves reasoning effort from its own layered config; ``-c key=value``
+# overrides sit on top of it and are how a request-level ReasoningConfig is
+# translated for this CLI.
+_REASONING_EFFORT_KEY = "model_reasoning_effort"
 
 # Unsafe modes that require explicit opt-in
 _UNSAFE_FLAGS = {"--full-auto", "--sandbox workspace-write", "--approval-mode yolo"}
@@ -348,12 +360,63 @@ class CodexCLIProvider(ProviderAdapter):
         self._login_status_checked = False
         self._login_status_cache: str | None = None
 
+    def _default_flags_set_reasoning_effort(self) -> bool:
+        """Report whether the operator already pinned reasoning effort in default_flags."""
+
+        try:
+            tokens = shlex.split(self._default_flags)
+        except ValueError:  # malformed quoting; _build_command surfaces it
+            return False
+
+        for token in tokens:
+            candidate = token
+            if candidate.startswith("--config="):
+                candidate = candidate[len("--config=") :]
+            elif candidate.startswith("-c") and candidate != "-c":
+                candidate = candidate[len("-c") :]
+            if candidate.split("=", 1)[0].strip() == _REASONING_EFFORT_KEY:
+                return True
+        return False
+
+    def _reasoning_effort_override(self, reasoning: ReasoningConfig | None) -> str | None:
+        """Map a provider-agnostic ``ReasoningConfig`` to a Codex effort override.
+
+        Mirrors how the HTTP adapters consume ``ReasoningConfig``: the config is
+        only honored when ``enabled`` is set. Two deliberate CLI-specific rules:
+
+        * An explicit ``model_reasoning_effort`` in ``default_flags`` wins. That
+          flag string is operator-supplied config, so it is the escape hatch and
+          outranks the subagent's declared reasoning budget.
+        * ``effort=None`` emits nothing. Unlike an HTTP call there is a real
+          user-level default (``~/.codex/config.toml``), so restating a
+          hardcoded "medium" would silently override it.
+        """
+
+        if reasoning is None or not reasoning.enabled:
+            return None
+
+        if self._default_flags_set_reasoning_effort():
+            logger.debug(
+                "default_flags already sets %s; ignoring request reasoning config",
+                _REASONING_EFFORT_KEY,
+            )
+            return None
+
+        if reasoning.effort is None:
+            logger.debug(
+                "Reasoning enabled without an effort level; leaving the Codex CLI default in place"
+            )
+            return None
+
+        return reasoning.effort
+
     def _build_command(
         self,
         *,
         model: str,
         output_last_message_path: str | None = None,
         output_schema_path: str | None = None,
+        reasoning: ReasoningConfig | None = None,
     ) -> list[str]:
         """Build the CLI command as argument list (safe from injection)."""
         if not self._cli_path:
@@ -361,6 +424,9 @@ class CodexCLIProvider(ProviderAdapter):
 
         cmd = [self._cli_path, "exec"]
         cmd.extend(shlex.split(self._default_flags))
+        effort = self._reasoning_effort_override(reasoning)
+        if effort:
+            cmd.extend(["-c", f"{_REASONING_EFFORT_KEY}={effort}"])
         cmd.extend(["--json", "--color", "never"])
         cmd.extend(["-m", model])
         if output_schema_path:
@@ -390,7 +456,14 @@ class CodexCLIProvider(ProviderAdapter):
         }
 
     def _copy_isolated_runtime_state(self, codex_dir: Path) -> None:
-        """Copy only the auth material needed for isolated Codex subprocesses."""
+        """Copy only the auth material needed for isolated Codex subprocesses.
+
+        ``~/.codex/config.toml`` is deliberately NOT copied: it can carry
+        sandbox/approval overrides, MCP servers and ``notify`` hooks, so
+        importing it would let ambient user config widen the least-privilege
+        defaults of a nested run. Reasoning effort is passed explicitly instead
+        (see ``_reasoning_effort_override``).
+        """
 
         source_dir = Path.home() / ".codex"
         for filename in ("auth.json", ".credentials.json"):
@@ -532,6 +605,7 @@ class CodexCLIProvider(ProviderAdapter):
                 model=model,
                 output_last_message_path=output_path,
                 output_schema_path=schema_path,
+                reasoning=request.reasoning,
             )
             env = self._get_subprocess_env()
             env["HOME"] = cli_home
