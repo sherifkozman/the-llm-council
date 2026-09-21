@@ -166,6 +166,17 @@ class CouncilConfig(BaseModel):
             "E.g. {'openai': {'default_model': 'gpt-5.4'}}"
         ),
     )
+    fallback_providers: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Last-resort failover map: provider name -> replacement provider. "
+            "When a provider exhausts its retry budget (or hits a non-retryable "
+            "auth/billing error), the degradation policy swaps in the mapped "
+            "provider for that call instead of losing the seat entirely. "
+            "A value containing '/' is instantiated as an OpenRouter virtual "
+            "provider, e.g. {'claude': 'anthropic/claude-opus-5'}."
+        ),
+    )
 
 
 class CouncilRequest(BaseModel):

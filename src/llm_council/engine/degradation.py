@@ -41,7 +41,7 @@ class FailureEvent:
     """Record of a provider failure."""
 
     provider: str
-    phase: str  # drafts, critique, synthesis
+    phase: str  # draft, critique, synthesis
     error_type: ErrorType
     error_message: str
     action_taken: DegradationAction
@@ -165,7 +165,7 @@ class DegradationPolicy:
         Args:
             provider: Name of the failed provider
             error: The exception or error message
-            phase: Current phase (drafts, critique, synthesis)
+            phase: Current phase (draft, critique, synthesis)
             remaining_providers: Number of other providers still available
 
         Returns:
@@ -333,6 +333,19 @@ class DegradationPolicy:
 
         # Not enough providers remaining
         if self._abort_on_all_failures:
+            # Never abort a seat that still has an untried fallback. Reaching here
+            # without one is easy: an UNKNOWN-classified error only earns a single
+            # retry (see above), so it never reaches the max-retries branch that
+            # would otherwise have offered the fallback, and the run died with a
+            # configured failover sitting unused.
+            if provider in self._fallbacks:
+                return DegradationDecision(
+                    action=DegradationAction.FALLBACK,
+                    reason=(
+                        "No providers left below the minimum; using fallback instead of aborting"
+                    ),
+                    fallback_provider=self._fallbacks[provider],
+                )
             return DegradationDecision(
                 action=DegradationAction.ABORT,
                 reason=f"Below minimum required providers ({self._min_providers})",

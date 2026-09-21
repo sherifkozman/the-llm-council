@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from enum import Enum
@@ -119,6 +120,22 @@ _SERVER_ERROR_PATTERNS = (
 )
 
 
+def _mentions(error_text: str, pattern: str) -> bool:
+    """Is `pattern` present in `error_text`, as a token rather than as any substring?
+
+    Only matters for the bare status-code patterns. Provider messages interpolate raw
+    numbers - "timed out after 401.0s", "after 429.0s" - and a plain `in` test reads those
+    as an HTTP 401/429, which sends a timeout down the auth path (non-retryable: the seat is
+    dropped with "check your API key") or the rate-limit path. A status code is never glued
+    to another digit or to a decimal point, so requiring that is enough to tell them apart
+    while still matching "HTTP 429", "429 Too Many Requests" and "504 DEADLINE_EXCEEDED".
+    """
+
+    if not pattern.isdigit():
+        return pattern in error_text
+    return re.search(rf"(?<![\d.]){re.escape(pattern)}(?![\d.])", error_text) is not None
+
+
 def classify_error(error_text: str, return_code: int = -1) -> ErrorType:
     """Classify an error based on error text and return code.
 
@@ -136,37 +153,37 @@ def classify_error(error_text: str, return_code: int = -1) -> ErrorType:
 
     # Check billing errors first (most critical, don't waste money retrying)
     for pattern in _BILLING_PATTERNS:
-        if pattern.lower() in error_lower:
+        if _mentions(error_lower, pattern.lower()):
             return ErrorType.BILLING
 
     # Check rate limiting (retryable with backoff)
     for pattern in _RATE_LIMIT_PATTERNS:
-        if pattern.lower() in error_lower:
+        if _mentions(error_lower, pattern.lower()):
             return ErrorType.RATE_LIMIT
 
     # Check auth errors (permanent, fix API key)
     for pattern in _AUTH_PATTERNS:
-        if pattern.lower() in error_lower:
+        if _mentions(error_lower, pattern.lower()):
             return ErrorType.AUTH
 
     # Check model availability
     for pattern in _MODEL_UNAVAILABLE_PATTERNS:
-        if pattern.lower() in error_lower:
+        if _mentions(error_lower, pattern.lower()):
             return ErrorType.MODEL_UNAVAILABLE
 
     # Check timeouts before general network issues so read/deadline failures retry correctly
     for pattern in _TIMEOUT_PATTERNS:
-        if pattern in error_lower:
+        if _mentions(error_lower, pattern):
             return ErrorType.TIMEOUT
 
     # Check for network issues (retryable)
     for pattern in _NETWORK_PATTERNS:
-        if pattern in error_lower:
+        if _mentions(error_lower, pattern):
             return ErrorType.NETWORK
 
     # Check for server/API errors (transient, retryable like network)
     for pattern in _SERVER_ERROR_PATTERNS:
-        if pattern in error_lower:
+        if _mentions(error_lower, pattern):
             return ErrorType.NETWORK
 
     return ErrorType.UNKNOWN

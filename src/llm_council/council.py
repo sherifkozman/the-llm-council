@@ -59,6 +59,7 @@ class Council:
             enable_graceful_degradation=config.enable_graceful_degradation,
             models=config.models,
             provider_configs=config.provider_configs,
+            fallback_providers=dict(config.fallback_providers),
             system_context=config.system_context,
             context_metadata=dict(config.context_metadata),
             mode=config.mode,

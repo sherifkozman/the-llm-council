@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 
 class ProcessingState(str, Enum):
@@ -42,6 +42,20 @@ class ArtifactType(str, Enum):
     ERROR_REPORT = "error_report"
 
 
+class Phase(str, Enum):
+    """Pipeline phase that produced an artifact.
+
+    Recorded so a stored artifact can be attributed to the stage that made it.
+    Without this the ledger can say *what* was produced but not *when in the
+    pipeline*, which makes per-phase latency and failure analysis impossible.
+    """
+
+    EVIDENCE = "evidence"
+    DRAFT = "draft"
+    CRITIQUE = "critique"
+    SYNTHESIS = "synthesis"
+
+
 @dataclass
 class Artifact:
     """A stored artifact with metadata."""
@@ -57,6 +71,11 @@ class Artifact:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     summary: str | None = None
     summary_tokens: int = 0
+    # Attribution. Both are nullable: rows written before this existed keep NULL,
+    # which is the honest value for "not recorded" and must never be backfilled
+    # with a guess.
+    provider: str | None = None
+    phase: str | None = None
 
 
 @dataclass
@@ -317,6 +336,8 @@ class ArtifactStore:
                 created_at TEXT NOT NULL,
                 summary TEXT,
                 summary_tokens INTEGER DEFAULT 0,
+                provider TEXT,
+                phase TEXT,
                 FOREIGN KEY (run_id) REFERENCES runs(run_id)
             )
         """)
@@ -333,13 +354,55 @@ class ArtifactStore:
             )
         """)
 
-        # Indexes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_hash ON artifacts(content_hash)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_wave ON runs(wave_id)")
+        # Additive migrations for ledgers created before a column existed.
+        # CREATE TABLE IF NOT EXISTS is a no-op on an existing database, so new
+        # columns would otherwise never reach a ledger with history in it.
+        # This must run BEFORE the indexes below, which reference those columns.
+        # It runs under the write lock: two openers of the same OLD ledger could both
+        # read the schema before either altered it, and the loser's ALTER raised
+        # "duplicate column name" out of this constructor. BEGIN IMMEDIATE is taken
+        # BEFORE the schema is read, so a concurrent opener waits (bounded by the
+        # connection's busy timeout) and then reads the finished migration. The
+        # finally rolls back and releases the lock if anything in between raises.
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            self._migrate_schema(cursor)
 
-        conn.commit()
-        conn.close()
+            # Indexes
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id)")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_hash ON artifacts(content_hash)"
+            )
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_wave ON runs(wave_id)")
+            # Attribution queries ("which provider was slow in which phase") scan by
+            # these two together far more often than by either alone.
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_provider_phase ON artifacts(provider, phase)"
+            )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _migrate_schema(cursor: sqlite3.Cursor) -> None:
+        """Add columns introduced after a ledger was first created.
+
+        Purely additive: every new column is nullable and appended to the end of
+        the table. Appending matters because several read paths still unpack
+        ``SELECT *`` rows positionally, so inserting a column in the middle would
+        silently shift every field after it.
+
+        Existing rows keep NULL rather than a backfilled guess -- the data was
+        genuinely not recorded, and inventing it would make historical analysis
+        look complete when it is not.
+        """
+
+        expected = {"provider": "TEXT", "phase": "TEXT"}
+        existing = {row[1] for row in cursor.execute("PRAGMA table_info(artifacts)")}
+        for column, sql_type in expected.items():
+            if column not in existing:
+                cursor.execute(f"ALTER TABLE artifacts ADD COLUMN {column} {sql_type}")
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get database connection.
@@ -401,12 +464,46 @@ class ArtifactStore:
 
         return run
 
+    @staticmethod
+    def _row_to_artifact(row: tuple[Any, ...]) -> Artifact:
+        """Build an Artifact from a ``SELECT *`` row.
+
+        Positional by necessity (the queries use ``SELECT *``), which is exactly
+        why new columns are only ever appended to the table.
+
+        The row is typed ``Any`` because that is what sqlite3 actually yields --
+        the driver returns whatever the column affinity produced. Narrowing it to
+        ``object`` and silencing the fallout with ``type: ignore`` would be a
+        worse lie: the ignores were the wrong error code, so they neither
+        suppressed the real complaint nor stayed unused.
+        """
+        return Artifact(
+            artifact_id=str(row[0]),
+            run_id=str(row[1]),
+            artifact_type=str(row[2]),
+            content_hash=str(row[3]),
+            byte_size=int(row[4]),
+            token_estimate=int(row[5]),
+            file_path=str(row[6]),
+            processing_state=str(row[7]),
+            created_at=str(row[8]),
+            summary=str(row[9]) if row[9] is not None else None,
+            summary_tokens=int(row[10]) if row[10] is not None else 0,
+            # Tolerate short rows: a ledger mid-migration, or a caller that
+            # selected from an older snapshot, must not raise here.
+            provider=str(row[11]) if len(row) > 11 and row[11] is not None else None,
+            phase=str(row[12]) if len(row) > 12 and row[12] is not None else None,
+        )
+
     def store_artifact(
         self,
         run_id: str,
         content: str,
         artifact_type: ArtifactType,
         force_new: bool = False,
+        provider: str | None = None,
+        phase: str | Phase | None = None,
+        count_tokens: bool = True,
     ) -> Artifact:
         """
         Store an artifact, returning existing if content matches (dedup).
@@ -416,11 +513,20 @@ class ArtifactStore:
             content: Full artifact content
             artifact_type: Type of artifact
             force_new: Skip deduplication check
+            provider: Provider that produced this content (None = not recorded)
+            phase: Pipeline phase that produced it (None = not recorded)
+            count_tokens: Whether to add this artifact's tokens to the run's
+                ``actual_output_tokens``. Pass False for content the model did
+                not generate -- notably error reports. Counting those would
+                inflate the run's output total and, worse, make a failed run
+                that produced nothing look like it produced hundreds of tokens,
+                which is precisely the signal failure analysis depends on.
 
         Returns:
             Artifact record (new or existing)
         """
         content_hash = self._content_hash(content)
+        phase_value = phase.value if isinstance(phase, Phase) else phase
 
         if not self.enabled:
             return Artifact(
@@ -431,32 +537,32 @@ class ArtifactStore:
                 byte_size=len(content.encode()),
                 token_estimate=self._estimate_tokens(content),
                 file_path="",
+                provider=provider,
+                phase=phase_value,
             )
 
-        # Check for existing artifact with same hash (dedup)
+        # Check for existing artifact with same hash (dedup).
+        #
+        # Scoped by provider AND phase, not by content alone: two providers can
+        # legitimately emit byte-identical output for the same run (a short
+        # verdict, a small JSON object). Deduping those into one row would
+        # collapse two seats into one and make the new attribution columns lie
+        # about who produced what.
         if not force_new:
             with self._get_conn() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT * FROM artifacts WHERE content_hash = ? AND run_id = ?",
-                    (content_hash, run_id),
+                    """
+                    SELECT * FROM artifacts
+                    WHERE content_hash = ? AND run_id = ?
+                      AND provider IS ? AND phase IS ?
+                    """,
+                    (content_hash, run_id, provider, phase_value),
                 )
                 row = cursor.fetchone()
 
             if row:
-                return Artifact(
-                    artifact_id=row[0],
-                    run_id=row[1],
-                    artifact_type=row[2],
-                    content_hash=row[3],
-                    byte_size=row[4],
-                    token_estimate=row[5],
-                    file_path=row[6],
-                    processing_state=row[7],
-                    created_at=row[8],
-                    summary=row[9],
-                    summary_tokens=row[10],
-                )
+                return self._row_to_artifact(row)
 
         # Create new artifact with safe path
         artifact_id = str(uuid.uuid4())
@@ -483,6 +589,8 @@ class ArtifactStore:
             byte_size=len(content.encode()),
             token_estimate=self._estimate_tokens(content),
             file_path=str(file_path),
+            provider=provider,
+            phase=phase_value,
         )
 
         # Store in ledger
@@ -492,8 +600,8 @@ class ArtifactStore:
                 """
                 INSERT INTO artifacts (artifact_id, run_id, artifact_type, content_hash,
                                       byte_size, token_estimate, file_path, processing_state,
-                                      created_at, summary, summary_tokens)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      created_at, summary, summary_tokens, provider, phase)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     artifact.artifact_id,
@@ -507,17 +615,20 @@ class ArtifactStore:
                     artifact.created_at,
                     artifact.summary,
                     artifact.summary_tokens,
+                    artifact.provider,
+                    artifact.phase,
                 ),
             )
 
-            # Update run token count
-            cursor.execute(
-                """
-                UPDATE runs SET actual_output_tokens = actual_output_tokens + ?
-                WHERE run_id = ?
-            """,
-                (artifact.token_estimate, run_id),
-            )
+            # Update run token count (model-generated content only)
+            if count_tokens:
+                cursor.execute(
+                    """
+                    UPDATE runs SET actual_output_tokens = actual_output_tokens + ?
+                    WHERE run_id = ?
+                """,
+                    (artifact.token_estimate, run_id),
+                )
 
             conn.commit()
 
@@ -585,22 +696,7 @@ class ArtifactStore:
             cursor.execute("SELECT * FROM artifacts WHERE run_id = ?", (run_id,))
             rows = cursor.fetchall()
 
-        return [
-            Artifact(
-                artifact_id=row[0],
-                run_id=row[1],
-                artifact_type=row[2],
-                content_hash=row[3],
-                byte_size=row[4],
-                token_estimate=row[5],
-                file_path=row[6],
-                processing_state=row[7],
-                created_at=row[8],
-                summary=row[9],
-                summary_tokens=row[10],
-            )
-            for row in rows
-        ]
+        return [self._row_to_artifact(row) for row in rows]
 
     def complete_run(self, run_id: str, status: str = "completed") -> None:
         """Mark a run as completed."""
@@ -913,6 +1009,7 @@ __all__ = [
     "ArtifactStore",
     "Artifact",
     "ArtifactType",
+    "Phase",
     "ProcessingState",
     "ResultCapsule",
     "Run",

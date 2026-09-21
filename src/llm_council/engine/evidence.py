@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -13,6 +14,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from llm_council.engine.capabilities import CapabilityPlan
+
+logger = logging.getLogger(__name__)
 
 TEXT_EXTENSIONS = {
     ".py",
@@ -161,6 +164,7 @@ async def collect_capability_evidence(
     capability_plan: CapabilityPlan,
     *,
     repo_root: Path | None = None,
+    skip_capabilities: set[str] | None = None,
 ) -> EvidenceBundle:
     """Collect bounded local evidence for supported capability packs."""
 
@@ -171,6 +175,7 @@ async def collect_capability_evidence(
         mode,
         capability_plan,
         repo_root or Path.cwd(),
+        skip_capabilities or set(),
     )
 
 
@@ -180,17 +185,33 @@ def _collect_capability_evidence_sync(
     mode: str | None,
     capability_plan: CapabilityPlan,
     repo_root: Path,
+    skip_capabilities: set[str],
 ) -> EvidenceBundle:
     bundle = EvidenceBundle()
-    files = _candidate_files(repo_root)
+    try:
+        files = _candidate_files(repo_root)
+    except OSError as exc:
+        logger.warning("Candidate file scan failed: %s", exc, exc_info=True)
+        files = []
 
     for capability in capability_plan.required_capabilities:
+        if capability in skip_capabilities:
+            bundle.pending_capabilities.append(capability)
+            continue
+
         collector = _CAPABILITY_COLLECTORS.get(capability)
         if collector is None:
             bundle.pending_capabilities.append(capability)
             continue
 
-        item = collector(task, subagent, mode, repo_root, files)
+        # Evidence is optional context: a collector failure must degrade to
+        # "not executed", never abort the council run.
+        try:
+            item = collector(task, subagent, mode, repo_root, files)
+        except Exception as exc:
+            logger.warning("Evidence collector '%s' failed: %s", capability, exc, exc_info=True)
+            bundle.pending_capabilities.append(capability)
+            continue
         if item is None:
             bundle.pending_capabilities.append(capability)
             continue
@@ -517,6 +538,8 @@ def _load_git_diff(repo_root: Path) -> str:
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=DIFF_FETCH_TIMEOUT_SECONDS,
             )
         except (OSError, subprocess.SubprocessError):
@@ -524,7 +547,9 @@ def _load_git_diff(repo_root: Path) -> str:
 
         if completed.returncode not in (0, 1):
             continue
-        stdout = completed.stdout.strip()
+        # stdout can be None despite capture_output=True (e.g. wrapped or
+        # monkeypatched subprocess); a missing diff is "no evidence", not an error.
+        stdout = (completed.stdout or "").strip()
         if stdout:
             diff_parts.append(stdout)
 

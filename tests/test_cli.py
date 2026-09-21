@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+from conftest import isolate_home
 from typer.testing import CliRunner
 
 from llm_council.cli.main import _load_provider_configs, app
@@ -79,8 +82,12 @@ class TestCLIStorage:
         result = runner.invoke(app, ["storage", "status", "--json"])
 
         assert result.exit_code == 0
-        assert '"using_legacy": true' in result.stdout
-        assert str(tmp_path / ".claude" / "council-artifacts") in result.stdout
+        # Parse rather than substring-match: on Windows the path is JSON-escaped
+        # ("C:\\Users\\...") so the raw str(Path) never appears in the output and
+        # the assertion failed for reasons that had nothing to do with storage.
+        payload = json.loads(result.stdout)
+        assert payload["using_legacy"] is True
+        assert Path(payload["active_artifact_dir"]) == tmp_path / ".claude" / "council-artifacts"
 
     def test_storage_migrate_dry_run(self, monkeypatch, tmp_path):
         """Dry-run migration should report what would be copied."""
@@ -564,15 +571,20 @@ class TestCLIConfig:
 
     def test_config_show_no_file(self, tmp_path, monkeypatch):
         """Test config --show with no config file."""
-        # Mock home directory
-        monkeypatch.setenv("HOME", str(tmp_path))
+        isolate_home(monkeypatch, tmp_path)
         result = runner.invoke(app, ["config", "--show"])
         # Should indicate no config or show empty/default
         assert result.exit_code == 0
 
     def test_config_init(self, tmp_path, monkeypatch):
-        """Test config --init creates config file."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        """Test config --init creates config file.
+
+        Isolation is load-bearing here, not hygiene: this test WRITES a config.
+        It used to patch HOME only, which Windows ignores, so `config --init`
+        escaped tmp_path and overwrote the developer's real
+        ~/.config/llm-council/config.yaml on every suite run.
+        """
+        isolate_home(monkeypatch, tmp_path)
         result = runner.invoke(app, ["config", "--init"])
         assert result.exit_code == 0
 
@@ -585,7 +597,7 @@ class TestCLIConfig:
 
     def test_load_provider_configs_expands_env_api_keys(self, tmp_path, monkeypatch):
         """Provider configs should expand ${ENV_VAR} placeholders before constructor wiring."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        isolate_home(monkeypatch, tmp_path)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
         config_file = tmp_path / ".config" / "llm-council" / "config.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)

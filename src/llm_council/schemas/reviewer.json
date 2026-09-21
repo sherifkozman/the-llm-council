@@ -195,6 +195,19 @@
       },
       "description": "Items that can be addressed in follow-up PRs"
     },
+    "dissent": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "seat": {"type": "string", "description": "The provider/model whose draft disagreed, e.g. 'claude' or 'codex'"},
+          "position": {"type": "string", "description": "What that seat concluded, in its own words, not paraphrased"},
+          "why_not_adopted": {"type": "string", "description": "Why the synthesis did not follow it"}
+        },
+        "required": ["seat", "position"]
+      },
+      "description": "Every seat whose draft disagreed with this synthesis, quoted. Leave empty ONLY if the drafts genuinely agreed. A split recorded as unanimous is a false record: the reader must be able to see that the seats differed and on what."
+    },
     "reasoning": {
       "type": "string",
       "minLength": 50,

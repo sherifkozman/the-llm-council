@@ -74,6 +74,7 @@ vertex-ai = "llm_council.providers.vertex:VertexAIProvider"
 claude-code = "llm_council.providers.cli.claude_code:ClaudeCodeCLIProvider"
 codex-cli = "llm_council.providers.cli.codex:CodexCLIProvider"
 gemini-cli = "llm_council.providers.cli.gemini_cli:GeminiCLIProvider"
+sakana = "llm_council.providers.sakana:SakanaProvider"
 
 [project.urls]
 Homepage = "https://github.com/sherifkozman/the-llm-council"

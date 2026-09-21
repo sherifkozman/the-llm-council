@@ -41,7 +41,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from llm_council.config.models import get_council_models, is_multi_model_enabled
 from llm_council.engine.capabilities import CapabilityPlan, select_capability_plan
-from llm_council.engine.degradation import DegradationAction, DegradationPolicy
+from llm_council.engine.degradation import (
+    DegradationAction,
+    DegradationDecision,
+    DegradationPolicy,
+)
 from llm_council.engine.evidence import EvidenceBundle, collect_capability_evidence
 from llm_council.engine.health import HealthReport, preflight_check
 from llm_council.protocol.types import (
@@ -65,7 +69,7 @@ from llm_council.providers.compiler import compile_request_for_provider
 from llm_council.providers.concurrency import provider_call_slot
 from llm_council.providers.registry import get_registry, provider_identity
 from llm_council.schemas import load_schema
-from llm_council.storage.artifacts import ArtifactStore, ArtifactType, get_store
+from llm_council.storage.artifacts import ArtifactStore, ArtifactType, Phase, get_store
 from llm_council.subagents import (
     get_effective_schema,
     get_effective_system_prompt,
@@ -87,6 +91,13 @@ _CHUNKING_TARGET_CHARS = 60_000
 _CHUNKED_DRAFT_MAX_TOKENS = 900
 _LARGE_SINGLE_RUN_WARNING_TOKENS = 12_000
 _DEFAULT_ESTIMATE_METHOD = "chars_div_4_padded"
+# CLI adapters enforce ``request.timeout_seconds`` themselves and tear down their
+# own subprocess tree on expiry. The orchestrator's watchdog must therefore fire
+# strictly LATER than the adapter's own deadline: given an identical (or shorter)
+# deadline the two race, and when the watchdog wins it cancels the adapter
+# mid-cleanup and replaces a specific provider error with a bare, empty-string
+# ``TimeoutError``. This headroom keeps the adapter's diagnostic authoritative.
+_WATCHDOG_CLEANUP_HEADROOM_SECONDS = 5.0
 _CACHE_USAGE_KEYS = (
     "cache_read_tokens",
     "cache_creation_tokens",
@@ -342,6 +353,14 @@ class OrchestratorConfig(BaseModel):
         ),
     )
     model_overrides: dict[str, str] = Field(default_factory=dict)
+    fallback_providers: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Last-resort failover map (provider -> replacement provider) handed to "
+            "the DegradationPolicy. Empty means no failover, which is the historic "
+            "behaviour: a seat that exhausts its retries is simply lost."
+        ),
+    )
     cost_per_1k_input: dict[str, float] = Field(default_factory=dict)
     cost_per_1k_output: dict[str, float] = Field(default_factory=dict)
     enable_health_check: bool = Field(
@@ -439,6 +458,24 @@ class CostEstimate(BaseModel):
     estimated_cost_usd: float = Field(default=0.0)
 
 
+class DegradedOutput(BaseModel):
+    """Artifact retained when the council fell back off the normal synthesis path."""
+
+    model_config = ConfigDict(extra="allow")
+
+    source: str = Field(description="Fallback path that produced this result.")
+    provider: str | None = Field(
+        default=None, description="Provider whose text backs this fallback, if any."
+    )
+    reason: str = Field(default="", description="Why normal synthesis could not complete.")
+    text: str | None = Field(
+        default=None,
+        description=(
+            "Raw, unvalidated provider text preserved for the caller. Never schema-validated."
+        ),
+    )
+
+
 class CouncilResult(BaseModel):
     """Result payload for an orchestrator run."""
 
@@ -447,6 +484,13 @@ class CouncilResult(BaseModel):
     success: bool = Field(...)
     error: str | None = Field(default=None, description="Top-level error message, if any.")
     output: dict[str, Any] | None = Field(default=None)
+    degraded_output: DegradedOutput | None = Field(
+        default=None,
+        description=(
+            "Set when the result came from a degraded fallback path. Carries the raw "
+            "best-effort provider text when no schema-valid output could be built."
+        ),
+    )
     drafts: dict[str, str] | None = Field(default=None)
     critique: str | None = Field(default=None)
     synthesis_attempts: int = Field(default=1)
@@ -504,6 +548,11 @@ class Orchestrator:
         self._registry = get_registry()
         self._providers: dict[str, ProviderAdapter] = {}
         self._provider_init_errors: dict[str, str] = {}
+        # Reported like an error, but deliberately NOT part of the availability count:
+        # one blank draft is not evidence that a provider is permanently unusable, and
+        # `_provider_init_errors` feeds `remaining` for later phases, where over-counting
+        # failures can abort a run that still had a usable seat.
+        self._empty_draft_errors: dict[str, str] = {}
         self._initialize_providers()
         self._cost_calls: dict[str, int] = {}
         self._input_tokens: dict[str, int] = {}
@@ -523,6 +572,7 @@ class Orchestrator:
         self._model_pack_source: str | None = None
         self._resolved_model_overrides: dict[str, str] = {}
         self._execution_plan: dict[str, Any] | None = None
+        self._degraded_output: DegradedOutput | None = None
         self._artifact_store: ArtifactStore | None = None
         self._degradation_policy: DegradationPolicy | None = None
         self._health_report: HealthReport | None = None
@@ -532,6 +582,11 @@ class Orchestrator:
         self._prepared_context_prefix: str = ""
         self._prepared_context_blocks: list[tuple[str, str]] = []
         self._prepared_context_metadata: dict[str, Any] = {}
+        # "<phase>:<configured seat>" -> provider that actually served the call.
+        # Failover swaps the adapter INSIDE _call_provider, but callers keep
+        # keying their results by the configured seat, so without this the ledger
+        # credits a dead seat for work its fallback did.
+        self._effective_providers: dict[str, str] = {}
         self._draft_handoffs: dict[str, dict[str, Any]] = {}
         self._last_draft_budget_decisions: dict[str, dict[str, Any]] = {}
 
@@ -541,6 +596,7 @@ class Orchestrator:
         if self._config.enable_graceful_degradation:
             self._degradation_policy = DegradationPolicy(
                 max_retries=self._provider_retry_budget(),
+                fallback_providers=dict(self._config.fallback_providers),
                 min_providers_required=1,
                 abort_on_all_failures=True,
             )
@@ -556,6 +612,8 @@ class Orchestrator:
         self._health_report = None
         self._run_id = None
         self._execution_plan = None
+        self._degraded_output = None
+        self._effective_providers = {}
         self._evidence_bundle = None
         self._phase_context_override = None
         self._prepared_reference_context = None
@@ -576,7 +634,7 @@ class Orchestrator:
                 error=f"Failed to load subagent/schema: {exc}",
                 duration_ms=duration_ms,
                 phase_timings=phase_timings or None,
-                provider_errors=dict(self._provider_init_errors) or None,
+                provider_errors=self._reported_provider_errors(),
                 cost_estimate=self._build_cost_estimate(),
                 execution_plan=self._execution_plan,
             )
@@ -620,7 +678,7 @@ class Orchestrator:
                 error="No usable providers configured.",
                 duration_ms=duration_ms,
                 phase_timings=phase_timings or None,
-                provider_errors=dict(self._provider_init_errors) or None,
+                provider_errors=self._reported_provider_errors(),
                 cost_estimate=self._build_cost_estimate(),
                 execution_plan=self._execution_plan,
             )
@@ -644,6 +702,9 @@ class Orchestrator:
                             run_id=self._run_id,
                             content=evidence_bundle.to_prompt_block(),
                             artifact_type=ArtifactType.TOOL_LOG,
+                            # Evidence is collected locally, not by a provider.
+                            provider=None,
+                            phase=Phase.EVIDENCE,
                         )
                     except Exception as exc:
                         logger.debug("Failed to store evidence artifact: %s", exc)
@@ -653,13 +714,20 @@ class Orchestrator:
 
             # Store drafts as artifacts if enabled
             if self._artifact_store and self._run_id:
-                for _provider_name, draft_text in drafts.items():
+                for provider_name, draft_text in drafts.items():
                     if draft_text:
                         try:
                             self._artifact_store.store_artifact(
                                 run_id=self._run_id,
                                 content=draft_text,
                                 artifact_type=ArtifactType.DRAFT,
+                                # The drafts dict is keyed by provider; this was
+                                # previously discarded as `_provider_name`, which
+                                # is precisely where per-seat attribution was lost.
+                                # Resolved through the failover map so a fallback
+                                # gets credited for its own work.
+                                provider=self._effective_provider("draft", provider_name),
+                                phase=Phase.DRAFT,
                             )
                         except Exception as exc:
                             logger.debug("Failed to store draft artifact: %s", exc)
@@ -674,7 +742,7 @@ class Orchestrator:
                 synthesis_attempts=0,
                 duration_ms=duration_ms,
                 phase_timings=phase_timings or None,
-                provider_errors=dict(self._provider_init_errors) or None,
+                provider_errors=self._reported_provider_errors(),
                 cost_estimate=self._build_cost_estimate(),
                 execution_plan=self._execution_plan,
             )
@@ -692,6 +760,10 @@ class Orchestrator:
                         run_id=self._run_id,
                         content=critique,
                         artifact_type=ArtifactType.CRITIQUE,
+                        provider=self._effective_provider(
+                            "critique", self._phase_provider("critique")
+                        ),
+                        phase=Phase.CRITIQUE,
                     )
                 except Exception as exc:
                     logger.debug("Failed to store critique artifact: %s", exc)
@@ -716,8 +788,16 @@ class Orchestrator:
             synthesis_result, synth_attempts = synth_result
             phase_timings.append(synth_timing)
         except Exception as exc:
-            logger.warning("Synthesis phase failed; attempting draft fallback: %s", exc)
-            synthesis_result, synth_attempts = self._fallback_synthesis_from_drafts(drafts, exc)
+            reason = self._format_exception_chain(exc)
+            logger.warning("Synthesis phase failed; attempting degraded recovery: %s", reason)
+            synth_attempts = 0
+            recovered = self._recover_degraded_result(drafts, critique, reason=reason)
+            if recovered is None:
+                note = f"Synthesis failed ({reason}); no validated draft fallback available."
+                self._append_degradation_note(note)
+                self._record_degraded_output("none", None, reason)
+                recovered = ValidationResult(ok=False, errors=[note])
+            synthesis_result = recovered
 
         # Store synthesis as artifact if enabled
         if self._artifact_store and self._run_id and synthesis_result.raw:
@@ -726,6 +806,10 @@ class Orchestrator:
                     run_id=self._run_id,
                     content=synthesis_result.raw,
                     artifact_type=ArtifactType.SYNTHESIS,
+                    provider=self._effective_provider(
+                        "synthesis", self._phase_provider("synthesis")
+                    ),
+                    phase=Phase.SYNTHESIS,
                 )
             except Exception as exc:
                 logger.debug("Failed to store synthesis artifact: %s", exc)
@@ -755,13 +839,14 @@ class Orchestrator:
         return CouncilResult(
             success=synthesis_result.ok,
             output=synthesis_result.data,
+            degraded_output=self._degraded_output,
             drafts=drafts,
             critique=critique,
             synthesis_attempts=synth_attempts,
             duration_ms=duration_ms,
             phase_timings=phase_timings,
             validation_errors=synthesis_result.errors or None,
-            provider_errors=dict(self._provider_init_errors) or None,
+            provider_errors=self._reported_provider_errors(),
             cost_estimate=cost_estimate,
             run_id=self._run_id,
             health_report=health_report_dict,
@@ -785,38 +870,49 @@ class Orchestrator:
         drafts: dict[str, str] = {}
         for provider_name, result in zip(self._providers.keys(), results, strict=True):
             if isinstance(result, BaseException):
-                error_msg = self._format_exception_chain(result)
-                self._provider_init_errors[provider_name] = error_msg
-
-                # Use degradation policy to decide action
-                if self._degradation_policy:
-                    remaining = len(self._providers) - len(self._provider_init_errors)
-                    decision = self._degradation_policy.decide(
-                        provider=provider_name,
-                        error=result if isinstance(result, Exception) else Exception(str(result)),
-                        phase="drafts",
-                        remaining_providers=remaining,
-                    )
-                    if decision.action == DegradationAction.ABORT:
-                        raise RuntimeError(f"Aborting due to provider failure: {decision.reason}")
-
+                # Policy was already applied once inside _call_provider for the
+                # real phase; this layer only records the failure.
+                self._provider_init_errors[provider_name] = self._format_exception_chain(result)
                 drafts[provider_name] = ""
                 continue
             # result is tuple[str, str] here
             name, text = result
             drafts[name] = text
+            if not text.strip():
+                # A seat that RAISED is recorded above. A seat that returns success
+                # with nothing in it used to be stored as "" and go unmentioned: the
+                # run reported success, the degradation report was empty, and the
+                # seat was simply missing from the debate -- the silent seat loss.
+                # Everything downstream already skips a blank draft (`.strip()`), so
+                # this only makes the loss visible; it also, correctly, stops later
+                # phases from counting this provider as still available.
+                self._empty_draft_errors[name] = (
+                    "Provider returned success with an empty draft: nothing to debate. "
+                    "The seat was dropped from this run."
+                )
 
         return drafts
 
-    def _format_exception_chain(self, error: BaseException) -> str:
-        """Render an exception with its direct cause chain for diagnostics."""
+    def _reported_provider_errors(self) -> dict[str, str] | None:
+        """Every seat that did not deliver, for the caller: raised or blank alike."""
 
-        parts = [str(error)]
+        return {**self._provider_init_errors, **self._empty_draft_errors} or None
+
+    def _format_exception_chain(self, error: BaseException) -> str:
+        """Render an exception with its direct cause chain for diagnostics.
+
+        Several exceptions that matter here render as the empty string -- most
+        importantly the bare ``TimeoutError`` raised by ``asyncio.wait_for``.
+        Falling back to the class name keeps the diagnostic non-empty, which in
+        turn lets ``classify_error`` see something to work with instead of
+        silently degrading every such failure to ``UNKNOWN``.
+        """
+
+        parts = [str(error) or type(error).__name__]
         current = error.__cause__ or error.__context__
         while current is not None:
-            text = str(current)
-            if text:
-                parts.append(f"caused by: {text}")
+            text = str(current) or type(current).__name__
+            parts.append(f"caused by: {text}")
             current = current.__cause__ or current.__context__
         return " | ".join(part for part in parts if part)
 
@@ -935,6 +1031,16 @@ class Orchestrator:
                     "You are the synthesizer. Combine drafts and critique into a single response. "
                     "Return ONLY valid JSON that matches the provided schema."
                 )
+                # Only when the schema really has the field. Seven of the ten schemas do
+                # not, and they set `additionalProperties: false`, so asking every
+                # synthesizer for `dissent` would invite a response that fails validation
+                # and burns a retry - the opposite of the point.
+                if isinstance(schema, dict) and "dissent" in (schema.get("properties") or {}):
+                    system_prompt += (
+                        " Where the drafts disagreed, do not average them away: pick a"
+                        " position AND record every dissenting seat in the `dissent`"
+                        " field, quoting what it concluded."
+                    )
                 supports_structured_output = (
                     bool(schema)
                     and await adapter.supports("structured_output")
@@ -1048,9 +1154,16 @@ class Orchestrator:
                         "was insufficient to satisfy schema validation."
                     )
 
-        fallback = self._fallback_synthesis_from_evidence(drafts, critique, errors)
-        if fallback is not None:
-            return fallback, total_attempts
+        reason = (
+            self._format_exception_chain(last_error)
+            if last_error is not None
+            else "; ".join(errors) or "synthesis produced no schema-valid output"
+        )
+        recovered = self._recover_degraded_result(
+            drafts, critique, reason=reason, errors=errors, last_raw=last_raw
+        )
+        if recovered is not None:
+            return recovered, total_attempts
         if last_raw is not None:
             return ValidationResult(ok=False, errors=errors, raw=last_raw), total_attempts
         if last_error is not None:
@@ -1189,10 +1302,15 @@ class Orchestrator:
         adapter: ProviderAdapter,
         request: GenerateRequest,
         *,
-        phase: str | None = None,
+        phase: str,
         remaining_providers: int | None = None,
     ) -> GenerateResponse:
-        """Execute a provider request with timeout and usage tracking."""
+        """Execute a provider request with timeout and usage tracking.
+
+        This is the single layer that applies the degradation policy: callers
+        pass the real phase ("draft", "critique", "synthesis") and must not run
+        a second policy decision on the resulting exception.
+        """
 
         async def _consume_stream(stream: AsyncIterator[GenerateResponse]) -> GenerateResponse:
             text_parts: list[str] = []
@@ -1205,6 +1323,10 @@ class Orchestrator:
             return GenerateResponse(text="".join(text_parts), usage=usage)
 
         prompt_cache_requested = bool(request.prompt_cache and request.prompt_cache.enabled)
+        # Keep the pre-compilation request: compilation is provider-specific, so a
+        # failover to a different provider must re-compile from this, never from the
+        # already-compiled copy.
+        base_request = request
         compiled = compile_request_for_provider(provider_name, request)
         self._record_request_compilation(
             phase=phase,
@@ -1214,7 +1336,12 @@ class Orchestrator:
         request = compiled.request
         prompt_cache_forwarded = bool(request.prompt_cache and request.prompt_cache.enabled)
 
+        # One failover per call. Without this a flapping fallback could ping-pong
+        # forever inside the retry loop.
+        failover_used = False
+        attempt = 0
         while True:
+            attempt += 1
             try:
                 slot_timeout = request.timeout_seconds or float(self._config.timeout)
                 async with provider_call_slot(
@@ -1230,15 +1357,33 @@ class Orchestrator:
                     # minus time already spent waiting for the call-slot lock.
                     effective_timeout = request.timeout_seconds or float(self._config.timeout)
                     effective_timeout = max(effective_timeout - (queue_wait_ms / 1000.0), 1.0)
-                    result = await asyncio.wait_for(
-                        adapter.generate(request), timeout=effective_timeout
-                    )
-                    if isinstance(result, GenerateResponse):
-                        response = result
-                    else:
-                        response = await asyncio.wait_for(
-                            _consume_stream(result), timeout=effective_timeout
+                    # The adapter owns request.timeout_seconds; the watchdog is a
+                    # backstop that must not pre-empt the adapter's own cleanup.
+                    watchdog_timeout = effective_timeout + _WATCHDOG_CLEANUP_HEADROOM_SECONDS
+                    call_started_at = time.monotonic()
+                    try:
+                        result = await asyncio.wait_for(
+                            adapter.generate(request), timeout=watchdog_timeout
                         )
+                        if isinstance(result, GenerateResponse):
+                            response = result
+                        else:
+                            response = await asyncio.wait_for(
+                                _consume_stream(result), timeout=watchdog_timeout
+                            )
+                    except (TimeoutError, asyncio.TimeoutError) as timeout_exc:
+                        # Both names on purpose: until Python 3.11 asyncio.TimeoutError
+                        # is a separate class, so `except TimeoutError` alone never
+                        # caught the watchdog on 3.10.
+                        # asyncio.wait_for raises a BARE TimeoutError: str() is "",
+                        # which classify_error() can only read as UNKNOWN. Re-raise
+                        # with the facts a caller actually needs to act on.
+                        elapsed = time.monotonic() - call_started_at
+                        raise TimeoutError(
+                            f"{provider_name} timed out in {phase} after {elapsed:.1f}s "
+                            f"(attempt {attempt}, watchdog {watchdog_timeout:.1f}s, "
+                            f"adapter budget {effective_timeout:.1f}s)"
+                        ) from timeout_exc
 
                 self._record_usage(provider_name, response.usage)
                 self._record_prompt_cache_observation(
@@ -1264,7 +1409,7 @@ class Orchestrator:
                         ErrorType.RATE_LIMIT: "rate_limit",
                     }[error_type]
                     self._execution_plan.setdefault("warnings", []).append(
-                        f"{provider_name} degraded during {phase or 'call'} due to {warning_reason}: "
+                        f"{provider_name} degraded during {phase} due to {warning_reason}: "
                         f"{error_detail}"
                     )
                 if self._degradation_policy:
@@ -1275,9 +1420,27 @@ class Orchestrator:
                     )
                     decision = self._degradation_policy.decide(
                         provider=provider_name,
-                        error=exc,
-                        phase="call",
+                        # Hand over the already-rendered chain, not the raw
+                        # exception: the policy would otherwise re-derive
+                        # ``str(error)``, losing the class-name fallback and
+                        # every ``caused by:`` link, so an exception with an
+                        # empty ``str()`` reached it as "" and classified as
+                        # UNKNOWN even though the detail was already known here.
+                        error=error_detail,
+                        phase=phase,
                         remaining_providers=remaining,
+                    )
+
+                    # Persist BEFORE acting on the decision: the ABORT branch
+                    # below raises, and a record written after it would never
+                    # exist for exactly the failures worth explaining.
+                    self._record_provider_failure(
+                        provider_name=provider_name,
+                        phase=phase,
+                        attempt=attempt,
+                        error_detail=error_detail,
+                        error_type=error_type,
+                        decision=decision,
                     )
 
                     if decision.action == DegradationAction.ABORT:
@@ -1289,6 +1452,39 @@ class Orchestrator:
                         if decision.retry_delay_ms > 0:
                             await asyncio.sleep(decision.retry_delay_ms / 1000.0)
                         continue
+                    if decision.action == DegradationAction.FALLBACK and not failover_used:
+                        # The policy has been able to emit FALLBACK since it was
+                        # written, but nothing ever acted on it, so the decision was
+                        # recorded in the report and then dropped. This is where a
+                        # dead seat is actually replaced.
+                        swapped = self._activate_fallback_provider(
+                            failed_provider=provider_name,
+                            fallback_name=decision.fallback_provider,
+                            phase=phase,
+                            reason=decision.reason,
+                        )
+                        if swapped is not None:
+                            failover_used = True
+                            provider_name, adapter = swapped
+                            # The request still carries the DEAD seat's model id
+                            # (set from _model_override at build time). Left alone,
+                            # an OpenRouter failover is asked for e.g.
+                            # "claude-opus-5", which is not a valid OpenRouter id,
+                            # and the fallback 400s instead of rescuing the run.
+                            failover_request = base_request.model_copy(
+                                update={"model": self._failover_model_for(provider_name)}
+                            )
+                            compiled = compile_request_for_provider(provider_name, failover_request)
+                            self._record_request_compilation(
+                                phase=phase,
+                                provider_name=provider_name,
+                                compilation=compiled.to_dict(),
+                            )
+                            request = compiled.request
+                            prompt_cache_forwarded = bool(
+                                request.prompt_cache and request.prompt_cache.enabled
+                            )
+                            continue
 
                 self._provider_init_errors[provider_name] = error_detail
                 raise
@@ -1599,6 +1795,140 @@ class Orchestrator:
                 init_errors[name] = str(exc)
         return providers, init_errors
 
+    # Long error chains are for the log, not the ledger; keep rows small enough
+    # that a failure-heavy run does not bloat the artifact store.
+    _MAX_LEDGER_ERROR_CHARS = 2000
+
+    def _record_provider_failure(
+        self,
+        *,
+        provider_name: str,
+        phase: str,
+        attempt: int,
+        error_detail: str,
+        error_type: ErrorType,
+        decision: DegradationDecision,
+    ) -> None:
+        """Persist a provider failure to the ledger, attributed to seat and phase.
+
+        Failures produce no draft/critique/synthesis, so before this they left no
+        trace in the ledger at all: a run could burn ten minutes, lose two seats
+        and be abandoned, and the stored record would show only an evidence
+        tool_log. That is why the 2026-08-08 analysis could not say which
+        provider failed and had to probe live instead.
+
+        Written at the moment of failure rather than at the end of the run. Runs
+        that hang or are killed never reach their own completion path -- 40 rows
+        in the live ledger are stuck in 'running' -- and those are exactly the
+        runs whose failures most need explaining.
+
+        Never raises: observability must not be able to break the run it observes.
+        """
+
+        if not self._artifact_store or not self._run_id:
+            return
+
+        payload = {
+            "provider": provider_name,
+            "phase": phase,
+            # Included so retries of the same error stay DISTINCT rows: dedup is
+            # keyed on content hash, and without this a three-attempt failure
+            # would collapse into one and hide the retry burn.
+            "attempt": attempt,
+            "error_type": error_type.value,
+            "action": decision.action.value,
+            "fallback_provider": decision.fallback_provider,
+            "reason": decision.reason,
+            "error": error_detail[: self._MAX_LEDGER_ERROR_CHARS],
+        }
+
+        try:
+            self._artifact_store.store_artifact(
+                run_id=self._run_id,
+                content=json.dumps(payload, indent=2, sort_keys=True),
+                artifact_type=ArtifactType.ERROR_REPORT,
+                provider=provider_name,
+                phase=phase,
+                # An error report is not model output; counting it would inflate
+                # the run's token total and make a zero-output failure look
+                # productive.
+                count_tokens=False,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to store provider failure artifact: %s", exc)
+
+    def _failover_model_for(self, fallback_name: str) -> str | None:
+        """Resolve the model id a failover provider should actually be asked for.
+
+        Order: an explicit resolved override for the fallback, then the fallback's
+        own name when it is a virtual OpenRouter provider (there, the name IS the
+        model id), then ``None`` so a native adapter applies its own default.
+
+        Never inherit the failed seat's model: that is how a failover to
+        ``anthropic/claude-opus-5`` ends up requesting ``claude-opus-5`` and 400s.
+        """
+
+        override = self._model_override(fallback_name)
+        if override:
+            return override
+        if "/" in fallback_name and fallback_name != "openrouter":
+            return fallback_name
+        return None
+
+    def _activate_fallback_provider(
+        self,
+        *,
+        failed_provider: str,
+        fallback_name: str | None,
+        phase: str,
+        reason: str,
+    ) -> tuple[str, ProviderAdapter] | None:
+        """Instantiate the configured failover for a dead seat.
+
+        Returns ``(name, adapter)`` on success, or ``None`` when there is no usable
+        fallback — in which case the caller re-raises and the seat is lost, exactly
+        as before this failover path existed.
+
+        Returning ``None`` rather than raising is deliberate: a failover that cannot
+        be built (typically a missing ``OPENROUTER_API_KEY``) must not convert a
+        recoverable single-provider failure into a hard error for the whole run.
+        """
+
+        if not fallback_name or fallback_name == failed_provider:
+            return None
+
+        adapters, errors = self._instantiate_providers([fallback_name])
+        adapter = adapters.get(fallback_name)
+        if adapter is None:
+            detail = errors.get(fallback_name, "unknown error")
+            logger.warning(
+                "Failover for %s in %s unavailable (%s -> %s): %s",
+                failed_provider,
+                phase,
+                failed_provider,
+                fallback_name,
+                detail,
+            )
+            if self._execution_plan is not None:
+                self._execution_plan.setdefault("warnings", []).append(
+                    f"{failed_provider} failover to {fallback_name} unavailable in "
+                    f"{phase}: {detail}"
+                )
+            return None
+
+        # Remember the swap so artifacts get attributed to the provider that
+        # actually did the work, not to the seat that died.
+        self._effective_providers[f"{phase}:{failed_provider}"] = fallback_name
+
+        logger.warning(
+            "Failing over %s -> %s in %s (%s)", failed_provider, fallback_name, phase, reason
+        )
+        if self._execution_plan is not None:
+            self._execution_plan.setdefault("warnings", []).append(
+                f"{failed_provider} failed over to {fallback_name} in {phase}: {reason}"
+            )
+        return fallback_name, adapter
+
     def _provider_identity(self, provider_name: str) -> str:
         """Map a provider or virtual provider name to its canonical identity."""
         return provider_identity(provider_name)
@@ -1741,7 +2071,24 @@ class Orchestrator:
                     "critique": 60.0,
                     "synthesis": 120.0,
                 }
+            elif provider_name == "sakana":
+                # Sakana is exempt from the generic bounded ceiling: at 30s it would
+                # be guaranteed to fail (see the 200s floor below), so shipping it
+                # under `bounded` would silently doom every call. Bounded still caps
+                # it, just at the floor that actually gives it a chance to answer.
+                bounded_caps = {
+                    "draft": 200.0,
+                    "critique": 200.0,
+                    "synthesis": 200.0,
+                }
             return max(min(base_timeout, bounded_caps.get(phase, base_timeout)), 1.0)
+
+        if provider_name == "sakana":
+            # Fugu is a slow multi-agent orchestrator; observed draft latency ranged
+            # 8s-100s+ within a single session, close enough to the previous 119s
+            # default (timeout=120) that runs were a coin-flip. Floor it so callers
+            # don't have to remember a large `--timeout` for reliable participation.
+            return max(base_timeout, 200.0)
 
         return base_timeout
 
@@ -2660,16 +3007,29 @@ class Orchestrator:
 
         return ValidationResult(ok=True, data=parsed, raw=raw_text)
 
-    def _fallback_synthesis_from_drafts(
-        self, drafts: Mapping[str, str], phase_error: Exception
-    ) -> tuple[ValidationResult, int]:
-        """Attempt to recover a final result from any successful draft output."""
+    def _recover_degraded_result(
+        self,
+        drafts: Mapping[str, str],
+        critique: str,
+        *,
+        reason: str,
+        errors: Sequence[str] = (),
+        last_raw: str | None = None,
+    ) -> ValidationResult | None:
+        """Recover the best honest artifact when synthesis cannot produce validated output.
 
-        reason = self._format_exception_chain(phase_error)
+        Tries, in order: a draft that already satisfies the final schema, the conservative
+        reviewer evidence fallback, then retention of the best raw prose draft. Returns
+        ``None`` when nothing can be recovered, so callers keep their terminal failure path.
+
+        Bounded mode asks drafters for prose explicitly, so a draft failing schema
+        validation is expected, not exceptional: it must never cause the only usable
+        result of a run to be discarded.
+        """
+
         fallback_errors: list[str] = []
-
         for provider_name, draft_text in drafts.items():
-            if not draft_text:
+            if not draft_text.strip():
                 continue
 
             validation = self._validate_response(draft_text)
@@ -2680,24 +3040,58 @@ class Orchestrator:
                 )
                 self._append_degradation_note(note)
                 self._record_degraded_output("draft", provider_name, reason)
-                return (
-                    ValidationResult(
-                        ok=True,
-                        data=validation.data,
-                        raw=validation.raw,
-                        errors=[*validation.errors, note],
-                    ),
-                    0,
+                return ValidationResult(
+                    ok=True,
+                    data=validation.data,
+                    raw=validation.raw,
+                    errors=[*validation.errors, note],
                 )
 
             fallback_errors.extend(
                 f"Draft fallback {provider_name}: {error}" for error in validation.errors
             )
 
-        note = f"Synthesis failed ({reason}); no validated draft fallback available."
+        # Resolved before the evidence branch so the reviewer path also names the
+        # provider and keeps the prose reachable instead of leaving it only in drafts.
+        retained = self._best_raw_draft(drafts)
+        evidence_result = self._fallback_synthesis_from_evidence(drafts, critique, errors)
+        if evidence_result is not None:
+            self._record_degraded_output(
+                "evidence_fallback",
+                retained[0] if retained else None,
+                reason,
+                text=retained[1] if retained else None,
+            )
+            return evidence_result
+
+        if retained is None:
+            return None
+
+        retained_provider, retained_text = retained
+        note = (
+            f"Synthesis failed ({reason}); no schema-valid result could be built. "
+            f"Retained the raw {retained_provider} draft as degraded output."
+        )
         self._append_degradation_note(note)
-        self._record_degraded_output("none", None, reason)
-        return (ValidationResult(ok=False, errors=[note, *fallback_errors]), 0)
+        self._record_degraded_output("raw_draft", retained_provider, reason, text=retained_text)
+        # ``raw`` stays the synthesis text (or None): a draft must never be stored
+        # as if it were a synthesis artifact.
+        return ValidationResult(
+            ok=False,
+            errors=[note, *fallback_errors, *errors],
+            raw=last_raw,
+        )
+
+    def _best_raw_draft(self, drafts: Mapping[str, str]) -> tuple[str, str] | None:
+        """Return the longest non-empty draft as ``(provider, text)``."""
+
+        best: tuple[str, str] | None = None
+        for provider_name, draft_text in drafts.items():
+            if not draft_text.strip():
+                continue
+            if best is None or len(draft_text) > len(best[1]):
+                best = (provider_name, draft_text)
+        return best
 
     def _fallback_synthesis_from_evidence(
         self,
@@ -2762,7 +3156,6 @@ class Orchestrator:
             "chunked draft evidence."
         )
         self._append_degradation_note(note)
-        self._record_degraded_output("evidence_fallback", None, "; ".join(errors) or "validation")
         if self._execution_plan is not None:
             self._execution_plan.setdefault("warnings", []).append(note)
         return ValidationResult(
@@ -3377,6 +3770,35 @@ class Orchestrator:
         phase_used = self._execution_plan.setdefault("phase_provider_used", {})
         phase_used[phase] = provider_name
 
+    def _effective_provider(self, phase: str, provider_name: str | None) -> str | None:
+        """Resolve a configured seat to the provider that actually served it.
+
+        Callers key their results by the seat they asked for; ``_call_provider``
+        may have transparently failed over to a different provider. Attributing
+        the output to the configured seat would credit a dead provider for work
+        its fallback did -- an attribution that looks authoritative and is wrong,
+        which is worse than recording nothing.
+        """
+
+        if provider_name is None:
+            return None
+        return self._effective_providers.get(f"{phase}:{provider_name}", provider_name)
+
+    def _phase_provider(self, phase: str) -> str | None:
+        """Return the provider that actually served a phase, if it was recorded.
+
+        Used to attribute stored artifacts. Returns None rather than guessing so
+        an unattributed artifact stays visibly unattributed in the ledger.
+        """
+
+        if self._execution_plan is None:
+            return None
+        used = self._execution_plan.get("phase_provider_used")
+        if not isinstance(used, dict):
+            return None
+        value = used.get(phase)
+        return value if isinstance(value, str) else None
+
     def _append_degradation_note(self, note: str) -> None:
         """Append a human-readable degradation note to the execution plan."""
 
@@ -3408,16 +3830,31 @@ class Orchestrator:
             )
         return restored
 
-    def _record_degraded_output(self, source: str, provider_name: str | None, reason: str) -> None:
+    def _record_degraded_output(
+        self,
+        source: str,
+        provider_name: str | None,
+        reason: str,
+        *,
+        text: str | None = None,
+    ) -> None:
         """Record when the final output came from a degraded fallback path."""
 
+        degraded = DegradedOutput(
+            source=source,
+            provider=provider_name,
+            reason=reason,
+            text=text,
+        )
+        self._degraded_output = degraded
         if self._execution_plan is None:
             return
-        self._execution_plan["degraded_output"] = {
-            "source": source,
-            "provider": provider_name,
-            "reason": reason,
-        }
+        # ``text`` is deliberately excluded: the prose already ships in ``drafts``
+        # and ``degraded_output.text``, and repeating it inside the execution plan
+        # would triple it in ``--json`` output.
+        plan_entry: dict[str, Any] = degraded.model_dump(exclude={"text"})
+        plan_entry["text_chars"] = len(text or "")
+        self._execution_plan["degraded_output"] = plan_entry
 
     async def _timed(
         self, coro_factory: Callable[[], Awaitable[T]], phase: str
@@ -3510,5 +3947,6 @@ __all__ = [
     "OrchestratorConfig",
     "CouncilResult",
     "CostEstimate",
+    "DegradedOutput",
     "ValidationResult",
 ]

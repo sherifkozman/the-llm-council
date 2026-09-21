@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from llm_council.providers import concurrency
 from llm_council.providers.concurrency import acquire_provider_call_lease
 
 
@@ -25,6 +26,11 @@ def _hold_provider_lock(
 
 
 @pytest.mark.skipif(not hasattr(multiprocessing, "Process"), reason="multiprocessing unavailable")
+# Locks use fcntl, which Windows lacks: there acquire_provider_call_lease() returns an
+# unlocked lease, so cross-process exclusion does not exist to be tested. The skip keys
+# on that capability alone - never on LLM_COUNCIL_DISABLE_PROVIDER_LOCKS, which a
+# collection-time condition would read from the developer's shell.
+@pytest.mark.skipif(concurrency.fcntl is None, reason="provider locks need fcntl (POSIX)")
 def test_acquire_provider_call_lease_times_out_when_another_process_holds_slot(tmp_path: Path):
     """A second process should not be able to enter the same provider slot immediately."""
 

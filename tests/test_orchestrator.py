@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from llm_council.config.models import ModelPack, get_model_for_pack
+from llm_council.engine.capabilities import CapabilityPlan
+from llm_council.engine.evidence import EvidenceBundle
 from llm_council.engine.orchestrator import (
     CostEstimate,
     CouncilResult,
@@ -22,10 +24,12 @@ from llm_council.engine.orchestrator import (
 from llm_council.protocol.types import ReasoningProfile, RuntimeProfile
 from llm_council.providers.base import (
     DoctorResult,
+    ErrorType,
     GenerateRequest,
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    classify_error,
 )
 
 
@@ -637,6 +641,30 @@ class TestOrchestratorValidation:
         assert orch._provider_request_timeout_seconds("critique", provider_name="claude") == 45.0
         assert orch._provider_request_timeout_seconds("synthesis", provider_name="claude") == 59.0
 
+    def test_default_runtime_profile_floors_sakana_at_200_seconds(self):
+        """Fugu's slow drafts need a floor so callers don't need a large --timeout."""
+        config = OrchestratorConfig(timeout=120)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["sakana"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="sakana") == 200.0
+
+    def test_bounded_runtime_profile_still_floors_sakana_at_200_seconds(self):
+        """Sakana is exempt from the generic bounded ceiling: 30s would guarantee failure."""
+        config = OrchestratorConfig(runtime_profile=RuntimeProfile.BOUNDED, timeout=300)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["sakana"], config=config)
+
+        assert orch._provider_request_timeout_seconds("draft", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("critique", provider_name="sakana") == 200.0
+        assert orch._provider_request_timeout_seconds("synthesis", provider_name="sakana") == 200.0
+
 
 class TestOrchestratorDoctor:
     """Tests for Orchestrator doctor method."""
@@ -665,7 +693,7 @@ class TestOrchestratorDoctor:
         request = GenerateRequest(prompt="hello")
 
         with pytest.raises(RuntimeError, match="Provider call aborted"):
-            await orch._call_provider("mock", adapter, request)
+            await orch._call_provider("mock", adapter, request, phase="draft")
 
         assert "upstream request timed out" in orch._provider_init_errors["mock"]
         assert "degraded: All providers exhausted" in orch._provider_init_errors["mock"]
@@ -689,7 +717,9 @@ class TestOrchestratorDoctor:
         request = GenerateRequest(prompt="hello")
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            response = await orch._call_provider("mock", adapter, request, remaining_providers=1)
+            response = await orch._call_provider(
+                "mock", adapter, request, phase="draft", remaining_providers=1
+            )
 
         assert response.text == '{"ok": true}'
         assert adapter.generate.await_count == 2
@@ -735,6 +765,291 @@ class TestOrchestratorDoctor:
         results = await orch.doctor()
         assert "mock" in results
         assert results["mock"]["ok"] is False
+
+
+class TestDegradationPhaseAttribution:
+    """Retry budgets and degradation events must key off the real phase."""
+
+    @staticmethod
+    def _orchestrator() -> Orchestrator:
+        config = OrchestratorConfig(enable_graceful_degradation=True)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            return Orchestrator(providers=["mock"], config=config)
+
+    @pytest.mark.asyncio
+    async def test_retry_budget_is_independent_per_phase(self):
+        """DG-01: a retry spent in draft must not drain the critique budget."""
+        orch = self._orchestrator()
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        request = GenerateRequest(prompt="hello")
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(RuntimeError, match="Provider call aborted"):
+                await orch._call_provider(
+                    "mock", adapter, request, phase="draft", remaining_providers=0
+                )
+            draft_attempts = adapter.generate.await_count
+            adapter.generate.reset_mock()
+            with pytest.raises(RuntimeError, match="Provider call aborted"):
+                await orch._call_provider(
+                    "mock", adapter, request, phase="critique", remaining_providers=0
+                )
+
+        # Both phases get their own full budget; before the fix the shared
+        # "mock:call" counter meant the second phase started already drained.
+        assert draft_attempts > 1
+        assert adapter.generate.await_count == draft_attempts
+
+    @pytest.mark.asyncio
+    async def test_degradation_events_record_the_real_phase(self):
+        """DG-03: reported phase must be the actual phase, never the literal 'call'."""
+        orch = self._orchestrator()
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        request = GenerateRequest(prompt="hello")
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError, match="Provider call aborted"),
+        ):
+            await orch._call_provider(
+                "mock", adapter, request, phase="synthesis", remaining_providers=0
+            )
+
+        assert orch._degradation_policy is not None
+        phases = {f.phase for f in orch._degradation_policy.get_report().failures}
+        assert phases == {"synthesis"}
+        assert "call" not in phases
+
+    @pytest.mark.asyncio
+    async def test_failed_draft_records_exactly_one_degradation_event(self):
+        """DG-02: the duplicate policy decision in _run_parallel_drafts is gone."""
+        orch = self._orchestrator()
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        request = GenerateRequest(prompt="hello")
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError, match="Provider call aborted"),
+        ):
+            await orch._call_provider(
+                "mock", adapter, request, phase="draft", remaining_providers=0
+            )
+
+        assert orch._degradation_policy is not None
+        failures = orch._degradation_policy.get_report().failures
+        # One event per failed attempt, and every one attributed to "draft".
+        assert failures
+        assert all(f.phase == "draft" for f in failures)
+        assert len(failures) == adapter.generate.await_count
+
+
+class TestEmptyDraftIsALostSeat:
+    """A seat that returns success with nothing in it must not vanish quietly.
+
+    A seat that RAISES has always been recorded in ``provider_errors``. A seat that
+    answers successfully with an empty string used to be stored as "" and mentioned
+    nowhere: the run reported success, the degradation report was empty, and the seat
+    was simply absent from the debate. Every known producer of that state is a bug
+    somewhere else (a CLI rejecting the turn, a truncated structured answer), so the
+    guard is here, at the boundary, where it catches the ones not yet invented.
+    """
+
+    @staticmethod
+    def _orchestrator() -> Orchestrator:
+        config = OrchestratorConfig(enable_graceful_degradation=True)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            return Orchestrator(providers=["mock"], config=config)
+
+    async def _drafts(self, returned: dict[str, str]):
+        """Run the draft phase with each provider returning the given text.
+
+        Returns the drafts, what the CALLER is told (`provider_errors` in the result), and
+        the orchestrator, so a test can also check what was NOT recorded.
+        """
+        orch = self._orchestrator()
+        orch._task = "t"
+        orch._subagent_config = MagicMock()
+        orch._providers = {name: MagicMock() for name in returned}
+
+        async def _fake_draft(provider_name: str, _adapter: object) -> tuple[str, str]:
+            return provider_name, returned[provider_name]
+
+        with patch.object(orch, "_generate_draft", side_effect=_fake_draft):
+            drafts = await orch._run_parallel_drafts()
+        return drafts, dict(orch._reported_provider_errors() or {}), orch
+
+    @pytest.mark.asyncio
+    async def test_an_empty_draft_is_reported_as_a_failed_seat(self):
+        drafts, errors, _orch = await self._drafts({"claude": "a real answer", "codex": ""})
+
+        assert drafts == {"claude": "a real answer", "codex": ""}
+        assert "claude" not in errors
+        assert "codex" in errors, "the seat was lost without a word"
+        assert "empty draft" in errors["codex"]
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_counts_as_empty(self):
+        _drafts, errors, _orch = await self._drafts({"codex": "   \n\t "})
+
+        assert "codex" in errors
+
+    @pytest.mark.asyncio
+    async def test_a_healthy_run_records_nothing(self):
+        """Guard against the check firing on every normal run."""
+        drafts, errors, _orch = await self._drafts({"claude": "x", "codex": "y", "sakana": "z"})
+
+        assert errors == {}
+        assert len(drafts) == 3
+
+    @pytest.mark.asyncio
+    async def test_the_reported_error_classifies_as_unknown(self):
+        """The wording is a contract: `classify_error` reads it and picks the retry class.
+
+        UNKNOWN is the honest answer here - the seat said nothing, so the cause is not
+        known. It must not accidentally spell a pattern like "timeout", "429" or "500".
+        """
+        _drafts, errors, _orch = await self._drafts({"codex": ""})
+        message = errors["codex"]
+
+        assert classify_error(message, 1) is ErrorType.UNKNOWN
+        assert not any(ch.isdigit() for ch in message)
+
+    @pytest.mark.asyncio
+    async def test_a_blank_draft_does_not_bench_the_provider(self):
+        """Reported, but not counted as unavailable.
+
+        `_provider_init_errors` feeds `remaining = len(providers) - len(errors) - 1` for
+        later phases. One blank draft is not evidence that a provider is permanently
+        unusable, and over-counting failures there can abort a run whose remaining seats
+        could still have debated.
+        """
+        _drafts, errors, orch = await self._drafts({"claude": "x", "codex": ""})
+
+        assert "codex" in errors, "the caller must still be told"
+        assert orch._provider_init_errors == {}, "but availability must be unaffected"
+
+
+class TestTimeoutDiagnostics:
+    """A timeout must never reach the report as an empty, unclassifiable string."""
+
+    @staticmethod
+    def _orchestrator() -> Orchestrator:
+        config = OrchestratorConfig(enable_graceful_degradation=True)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            return Orchestrator(providers=["mock"], config=config)
+
+    @pytest.mark.asyncio
+    async def test_bare_watchdog_timeout_becomes_actionable_diagnostic(self):
+        """TO-01: the bare TimeoutError from asyncio.wait_for carries no message at all."""
+        orch = self._orchestrator()
+
+        async def _hang(*_args: object, **_kwargs: object) -> GenerateResponse:
+            # asyncio.sleep is patched below to speed up retry backoff, so block
+            # on something the patch cannot skip.
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(side_effect=_hang)
+        request = GenerateRequest(prompt="hello", timeout_seconds=1)
+
+        with (
+            patch("llm_council.engine.orchestrator._WATCHDOG_CLEANUP_HEADROOM_SECONDS", 0.05),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError, match="Provider call aborted"),
+        ):
+            await orch._call_provider(
+                "mock", adapter, request, phase="critique", remaining_providers=0
+            )
+
+        recorded = orch._provider_init_errors["mock"]
+        assert recorded.strip()
+        assert "mock" in recorded
+        assert "critique" in recorded
+        assert "attempt" in recorded
+        assert "timed out" in recorded
+
+        # The whole point: it must now classify as TIMEOUT, not UNKNOWN.
+        assert orch._degradation_policy is not None
+        types = {f.error_type for f in orch._degradation_policy.get_report().failures}
+        assert ErrorType.TIMEOUT in types
+        assert ErrorType.UNKNOWN not in types
+
+    @pytest.mark.asyncio
+    async def test_watchdog_gives_the_adapter_headroom_to_report_first(self):
+        """TO-02: an adapter that enforces its own deadline keeps its richer error."""
+        orch = self._orchestrator()
+
+        async def _adapter_times_out_first(*_args: object, **_kwargs: object) -> GenerateResponse:
+            # Adapter's own cleanup-aware timeout fires before the watchdog.
+            await asyncio.sleep(0.01)
+            raise RuntimeError("codex CLI timed out after 180s; terminated process tree")
+
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(side_effect=_adapter_times_out_first)
+        request = GenerateRequest(prompt="hello", timeout_seconds=1)
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError, match="Provider call aborted"),
+        ):
+            await orch._call_provider(
+                "mock", adapter, request, phase="draft", remaining_providers=0
+            )
+
+        recorded = orch._provider_init_errors["mock"]
+        assert "terminated process tree" in recorded
+        assert "watchdog" not in recorded
+
+    @pytest.mark.asyncio
+    async def test_degradation_report_records_the_rendered_error_not_an_empty_string(self):
+        """TO-01b: the policy must see the rendered chain, not re-derive str(exc)."""
+        orch = self._orchestrator()
+
+        class _SilentReadTimeoutError(Exception):
+            """Mirrors httpx.ReadTimeout, whose str() is empty."""
+
+            def __str__(self) -> str:
+                return ""
+
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(side_effect=_SilentReadTimeoutError())
+        request = GenerateRequest(prompt="hello")
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError, match="Provider call aborted"),
+        ):
+            await orch._call_provider(
+                "mock", adapter, request, phase="synthesis", remaining_providers=0
+            )
+
+        assert orch._degradation_policy is not None
+        failures = orch._degradation_policy.get_report().failures
+        assert failures
+        # Previously every one of these arrived as "" and classified UNKNOWN.
+        assert all(f.error_message for f in failures)
+        assert all("_SilentReadTimeoutError" in f.error_message for f in failures)
+
+    def test_format_exception_chain_falls_back_to_class_name(self):
+        """An exception whose str() is empty must still yield a usable diagnostic."""
+        orch = self._orchestrator()
+
+        assert orch._format_exception_chain(TimeoutError()) == "TimeoutError"
+
+        outer = RuntimeError("outer failed")
+        outer.__cause__ = TimeoutError()
+        rendered = orch._format_exception_chain(outer)
+        assert rendered == "outer failed | caused by: TimeoutError"
 
 
 class TestOrchestratorRuntimeTruthfulness:
@@ -1868,6 +2183,115 @@ class TestOrchestratorRuntimeTruthfulness:
         assert result.execution_plan["degraded_output"]["source"] == "draft"
         assert result.execution_plan["degraded_output"]["provider"] == "openai"
 
+    @staticmethod
+    def _prose_orchestrator() -> Orchestrator:
+        """Orchestrator whose schema no prose draft can ever satisfy."""
+        config = OrchestratorConfig(
+            enable_artifacts=False,
+            output_schema={
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+            },
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_registry = MagicMock()
+            mock_registry.get_provider.return_value = CaptureProvider()
+            mock_reg.return_value = mock_registry
+            return Orchestrator(providers=["openai"], config=config)
+
+    @pytest.mark.asyncio
+    async def test_bounded_prose_draft_is_retained_as_degraded_output(self):
+        """FB-01: bounded mode asks for prose, so prose must never be silently discarded."""
+        prose = "## Review\n\nThe plan is sound but the rollout order is risky."
+        orch = self._prose_orchestrator()
+
+        with (
+            patch.object(orch, "_run_parallel_drafts", AsyncMock(return_value={"claude": prose})),
+            patch.object(orch, "_run_critique", AsyncMock(return_value="")),
+            patch.object(
+                orch,
+                "_run_synthesis",
+                AsyncMock(
+                    side_effect=RuntimeError("No healthy providers available for synthesis.")
+                ),
+            ),
+        ):
+            result = await orch.run("Review this change", "critic")
+
+        # The incident's exact signature was success=false AND output=null AND
+        # nothing else usable. The draft must survive that.
+        assert result.success is False
+        assert result.degraded_output is not None
+        assert result.degraded_output.source == "raw_draft"
+        assert result.degraded_output.provider == "claude"
+        assert result.degraded_output.text == prose
+        assert "No healthy providers available for synthesis." in result.degraded_output.reason
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_draft_remains_available_beside_parse_error(self):
+        """FB-02: the parse error must not make the raw draft unreachable."""
+        prose = "not json at all"
+        orch = self._prose_orchestrator()
+
+        with (
+            patch.object(orch, "_run_parallel_drafts", AsyncMock(return_value={"claude": prose})),
+            patch.object(orch, "_run_critique", AsyncMock(return_value="")),
+            patch.object(
+                orch, "_run_synthesis", AsyncMock(side_effect=RuntimeError("synthesis timed out"))
+            ),
+        ):
+            result = await orch.run("Review this change", "critic")
+
+        assert result.degraded_output is not None
+        assert result.degraded_output.text == prose
+        assert result.drafts == {"claude": prose}
+        assert result.validation_errors is not None
+        assert any("Failed to parse JSON" in err for err in result.validation_errors)
+
+    @pytest.mark.asyncio
+    async def test_longest_draft_wins_when_several_providers_returned_prose(self):
+        """FB-01b: the retained artifact should be the most substantive draft."""
+        short, long = "brief note", "a considerably longer and more substantive analysis"
+        orch = self._prose_orchestrator()
+
+        with (
+            patch.object(
+                orch,
+                "_run_parallel_drafts",
+                AsyncMock(return_value={"codex": "", "claude": short, "sakana": long}),
+            ),
+            patch.object(orch, "_run_critique", AsyncMock(return_value="")),
+            patch.object(
+                orch, "_run_synthesis", AsyncMock(side_effect=RuntimeError("synthesis failed"))
+            ),
+        ):
+            result = await orch.run("Review this change", "critic")
+
+        assert result.degraded_output is not None
+        assert result.degraded_output.provider == "sakana"
+        assert result.degraded_output.text == long
+
+    @pytest.mark.asyncio
+    async def test_execution_plan_records_degraded_text_length_not_the_text(self):
+        """The prose ships once in degraded_output; the plan carries only its size."""
+        prose = "some prose that is not valid json"
+        orch = self._prose_orchestrator()
+
+        with (
+            patch.object(orch, "_run_parallel_drafts", AsyncMock(return_value={"claude": prose})),
+            patch.object(orch, "_run_critique", AsyncMock(return_value="")),
+            patch.object(
+                orch, "_run_synthesis", AsyncMock(side_effect=RuntimeError("synthesis failed"))
+            ),
+        ):
+            result = await orch.run("Review this change", "critic")
+
+        assert result.execution_plan is not None
+        plan_entry = result.execution_plan["degraded_output"]
+        assert plan_entry["text_chars"] == len(prose)
+        assert "text" not in plan_entry
+
     def test_prepare_run_uses_custom_output_schema(self):
         """Custom output_schema overrides subagent schema loading."""
         custom_schema = {
@@ -2189,3 +2613,188 @@ class TestOrchestratorPromptFormatting:
         assert "Drafts:" in prompt
         assert "Validation errors" in prompt
         assert "Previous error" in prompt
+
+
+class TestProviderFailover:
+    """FO-*: a seat that exhausts its retries must fail over, not vanish.
+
+    ``DegradationPolicy`` has been able to emit ``DegradationAction.FALLBACK``
+    since it was written, but no caller ever consumed that decision -- it was
+    recorded in the report and then dropped, so a configured fallback was inert.
+    These tests pin the CONSUMING side: the assertion is that the fallback
+    adapter actually received the request, not merely that a report row exists.
+    """
+
+    @staticmethod
+    def _orchestrator(fallbacks: dict[str, str] | None = None) -> Orchestrator:
+        config = OrchestratorConfig(
+            enable_graceful_degradation=True,
+            fallback_providers=fallbacks or {},
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            return Orchestrator(providers=["mock"], config=config)
+
+    @pytest.mark.asyncio
+    async def test_exhausted_seat_fails_over_to_the_mapped_provider(self):
+        """FO-01: once the retry budget is spent, the fallback answers the call."""
+        orch = self._orchestrator({"mock": "openrouter/backup"})
+        dead = MagicMock()
+        dead.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        backup = CaptureProvider()
+        request = GenerateRequest(prompt="hello")
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch.object(
+                orch,
+                "_instantiate_providers",
+                return_value=({"openrouter/backup": backup}, {}),
+            ),
+        ):
+            response = await orch._call_provider(
+                "mock", dead, request, phase="draft", remaining_providers=0
+            )
+
+        # The enforcing surface: the fallback really ran and its answer is returned.
+        assert response.text == '{"ok": true}'
+        assert len(backup.requests) == 1
+        assert backup.requests[0].prompt == "hello"
+
+        assert orch._degradation_policy is not None
+        assert "openrouter/backup" in orch._degradation_policy.get_report().fallbacks_used
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_configured_keeps_the_historic_failure(self):
+        """FO-02: without a mapping the seat is still lost -- no behaviour change."""
+        orch = self._orchestrator()
+        dead = MagicMock()
+        dead.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        request = GenerateRequest(prompt="hello")
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(RuntimeError, match="Provider call aborted"),
+        ):
+            await orch._call_provider("mock", dead, request, phase="draft", remaining_providers=0)
+
+    @pytest.mark.asyncio
+    async def test_unbuildable_fallback_reraises_the_original_error(self):
+        """FO-03: a missing OPENROUTER_API_KEY must not become a new hard error."""
+        orch = self._orchestrator({"mock": "openrouter/backup"})
+        dead = MagicMock()
+        dead.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        request = GenerateRequest(prompt="hello")
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch.object(
+                orch,
+                "_instantiate_providers",
+                return_value=({}, {"openrouter/backup": "OPENROUTER_API_KEY not set"}),
+            ),
+            # The original failure surfaces (enriched by the watchdog re-raise),
+            # NOT a new error about the unbuildable fallback.
+            pytest.raises(TimeoutError, match=r"mock timed out in draft"),
+        ):
+            await orch._call_provider("mock", dead, request, phase="draft", remaining_providers=0)
+
+    @pytest.mark.asyncio
+    async def test_failover_happens_at_most_once_per_call(self):
+        """FO-04: a flapping fallback must not ping-pong inside the retry loop."""
+        orch = self._orchestrator({"mock": "openrouter/backup"})
+        dead = MagicMock()
+        dead.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        broken_backup = MagicMock()
+        broken_backup.generate = AsyncMock(side_effect=TimeoutError("backup also timed out"))
+        request = GenerateRequest(prompt="hello")
+
+        instantiate = MagicMock(return_value=({"openrouter/backup": broken_backup}, {}))
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch.object(orch, "_instantiate_providers", instantiate),
+            pytest.raises((RuntimeError, TimeoutError)),
+        ):
+            await orch._call_provider("mock", dead, request, phase="draft", remaining_providers=0)
+
+        assert instantiate.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_failover_retargets_the_model_instead_of_inheriting_it(self):
+        """FO-05: the fallback must not be asked for the dead seat's model id.
+
+        Caught live, not by FO-01: the first fakes ignored ``request.model``, so the
+        unit tests were green while a real failover to ``anthropic/claude-opus-5``
+        forwarded ``claude-opus-5`` and got a 400 from OpenRouter. A virtual
+        OpenRouter provider's NAME is its model id.
+        """
+        orch = self._orchestrator({"mock": "openrouter/backup"})
+        dead = MagicMock()
+        dead.generate = AsyncMock(side_effect=TimeoutError("upstream request timed out"))
+        backup = CaptureProvider()
+        request = GenerateRequest(prompt="hello", model="dead-seat-model")
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch.object(
+                orch,
+                "_instantiate_providers",
+                return_value=({"openrouter/backup": backup}, {}),
+            ),
+        ):
+            await orch._call_provider("mock", dead, request, phase="draft", remaining_providers=0)
+
+        assert len(backup.requests) == 1
+        assert backup.requests[0].model == "openrouter/backup"
+        assert backup.requests[0].model != "dead-seat-model"
+        # The payload itself must survive the swap untouched.
+        assert backup.requests[0].prompt == "hello"
+
+    def test_policy_prefers_fallback_over_aborting_the_run(self):
+        """FO-06: a configured failover must be tried before the run is aborted.
+
+        Caught live, not by FO-01..FO-05: an UNKNOWN-classified error earns only a
+        single retry, so it never reaches the max-retries branch that offers the
+        fallback and the run aborted with the failover sitting unused. Whether the
+        failover fired at all depended on how the error happened to classify.
+        """
+        from llm_council.engine.degradation import DegradationAction, DegradationPolicy
+
+        policy = DegradationPolicy(
+            max_retries=2,
+            fallback_providers={"claude": "anthropic/claude-opus-5"},
+            min_providers_required=1,
+            abort_on_all_failures=True,
+        )
+
+        # First UNKNOWN failure: one retry is allowed.
+        first = policy.decide(
+            provider="claude", error="CLI failed (unknown)", phase="draft", remaining_providers=0
+        )
+        assert first.action == DegradationAction.RETRY
+
+        # Second: previously ABORT, stranding the configured fallback.
+        second = policy.decide(
+            provider="claude", error="CLI failed (unknown)", phase="draft", remaining_providers=0
+        )
+        assert second.action == DegradationAction.FALLBACK
+        assert second.fallback_provider == "anthropic/claude-opus-5"
+
+    def test_policy_still_aborts_when_no_fallback_is_configured(self):
+        """FO-07: FO-06 must not turn every dead seat into a non-abort."""
+        from llm_council.engine.degradation import DegradationAction, DegradationPolicy
+
+        policy = DegradationPolicy(
+            max_retries=2,
+            fallback_providers={},
+            min_providers_required=1,
+            abort_on_all_failures=True,
+        )
+        policy.decide(
+            provider="claude", error="CLI failed (unknown)", phase="draft", remaining_providers=0
+        )
+        second = policy.decide(
+            provider="claude", error="CLI failed (unknown)", phase="draft", remaining_providers=0
+        )
+        assert second.action == DegradationAction.ABORT

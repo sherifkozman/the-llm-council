@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from llm_council.providers.anthropic import (
@@ -54,6 +55,7 @@ from llm_council.providers.openrouter import (
     OpenRouterProvider,
 )
 from llm_council.providers.registry import ProviderRegistry, get_registry
+from llm_council.providers.sakana import SakanaProvider
 from llm_council.providers.vertex import VertexAIProvider
 
 
@@ -320,6 +322,35 @@ class TestErrorClassification:
             ErrorType.TIMEOUT
         )
         assert classify_error("504 DEADLINE_EXCEEDED") == ErrorType.TIMEOUT
+
+    @pytest.mark.parametrize("seconds", [401, 429, 1401, 1429, 500, 502, 599, 600, 120])
+    def test_a_timeout_message_is_a_timeout_whatever_the_number_is(self, seconds):
+        """The number in the message must not be read as an HTTP status code.
+
+        Provider messages interpolate the limit - "timed out after 401.0s" - and the bare
+        patterns "401"/"429" used to match it as a substring. A timeout then classified as
+        AUTH, which is non-retryable: the seat was dropped with "check your API key".
+        """
+        message = (
+            f"Codex CLI timed out after {float(seconds)}s. "
+            "Consider increasing timeout or simplifying the task."
+        )
+
+        assert classify_error(message, 1) == ErrorType.TIMEOUT
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("HTTP 429 Too Many Requests", ErrorType.RATE_LIMIT),
+            ("status_code: 401 unauthorized", ErrorType.AUTH),
+            ("Error 500: internal server error", ErrorType.NETWORK),
+            ("got 502 bad gateway", ErrorType.NETWORK),
+            ("504 DEADLINE_EXCEEDED", ErrorType.TIMEOUT),
+        ],
+    )
+    def test_a_real_status_code_is_still_detected(self, text, expected):
+        """Guard: the narrower rule must not stop matching genuine status codes."""
+        assert classify_error(text, 1) == expected
         assert classify_error("Deadline expired before operation could complete.") == (
             ErrorType.TIMEOUT
         )
@@ -1992,8 +2023,23 @@ class TestCLIProviderTimeouts:
             captured_settings["payload"] = json.loads(settings_path.read_text(encoding="utf-8"))
             return process
 
+        # `clear=True` wipes the whole environment, including the variables
+        # Windows uses to resolve the home directory (USERPROFILE, HOMEDRIVE,
+        # HOMEPATH). The provider calls Path.home() to copy existing auth state,
+        # and with those gone `expanduser("~")` cannot resolve and raises. POSIX
+        # hides this because it falls back to the pwd database.
+        home_env = {
+            name: os.environ[name]
+            for name in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+            if name in os.environ
+        }
+
         with (
-            patch.dict("os.environ", {"GOOGLE_API_KEY": "test-google-key"}, clear=True),
+            patch.dict(
+                "os.environ",
+                {"GOOGLE_API_KEY": "test-google-key", **home_env},
+                clear=True,
+            ),
             patch.object(
                 GeminiCLIProvider,
                 "_load_existing_auth_settings",
@@ -2182,6 +2228,9 @@ class TestCLIProviderTimeouts:
             process.stdout.feed_data(
                 b'{"type":"item.completed","item":{"type":"agent_message","text":"READY"}}\n'
             )
+            # The end-of-turn signal is what authorizes termination; an
+            # agent_message alone is only a preamble candidate.
+            process.stdout.feed_data(b'{"type":"turn.completed"}\n')
 
         async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
             process.returncode = -9
@@ -2201,6 +2250,62 @@ class TestCLIProviderTimeouts:
 
         assert response.text == "READY"
         mock_terminate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_codex_cli_does_not_return_preamble_before_turn_completed(self):
+        """A pre-tool "here is my plan" message must not be mistaken for the answer.
+
+        Regression: the termination timer used to arm on ANY agent_message, so a
+        model that narrates its plan before running tools was killed ~1s later and
+        that preamble was returned as the final answer.
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+
+        class HangingCodexProcess:
+            def __init__(self) -> None:
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.returncode: int | None = None
+
+            async def wait(self) -> int:
+                while self.returncode is None:
+                    await asyncio.sleep(0)
+                return self.returncode
+
+        process = HangingCodexProcess()
+
+        async def _emit_stdout() -> None:
+            process.stdout.feed_data(b'{"type":"thread.started","thread_id":"abc"}\n')
+            await asyncio.sleep(0.01)
+            process.stdout.feed_data(
+                b'{"type":"item.completed","item":'
+                b'{"type":"agent_message","text":"Here is my plan: inspect the repo."}}\n'
+            )
+            # Tool work happens here; the real answer only arrives afterwards.
+            await asyncio.sleep(0.05)
+            process.stdout.feed_data(
+                b'{"type":"item.completed","item":{"type":"agent_message","text":"FINAL ANSWER"}}\n'
+            )
+            process.stdout.feed_data(b'{"type":"turn.completed"}\n')
+
+        async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
+            process.returncode = -9
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value="/tmp/codex-home"),
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch(
+                "llm_council.providers.cli.codex._terminate_live_process",
+                side_effect=_fake_terminate,
+            ),
+        ):
+            asyncio.create_task(_emit_stdout())
+            response = await provider.generate(GenerateRequest(prompt="test", timeout_seconds=5))
+
+        assert response.text == "FINAL ANSWER"
+        assert "plan" not in response.text
 
     @pytest.mark.asyncio
     async def test_codex_cli_fast_fails_when_turn_starts_but_no_answer_arrives(self):
@@ -2664,6 +2769,110 @@ class TestOpenRouterProviderEnvModel:
 
         assert body["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
+
+class TestSakanaProviderReasoningEffort:
+    """Regression tests for the Fugu reasoning_effort 400.
+
+    Fugu (Sakana) rejects any ``reasoning_effort`` value outside
+    ``{high, xhigh, max}`` with an HTTP 400. The orchestrator's ``light``
+    reasoning profile downgrades effort to ``"low"``, which the inherited
+    OpenRouter request builder forwards verbatim, so every draft/critique
+    request under that profile failed until ``SakanaProvider`` overrode
+    ``_build_request_body`` to sanitize the value.
+    """
+
+    @pytest.mark.parametrize(
+        ("input_effort", "expected_effort"),
+        [
+            # "xhigh"/"max" aren't tested here: ReasoningConfig.effort is a Pydantic
+            # Literal["low", "medium", "high", "none"], so the orchestrator can never
+            # actually produce them — only "high" passes through unchanged in practice.
+            ("low", "high"),
+            ("medium", "high"),
+            ("high", "high"),
+        ],
+    )
+    def test_build_request_body_clamps_unsupported_effort_to_high(
+        self, input_effort, expected_effort
+    ):
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                reasoning=ReasoningConfig(enabled=True, effort=input_effort),
+            )
+        )
+
+        assert body["reasoning_effort"] == expected_effort
+
+    def test_build_request_body_drops_none_sentinel(self):
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                reasoning=ReasoningConfig(enabled=True, effort="none"),
+            )
+        )
+
+        assert "reasoning_effort" not in body
+
+    def test_build_request_body_omits_reasoning_effort_when_disabled(self):
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(GenerateRequest(prompt="test"))
+
+        assert "reasoning_effort" not in body
+
+    def test_build_request_body_still_omits_reasoning_effort_for_structured_output(self):
+        """The inherited structured-output guard must still apply through the override."""
+        provider = SakanaProvider(api_key="sk-fugu-test")
+        body = provider._build_request_body(
+            GenerateRequest(
+                prompt="test",
+                structured_output=StructuredOutputConfig(
+                    json_schema={
+                        "type": "object",
+                        "properties": {"result": {"type": "string"}},
+                        "required": ["result"],
+                        "additionalProperties": False,
+                    },
+                    name="test_schema",
+                    strict=True,
+                ),
+                reasoning=ReasoningConfig(enabled=True, effort="low"),
+            )
+        )
+
+        assert "reasoning_effort" not in body
+
+
+class TestSakanaProviderErrorSurfacing:
+    """Regression test: Fugu's HTTP error body was invisible in propagated errors.
+
+    ``httpx.HTTPStatusError.__str__`` never includes the response body, so a
+    rejected-parameter 400 surfaced only as an opaque "400 Bad Request" with no
+    indication of what was actually wrong with the request.
+    """
+
+    @pytest.mark.asyncio
+    async def test_generate_appends_response_body_to_http_status_error(self):
+        def handler(request):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "reasoning_effort must be one of high, xhigh, max"}},
+                request=request,
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = SakanaProvider(api_key="sk-fugu-test", http_client=client)
+
+        try:
+            with pytest.raises(httpx.HTTPStatusError) as exc_info:
+                await provider.generate(GenerateRequest(prompt="test"))
+
+            assert "reasoning_effort must be one of high, xhigh, max" in str(exc_info.value)
+        finally:
+            await client.aclose()
+
     def test_build_request_body_omits_cache_control_for_unsupported_routes(self):
         """Direct adapter calls should not leak cache controls to unsupported routes."""
         provider = OpenRouterProvider(api_key="sk-or-test")
@@ -2877,6 +3086,159 @@ class TestCodexTurnFailed:
 
         assert state.error_message == "model gpt-nope is not supported"
         assert state.saw_turn_completed is True
+        # A rejected turn also raises the completion signal, so the two must be
+        # distinguishable: only this flag says "there is no answer coming".
+        assert state.saw_turn_failed is True
+
+    def test_a_healthy_turn_is_not_marked_failed(self):
+        from llm_council.providers.cli.codex import _ingest_codex_stdout_line, _LiveCodexState
+
+        state = _LiveCodexState()
+        _ingest_codex_stdout_line('{"type":"turn.completed"}', state)
+
+        assert state.saw_turn_completed is True
+        assert state.saw_turn_failed is False
+
+    @staticmethod
+    def _live_process(stdout: bytes):
+        """A process on the LIVE path: real StreamReaders, so `generate` streams it."""
+
+        class LiveCodex:
+            def __init__(self) -> None:
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.returncode: int | None = None
+
+            async def wait(self) -> int:
+                while self.returncode is None:
+                    await asyncio.sleep(0)
+                return self.returncode
+
+        process = LiveCodex()
+        process.stdout.feed_data(stdout)
+        return process
+
+    @pytest.mark.asyncio
+    async def test_codex_raises_on_turn_failed_on_the_live_path(self, tmp_path):
+        """The batch path above has always raised; the streaming path returned an empty success.
+
+        That is the silent seat loss: the council recorded the run as successful with a
+        zero-length draft, and nothing said the model had refused the turn.
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = self._live_process(self.TURN_FAILED)
+
+        async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
+            process.returncode = 0  # turn.failed comes back with exit code 0
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value=str(tmp_path / "h")),
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch(
+                "llm_council.providers.cli.codex._terminate_live_process",
+                side_effect=_fake_terminate,
+            ),
+            pytest.raises(RuntimeError, match="gpt-nope is not supported"),
+        ):
+            await provider.generate(GenerateRequest(prompt="test", timeout_seconds=10))
+
+    @pytest.mark.parametrize(
+        ("label", "event"),
+        [
+            ("no error key", b'{"type":"turn.failed"}\n'),
+            ("empty error object", b'{"type":"turn.failed","error":{}}\n'),
+            ("empty message", b'{"type":"turn.failed","error":{"message":""}}\n'),
+            ("error is a string", b'{"type":"turn.failed","error":"rejected"}\n'),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_rejection_without_a_usable_message_still_fails(self, tmp_path, label, event):
+        """`turn.failed` IS the failure; the message is only the explanation.
+
+        The first version of this fix keyed off `state.error_message`, so a rejection whose
+        payload carried no usable message left `failed` False and the empty success escaped
+        anyway - the very hole the change was written to close.
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = self._live_process(b'{"type":"turn.started"}\n' + event)
+
+        async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
+            process.returncode = 0
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value=str(tmp_path / "h")),
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch(
+                "llm_council.providers.cli.codex._terminate_live_process",
+                side_effect=_fake_terminate,
+            ),
+            pytest.raises(RuntimeError) as caught,
+        ):
+            await provider.generate(GenerateRequest(prompt="test", timeout_seconds=10))
+
+        assert str(caught.value).strip(), f"{label}: the error must say something"
+
+    @pytest.mark.asyncio
+    async def test_a_transient_error_event_does_not_doom_a_turn_that_recovers(self, tmp_path):
+        """Only `turn.failed` is terminal.
+
+        A bare `error` event can precede a turn that still produces an answer, so it must
+        not be promoted to a failure by this change.
+        """
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = self._live_process(
+            b'{"type":"turn.started"}\n'
+            b'{"type":"error","message":"transient hiccup"}\n'
+            b'{"type":"item.completed","item":{"type":"agent_message","text":"recovered"}}\n'
+            b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
+        )
+
+        async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
+            process.returncode = 0
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value=str(tmp_path / "h")),
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch(
+                "llm_council.providers.cli.codex._terminate_live_process",
+                side_effect=_fake_terminate,
+            ),
+        ):
+            response = await provider.generate(GenerateRequest(prompt="test", timeout_seconds=10))
+
+        assert response.text == "recovered"
+
+    @pytest.mark.asyncio
+    async def test_live_path_still_succeeds_without_turn_failed(self, tmp_path):
+        """Guard: the new check must not fire on a healthy streamed turn."""
+        provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
+        process = self._live_process(
+            b'{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
+            b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
+        )
+
+        async def _fake_terminate(_proc, grace_seconds: float = 1.0) -> None:
+            process.returncode = 0
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+
+        with (
+            patch.object(provider, "_create_isolated_cli_home", return_value=str(tmp_path / "h")),
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch(
+                "llm_council.providers.cli.codex._terminate_live_process",
+                side_effect=_fake_terminate,
+            ),
+        ):
+            response = await provider.generate(GenerateRequest(prompt="test", timeout_seconds=10))
+
+        assert response.text == "ok"
 
     @pytest.mark.asyncio
     async def test_codex_raises_on_turn_failed_despite_exit_zero(self):

@@ -65,6 +65,24 @@ _ENV_ALLOWLIST = {
     "CLOUD_ML_REGION",  # ... in this region
     "GOOGLE_APPLICATION_CREDENTIALS",  # explicit ADC path, if set
     "GOOGLE_CLOUD_PROJECT",  # ADC default project
+    # Windows system essentials. Without these the child dies at load time with
+    # 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN / fast-fail) and EMPTY stdout and
+    # stderr, which surfaced as an undiagnosable "CLI failed (unknown): ".
+    # SystemRoot is required to resolve system DLLs; COMSPEC is required to run
+    # the `claude.CMD` batch shim at all. Both spellings are listed because this
+    # is a membership test against the real key, whose case varies by shell.
+    "SystemRoot",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "ComSpec",
+    "SystemDrive",
+    "windir",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
 }
 
 
@@ -299,7 +317,15 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                     f"RATE LIMIT: Too many requests. Wait and retry.\nDetails: {stderr_text[:200]}"
                 )
             else:
-                raise RuntimeError(f"CLI failed ({error_type.value}): {stderr_text}")
+                # A crashing child can exit non-zero with BOTH streams empty
+                # (e.g. Windows fast-fail 0xC0000409 from a missing SystemRoot).
+                # Reporting stderr alone produced a bare "CLI failed (unknown): "
+                # with no way to diagnose it, so fall back to stdout and finally
+                # to the raw exit code.
+                details = stderr_text.strip() or stdout_text.strip()[:500]
+                if not details:
+                    details = f"no output; exit code {proc.returncode} (0x{(proc.returncode or 0) & 0xFFFFFFFF:08X})"
+                raise RuntimeError(f"CLI failed ({error_type.value}): {details}")
 
         # Parse JSON output from --output-format json.
         output = ""

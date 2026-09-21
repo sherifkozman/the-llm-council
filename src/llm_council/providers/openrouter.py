@@ -320,10 +320,22 @@ class OpenRouterProvider(ProviderAdapter):
         if request.stream:
             return self._generate_stream(client, body)
 
+        # Honour the caller's per-request timeout. The shared client is created
+        # once with a 120s read timeout, which silently capped every long run:
+        # slow reasoning models (e.g. Sakana fugu-ultra at high/xhigh effort)
+        # routinely exceed 120s before the first byte, so they failed with an
+        # SSL read timeout no matter what `--timeout` was passed. httpx lets a
+        # per-request timeout override the client default, so no client rebuild
+        # (and no loss of connection pooling) is needed.
+        post_kwargs: dict[str, Any] = {}
+        if request.timeout_seconds is not None:
+            post_kwargs["timeout"] = httpx.Timeout(float(request.timeout_seconds), connect=10.0)
+
         response = await client.post(
             f"{self._base_url}/chat/completions",
             headers=self._get_headers(),
             json=body,
+            **post_kwargs,
         )
         response.raise_for_status()
         data = response.json()

@@ -256,6 +256,36 @@ def _load_provider_configs() -> dict[str, dict[str, Any]]:
     return result
 
 
+def _load_fallback_providers() -> dict[str, str]:
+    """Extract the last-resort failover map from config.
+
+    Reads a top-level ``fallbacks`` mapping of provider -> replacement provider::
+
+        fallbacks:
+          claude: anthropic/claude-opus-5
+          codex: openai/gpt-5.6-sol
+          sakana: sakana/fugu-ultra
+
+    A replacement containing ``/`` is instantiated as an OpenRouter virtual
+    provider, so this is how a native subscription seat falls back to the same
+    model over an API key when the CLI path dies.
+
+    Kept separate from ``providers[].*`` on purpose: entries there are forwarded
+    to the adapter constructor as kwargs, and an unexpected key would raise a
+    TypeError and take the provider down instead of protecting it.
+    """
+    config = _load_config()
+    raw = config.get("fallbacks", {})
+    if not isinstance(raw, dict):
+        return {}
+
+    result: dict[str, str] = {}
+    for name, target in raw.items():
+        if isinstance(name, str) and isinstance(target, str) and name and target:
+            result[name.strip()] = target.strip()
+    return result
+
+
 def _get_nested_value(data: dict[str, Any], key: str) -> Any:
     """Get a nested value using dot notation (e.g., 'defaults.timeout')."""
     parts = key.split(".")
@@ -338,6 +368,26 @@ def _render_result_markdown(
                 lines.append(f"- {err}")
         else:
             lines.append("- Unknown error")
+        lines.append("")
+
+    degraded = getattr(result, "degraded_output", None)
+    if degraded is not None:
+        lines.append("## Degraded Output")
+        lines.append("")
+        lines.append(f"- Source: {getattr(degraded, 'source', None) or 'unknown'}")
+        provider = getattr(degraded, "provider", None)
+        if provider:
+            lines.append(f"- Provider: {provider}")
+        reason = getattr(degraded, "reason", None)
+        if reason:
+            lines.append(f"- Reason: {reason}")
+        text = getattr(degraded, "text", None)
+        if isinstance(text, str) and text.strip():
+            lines.append("- Schema-valid: no (raw provider text, not validated output)")
+            lines.append("")
+            lines.append("```text")
+            lines.append(text.strip())
+            lines.append("```")
         lines.append("")
 
     critique = getattr(result, "critique", None)
@@ -707,6 +757,7 @@ def run(
             output_schema=custom_schema,
             follow_router=route,
             provider_configs=_load_provider_configs(),
+            fallback_providers=_load_fallback_providers(),
         )
 
         council = Council(config=config)
@@ -747,6 +798,29 @@ def run(
                         "\n".join(result.validation_errors or ["Unknown error"]),
                         title="[red]Council Result: FAILED[/red]",
                         border_style="red",
+                    )
+                )
+
+            degraded = result.degraded_output
+            if degraded is not None:
+                detail = [f"Source: {degraded.source}"]
+                if degraded.provider:
+                    detail.append(f"Provider: {degraded.provider}")
+                if degraded.reason:
+                    detail.append(f"Reason: {degraded.reason}")
+                text = degraded.text
+                if isinstance(text, str) and text.strip():
+                    preview = text.strip()
+                    if len(preview) > 2000:
+                        preview = preview[:2000] + "\n... (truncated; full text in --json output)"
+                    detail.append("Schema-valid: no (raw provider text)")
+                    detail.append("")
+                    detail.append(preview)
+                console.print(
+                    Panel(
+                        "\n".join(detail),
+                        title="[yellow]Degraded Fallback[/yellow]",
+                        border_style="yellow",
                     )
                 )
 
@@ -1371,6 +1445,7 @@ def _build_eval_base_config(
         runtime_profile=runtime_profile,
         reasoning_profile=reasoning_profile,
         provider_configs=_load_provider_configs(),
+        fallback_providers=_load_fallback_providers(),
     )
 
 

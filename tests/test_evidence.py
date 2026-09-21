@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from llm_council.engine.capabilities import CapabilityPlan
-from llm_council.engine.evidence import collect_capability_evidence
+from llm_council.engine.evidence import _load_git_diff, collect_capability_evidence
 
 
 class TestEvidenceCollection:
@@ -190,5 +192,96 @@ class TestEvidenceCollection:
             repo_root=tmp_path,
         )
 
+        assert bundle.executed_capabilities == []
+        assert bundle.pending_capabilities == ["diff-review"]
+
+
+class TestEvidenceRobustness:
+    """Regression tests: evidence is optional and must degrade, never abort a run."""
+
+    def test_load_git_diff_tolerates_missing_stdout(self, tmp_path, monkeypatch):
+        """Regression: CompletedProcess.stdout=None must read as 'no diff', not crash."""
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args=["git"], returncode=0, stdout=None, stderr=None)
+
+        monkeypatch.setattr("llm_council.engine.evidence.subprocess.run", fake_run)
+
+        assert _load_git_diff(tmp_path) == ""
+
+    def test_load_git_diff_uses_replacement_safe_decoding(self, tmp_path, monkeypatch):
+        """The git call must capture output as utf-8 text with non-raising decoding."""
+
+        captured_kwargs: list[dict] = []
+
+        def fake_run(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("llm_council.engine.evidence.subprocess.run", fake_run)
+
+        _load_git_diff(tmp_path)
+
+        assert captured_kwargs
+        for kwargs in captured_kwargs:
+            assert kwargs["capture_output"] is True
+            assert kwargs["text"] is True
+            assert kwargs["encoding"] == "utf-8"
+            assert kwargs["errors"] == "replace"
+
+    @pytest.mark.asyncio
+    async def test_failing_collector_degrades_to_pending(self, tmp_path, monkeypatch):
+        """A crashing collector leaves its capability pending while others still run."""
+
+        def broken_diff(repo_root):
+            raise AttributeError("'NoneType' object has no attribute 'strip'")
+
+        monkeypatch.setattr("llm_council.engine.evidence._load_git_diff", broken_diff)
+
+        plan = CapabilityPlan(
+            execution_profile="light_tools",
+            budget_class="normal",
+            required_capabilities=["diff-review", "repo-analysis"],
+        )
+
+        bundle = await collect_capability_evidence(
+            "Review the latest implementation changes",
+            "critic",
+            "review",
+            plan,
+            repo_root=tmp_path,
+        )
+
+        assert bundle.pending_capabilities == ["diff-review"]
+        assert bundle.executed_capabilities == ["repo-analysis"]
+
+    @pytest.mark.asyncio
+    async def test_skipped_capability_never_runs_collector(self, tmp_path, monkeypatch):
+        """Capabilities in skip_capabilities stay pending without invoking git."""
+
+        calls: list[str] = []
+
+        def record_diff(repo_root):
+            calls.append("git-diff")
+            return ""
+
+        monkeypatch.setattr("llm_council.engine.evidence._load_git_diff", record_diff)
+
+        plan = CapabilityPlan(
+            execution_profile="light_tools",
+            budget_class="normal",
+            required_capabilities=["diff-review"],
+        )
+
+        bundle = await collect_capability_evidence(
+            "Review the user-provided files",
+            "critic",
+            "review",
+            plan,
+            repo_root=tmp_path,
+            skip_capabilities={"diff-review"},
+        )
+
+        assert calls == []
         assert bundle.executed_capabilities == []
         assert bundle.pending_capabilities == ["diff-review"]
