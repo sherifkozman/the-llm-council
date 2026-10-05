@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from llm_council.providers.base import (
     GenerateRequest,
     PromptCacheConfig,
@@ -28,6 +30,131 @@ def _schema(*, required: list[str] | None = None, additional_properties: bool | 
 
 class TestRequestCompiler:
     """Tests for request compilation across all current providers."""
+
+    @pytest.mark.parametrize("provider,model", [("codex", "gpt-5.4"), ("claude", "claude-opus-5")])
+    @pytest.mark.parametrize("max_tokens", [None, 4000])
+    def test_cli_output_budget_is_explicitly_dropped_only_when_requested(
+        self, provider: str, model: str, max_tokens: int | None
+    ) -> None:
+        original = GenerateRequest(
+            prompt="review",
+            model=model,
+            max_tokens=max_tokens,
+            timeout_seconds=12.0,
+            temperature=0.2,
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+        original_payload = original.model_dump()
+        compiled = compile_request_for_provider(provider, original)
+
+        assert original.model_dump() == original_payload
+        assert compiled.request.max_tokens is None
+        assert compiled.request.timeout_seconds == 12.0
+        max_token_decisions = [
+            item for item in compiled.to_dict()["decisions"] if item["option"] == "max_tokens"
+        ]
+        if max_tokens is None:
+            assert max_token_decisions == []
+        else:
+            assert max_token_decisions == [
+                {
+                    "option": "max_tokens",
+                    "action": "dropped",
+                    "detail": f"requested max_tokens={max_tokens} is not enforced; "
+                    "no verified whole-generation output token limit; "
+                    "native output may exceed requested limit; timeout still applies",
+                }
+            ]
+        assert compiled.request.temperature is None
+        assert any(
+            item.option == "temperature" and item.action == "dropped" for item in compiled.decisions
+        )
+        assert compiled.request.reasoning == ReasoningConfig(enabled=True, effort="high")
+        control = compiled.to_dict()["reasoning_control"]
+        assert control["status"] == "requested"
+        assert control["effort"] == "high"
+
+    @pytest.mark.parametrize(
+        "provider", ["openai", "anthropic", "openrouter", "gemini", "vertex-ai", "gemini-cli"]
+    )
+    @pytest.mark.parametrize("max_tokens", [None, 4000])
+    def test_output_budget_compilation_is_unchanged_for_other_routes(
+        self, provider: str, max_tokens: int | None
+    ) -> None:
+        original = GenerateRequest(prompt="test", max_tokens=max_tokens, timeout_seconds=12.0)
+        compiled = compile_request_for_provider(provider, original)
+
+        assert compiled.request.max_tokens == max_tokens
+        assert original.max_tokens == max_tokens
+        assert compiled.request.timeout_seconds == 12.0
+        assert not any(item.option == "max_tokens" for item in compiled.decisions)
+
+    @pytest.mark.parametrize("provider,model", [("codex", "gpt-5.4"), ("claude", "claude-opus-5")])
+    @pytest.mark.parametrize("effort", ["high", "low"])
+    def test_cli_forwards_verified_effort_without_other_provider_knobs(
+        self, provider, model, effort
+    ):
+        original = GenerateRequest(
+            prompt="review",
+            model=model,
+            reasoning=ReasoningConfig(
+                enabled=True, effort=effort, budget_tokens=16384, thinking_level="high"
+            ),
+        )
+        compiled = compile_request_for_provider(provider, original)
+        assert compiled.request.reasoning == ReasoningConfig(enabled=True, effort=effort)
+        assert original.reasoning.budget_tokens == 16384
+        actions = {(item.option, item.action) for item in compiled.decisions}
+        assert ("reasoning.effort", "supported") in actions
+        assert ("reasoning.budget_tokens", "ignored") in actions
+        assert ("reasoning.thinking_level", "ignored") in actions
+        metadata = compiled.to_dict()["reasoning_control"]
+        assert metadata["status"] == "requested"
+        assert metadata["effort"] == effort
+        assert metadata["requires_cli_version"]
+
+    def test_codex_explicit_off_is_not_conflated_with_uncontrolled_default(self):
+        off = compile_request_for_provider(
+            "codex", GenerateRequest(prompt="test", reasoning=ReasoningConfig(enabled=False))
+        )
+        absent = compile_request_for_provider("codex", GenerateRequest(prompt="test"))
+        assert off.request.reasoning == ReasoningConfig(enabled=False)
+        assert off.to_dict()["reasoning_control"]["effort"] == "none"
+        assert absent.request.reasoning is None
+        assert absent.to_dict()["reasoning_control"] == {"status": "uncontrolled"}
+
+    @pytest.mark.parametrize(
+        "provider,model,reasoning",
+        [
+            ("claude", "claude-opus-5", ReasoningConfig(enabled=False)),
+            ("claude", "sonnet", ReasoningConfig(enabled=True, effort="high")),
+            ("claude", None, ReasoningConfig(enabled=True, effort="high")),
+            ("claude", "claude-opus-5", ReasoningConfig(enabled=True, effort="medium")),
+            ("codex", "gpt-5.4", ReasoningConfig(enabled=True, effort="medium")),
+            ("codex", "gpt-5.4", ReasoningConfig(enabled=True, budget_tokens=4096)),
+            ("codex", "gpt-5.4", ReasoningConfig(enabled=False, effort="high")),
+            ("gemini-cli", "gemini-3-pro-preview", ReasoningConfig(enabled=False)),
+        ],
+    )
+    def test_unsupported_cli_reasoning_is_explicitly_uncontrolled(self, provider, model, reasoning):
+        compiled = compile_request_for_provider(
+            provider, GenerateRequest(prompt="test", model=model, reasoning=reasoning)
+        )
+        assert compiled.request.reasoning is None
+        assert compiled.to_dict()["reasoning_control"]["status"] == "uncontrolled"
+        assert any(
+            item.option == "reasoning" and item.action == "dropped" for item in compiled.decisions
+        )
+
+    @pytest.mark.parametrize(
+        "provider", ["openai", "openrouter", "anthropic", "gemini", "vertex-ai"]
+    )
+    def test_explicit_disabled_reasoning_keeps_api_payload_behavior(self, provider):
+        compiled = compile_request_for_provider(
+            provider, GenerateRequest(prompt="test", reasoning=ReasoningConfig(enabled=False))
+        )
+        assert compiled.request.reasoning == ReasoningConfig(enabled=False)
+        assert "reasoning_control" not in compiled.to_dict()
 
     def test_openai_drops_temperature_for_reasoning_models(self):
         compiled = compile_request_for_provider(

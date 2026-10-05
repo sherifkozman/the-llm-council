@@ -4,6 +4,11 @@ LLM Council is a multi-LLM orchestration framework for adversarial debate,
 cross-validation, and structured decision-making across multiple model
 providers.
 
+For agent and CI integrations, start with the
+[portable invocation contract](../skills/council/references/invocation-contract.md).
+Council 0.8.1 adds execution status and exact exit semantics. Wait for the process,
+read the full JSON result even after a nonzero exit, and inspect degradation.
+
 The public package now supports both:
 
 - the core three-phase council flow

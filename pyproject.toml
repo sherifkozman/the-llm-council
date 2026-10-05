@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-llm-council"
-version = "0.8.0"
+version = "0.8.1"
 description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
 readme = "README.md"
 license = "MIT"
@@ -41,6 +41,7 @@ dependencies = [
     "pyyaml>=6.0",
     "jsonschema>=4.0",
     "aiosqlite>=0.19",
+    "tomli>=2.4.1; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -129,6 +130,18 @@ testpaths = ["tests"]
 
 [tool.vulture]
 ignore_names = [
+    # Verified Pydantic, pytest and stdlib HTTP callbacks; not direct source calls.
+    "classify_execution",
+    "_validate_cached_content",
+    "_validate_input",
+    "synthetic_environment",
+    "isolated_codex_unit_runtime",
+    "isolated_locks",
+    "pytestmark",
+    "protocol_version",
+    "log_message",
+    "do_GET",
+    "do_POST",
     "main",
     "evaluate",
     "evaluate_compare",

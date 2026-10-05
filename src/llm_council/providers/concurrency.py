@@ -110,15 +110,31 @@ async def provider_call_slot(
     timeout_seconds: float | None = None,
     poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
 ) -> AsyncIterator[float]:
-    """Async wrapper around :func:`acquire_provider_call_lease`."""
-
-    lease = await asyncio.to_thread(
-        acquire_provider_call_lease,
-        provider_name,
-        timeout_seconds=timeout_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-    )
+    """Acquire without leaving a background thread owning an abandoned lease."""
+    started = time.monotonic()
+    lease: ProviderCallLease | None = None
     try:
+        while True:
+            try:
+                # A nonblocking attempt has no cancellation point between taking
+                # the lock and installing its finally owner below.
+                lease = acquire_provider_call_lease(provider_name, timeout_seconds=0)
+                break
+            except TimeoutError:
+                delay = poll_interval_seconds
+                if timeout_seconds is not None:
+                    remaining = timeout_seconds - (time.monotonic() - started)
+                    if remaining <= 0:
+                        raise
+                    delay = min(delay, remaining)
+                await asyncio.sleep(delay)
+                if timeout_seconds is not None and time.monotonic() - started >= timeout_seconds:
+                    raise TimeoutError(f"Timed out waiting for provider slot: {provider_name}")
+
+        if lease.fd is not None:
+            lease.wait_ms = round((time.monotonic() - started) * 1000, 1)
         yield lease.wait_ms
     finally:
-        await asyncio.to_thread(lease.release)
+        if lease is not None:
+            # Unlock/close cannot be interrupted by repeated task cancellation.
+            lease.release()

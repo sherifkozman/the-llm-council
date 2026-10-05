@@ -2,6 +2,13 @@
 
 OpenRouter is the recommended provider for LLM Council because it provides access to 100+ models through a single API key, including Claude, GPT, Gemini, and many others.
 
+For Codex, Claude Code, Hermes and CI callers, use the
+[portable invocation contract](../../skills/council/references/invocation-contract.md).
+Shell startup files are not automatically loaded by those callers. Verify
+credentials in the actual authorized child context; do not bypass a caller's
+credential filter by sourcing host secret files. Invocation failures do not, by
+themselves, establish that an OpenRouter model is unhealthy.
+
 ## Why OpenRouter?
 
 - **Single API Key** - Access all models with one key instead of managing multiple API accounts
