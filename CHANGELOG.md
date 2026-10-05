@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default local Git-diff collector has no diff. Missing explicitly requested
   caller/router capabilities still make execution degraded; pending evidence
   remains inspectable and completion does not certify evidence sufficiency.
+- Default-mode critique can omit the full output-schema dump before shortening
+  drafts further when the first prompt exceeds its provider budget. Reference
+  material and final schema handling are unchanged; metadata and a warning expose
+  the omission rather than implying equivalent schema-specific critique.
 - Explicit missing or entirely skipped reference files fail before provider
   calls. Partial truncation remains visible and marks the result degraded.
 
@@ -776,7 +780,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.18...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.18...v0.8.0
 [0.7.18]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.17...v0.7.18
 [0.7.17]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.16...v0.7.17
 [0.7.16]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.15...v0.7.16

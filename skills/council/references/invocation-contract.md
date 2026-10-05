@@ -207,6 +207,9 @@ Check actual providers/models, required phase participation, evidence retained,
 and any context truncation/slicing/chunking. A valid execution does not prove the
 model's conclusions. Do not accept fallback or missing drafts as full coverage.
 Do not retry a valid degraded run automatically; assess the specific failure first.
+When critique compaction records `omit_schema: 1`, full output-schema details were
+omitted from that critique. Inspect its warning; do not claim equivalent
+schema-specific scrutiny. Synthesis's configured schema handling is unchanged.
 
 For `router --route`, the returned child `run_id` is also the final workflow
 handle; its ledger status reflects combined router/child coverage. The child's
@@ -229,6 +232,13 @@ provenance when the engine can settle and attach a result before the CLI deadlin
   packaged contract, not a missing personal wrapper. Record its path/version
   during verification. Updating repository docs does not update a stale local
   slash command. Do not change owned local instructions without authorization.
+  In headless `claude -p` sessions, do not issue a final response while Council
+  is running: exiting the session can terminate its background Bash tasks.
+  Prefer foreground execution (`run_in_background: false`). If the tool yields
+  or automatically backgrounds the command, keep the session active with bounded
+  foreground waits and completion checks for that same invocation, within the
+  original outer deadline. Do not restart Council or finish with "waiting for
+  notification". Inspect its terminal exit and complete result before responding.
 - Hermes: use terminal plus its managed process wait/poll path and a result file.
   Displayed terminal output can be truncated or redacted. A wait timeout may mean
   still running. Its provider-key denylist is not fixed by generic environment

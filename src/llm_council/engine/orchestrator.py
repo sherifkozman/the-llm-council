@@ -928,6 +928,7 @@ class Orchestrator:
                     excerpt_limit=int(profile.get("excerpt_limit") or 320),
                     max_sources=profile.get("max_sources"),
                     max_findings=profile.get("max_findings"),
+                    omit_schema=bool(profile.get("omit_schema")),
                 ),
             )
             if prompt_meta.get("over_budget"):
@@ -2115,7 +2116,14 @@ class Orchestrator:
     def _prompt_profile_candidates(self, phase: str) -> list[dict[str, int | None]]:
         """Return progressive compaction profiles for a phase."""
 
-        return [dict(profile) for profile in _PHASE_PROMPT_PROFILES.get(phase, [{}])]
+        profiles = [dict(profile) for profile in _PHASE_PROMPT_PROFILES.get(phase, [{}])]
+        if (
+            phase == "critique"
+            and self._schema
+            and self._config.runtime_profile != RuntimeProfile.BOUNDED
+        ):
+            return [profiles[0], *({**profile, "omit_schema": 1} for profile in profiles)]
+        return profiles
 
     def _select_prompt_profile(
         self,
@@ -2152,6 +2160,11 @@ class Orchestrator:
                 self._execution_plan.setdefault("warnings", []).append(
                     f"{provider_name} {phase} prompt was compacted to fit bounded review budget."
                 )
+                if phase == "critique" and selected_meta["profile"].get("omit_schema"):
+                    self._execution_plan["warnings"].append(
+                        "Full output schema omitted from critique to fit budget; "
+                        "schema handling deferred to synthesis."
+                    )
         elif selected_meta.get("over_budget") and self._execution_plan is not None:
             self._execution_plan.setdefault("warnings", []).append(
                 f"{provider_name} {phase} prompt remained above its effective budget after compaction."
@@ -3391,6 +3404,7 @@ class Orchestrator:
         excerpt_limit: int = 320,
         max_sources: int | None = None,
         max_findings: int | None = None,
+        omit_schema: bool = False,
     ) -> str:
         """Format critique prompt with all drafts."""
 
@@ -3408,7 +3422,11 @@ class Orchestrator:
         if not draft_blocks:
             draft_blocks = "No successful draft responses available."
         schema_hint = ""
-        if self._schema and self._config.runtime_profile != RuntimeProfile.BOUNDED:
+        if (
+            self._schema
+            and self._config.runtime_profile != RuntimeProfile.BOUNDED
+            and not omit_schema
+        ):
             schema_hint = "\nSchema (JSON):\n" + json.dumps(self._schema, indent=2)
         elif self._schema:
             schema_hint = (

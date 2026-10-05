@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -1606,6 +1607,138 @@ class TestOrchestratorRuntimeTruthfulness:
             in warning
             for warning in orch._execution_plan.get("warnings", [])
         )
+
+    @pytest.mark.parametrize("runtime", [RuntimeProfile.DEFAULT, RuntimeProfile.BOUNDED])
+    @pytest.mark.parametrize("has_schema", [False, True])
+    def test_critique_schema_compaction_candidate_order(self, runtime, has_schema):
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.return_value = CaptureProvider()
+            orch = Orchestrator(["codex"], OrchestratorConfig(runtime_profile=runtime))
+        orch._schema = {"type": "object"} if has_schema else None
+        original = [
+            {
+                "draft_limit": draft,
+                "excerpt_limit": excerpt,
+                "max_sources": sources,
+                "max_findings": findings,
+                "critique_limit": None,
+            }
+            for draft, excerpt, sources, findings in [
+                (1800, 320, 2, 5),
+                (1200, 220, 2, 4),
+                (800, 160, 1, 3),
+                (500, 120, 1, 2),
+                (300, 80, 0, 2),
+            ]
+        ]
+        expected = original
+        if runtime == RuntimeProfile.DEFAULT and has_schema:
+            expected = [original[0], *({**profile, "omit_schema": 1} for profile in original)]
+        assert orch._prompt_profile_candidates("critique") == expected
+        synthesis_profiles = orch._prompt_profile_candidates("synthesis")
+        orch._schema = None
+        assert orch._prompt_profile_candidates("synthesis") == synthesis_profiles
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "runtime,has_schema,file_chars,omitted,skipped",
+        [
+            (RuntimeProfile.DEFAULT, True, 10, False, False),
+            (RuntimeProfile.DEFAULT, True, 23600, True, False),
+            (RuntimeProfile.DEFAULT, True, 60000, True, True),
+            (RuntimeProfile.BOUNDED, True, 10, False, False),
+            (RuntimeProfile.DEFAULT, False, 23600, False, False),
+        ],
+    )
+    async def test_critique_schema_budget_preserves_context_and_status(
+        self, runtime, has_schema, file_chars, omitted, skipped
+    ):
+        context = "\n\n".join(
+            f"=== FILE: src/file-{index}.py ===\n"
+            + "x" * file_chars
+            + f"\nLATE_SOURCE_{index}\n=== END: src/file-{index}.py ==="
+            for index in (1, 2)
+        )
+        drafts = {
+            name: "analysis " * 180 + f"LATE_DRAFT_{name}"
+            for name in ("codex", "openrouter", "openai")
+        }
+        providers = {name: CaptureProvider() for name in drafts}
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.side_effect = lambda name, **_: providers[name]
+            orch = Orchestrator(
+                list(drafts),
+                OrchestratorConfig(
+                    mode="review",
+                    runtime_profile=runtime,
+                    timeout=300,
+                    system_context=context,
+                    enable_artifacts=False,
+                    enable_health_check=False,
+                    enable_graceful_degradation=False,
+                ),
+            )
+        orch._task = "Review all supplied files, including their final lines."
+        orch._subagent_name = "critic"
+        orch._prepare_run("critic")
+        if not has_schema:
+            orch._schema = None
+        schema = json.dumps(orch._schema, indent=2)
+        if runtime == RuntimeProfile.DEFAULT and has_schema and file_chars >= 23600:
+            smallest_full = orch._format_critique_prompt(orch._task, drafts, draft_limit=300)
+            assert (
+                orch._phase_budget_status("codex", "critique", "", smallest_full)["over_budget"]
+                is True
+            )
+
+        critique = await orch._run_critique(drafts)
+
+        plan = orch._execution_plan
+        assert plan is not None
+        assert orch._context_source() == context
+        assert json.dumps(orch._schema, indent=2) == schema
+        result = CouncilResult(
+            success=True, output={}, drafts=drafts, critique=critique, execution_plan=plan
+        )
+        assert result.execution_status == ("degraded" if skipped else "completed")
+        assert result.success is True
+        requests = [request for provider in providers.values() for request in provider.requests]
+        warning = (
+            "Full output schema omitted from critique to fit budget; "
+            "schema handling deferred to synthesis."
+        )
+        compactions = plan.get("phase_prompt_compaction", {}).get("critique", [])
+        if skipped:
+            assert critique == ""
+            assert requests == []
+            assert [entry["provider"] for entry in compactions] == list(drafts)
+            assert all(entry["over_budget"] is True for entry in compactions)
+            assert all(entry["profile"].get("omit_schema") == 1 for entry in compactions)
+            assert sum("critique was skipped" in item for item in plan["warnings"]) == 3
+        else:
+            assert critique == '{"ok": true}'
+            assert len(requests) == 1
+            prompt = requests[0].messages[1].content
+            assert context in prompt
+            for draft in drafts.values():
+                assert draft in prompt
+            assert ("Schema (JSON):\n" + schema in prompt) is (
+                has_schema and runtime == RuntimeProfile.DEFAULT and not omitted
+            )
+            assert ("synthesis will handle the schema." in prompt) is (
+                has_schema and (runtime == RuntimeProfile.BOUNDED or omitted)
+            )
+            if omitted:
+                assert len(compactions) == 1
+                assert compactions[0]["profile_index"] == 1
+                assert compactions[0]["profile"]["draft_limit"] == 1800
+                assert compactions[0]["profile"]["omit_schema"] == 1
+                assert compactions[0]["over_budget"] is False
+                assert compactions[0]["effective_envelope_tokens"] == 15839
+                assert warning in plan["warnings"]
+            else:
+                assert compactions == []
+                assert warning not in plan.get("warnings", [])
 
     @pytest.mark.asyncio
     async def test_run_synthesis_falls_back_to_reviewer_evidence_object_on_invalid_json(self):
