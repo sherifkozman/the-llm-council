@@ -565,7 +565,11 @@ class CodexCLIProvider(ProviderAdapter):
             )
         )
         try:
-            proc = await asyncio.wait_for(asyncio.shield(spawn), self._remaining(deadline))
+            # Python 3.10 wait_for() can swallow cancellation racing completion.
+            done, _ = await asyncio.wait({spawn}, timeout=self._remaining(deadline))
+            if not done:
+                raise asyncio.TimeoutError
+            proc = spawn.result()
             if isinstance(proc.stdout, asyncio.StreamReader) and isinstance(
                 proc.stderr, asyncio.StreamReader
             ):
@@ -586,12 +590,20 @@ class CodexCLIProvider(ProviderAdapter):
                 ]
                 joined = asyncio.gather(*readers)
                 readers.append(joined)
-                await asyncio.wait_for(joined, self._remaining(deadline))
+                joined_done, _ = await asyncio.wait({joined}, timeout=self._remaining(deadline))
+                if not joined_done:
+                    raise asyncio.TimeoutError
+                joined.result()
             else:
                 # Test doubles and alternate asyncio process implementations.
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), self._remaining(deadline)
+                communicate = asyncio.create_task(proc.communicate())
+                readers.append(communicate)
+                communicate_done, _ = await asyncio.wait(
+                    {communicate}, timeout=self._remaining(deadline)
                 )
+                if not communicate_done:
+                    raise asyncio.TimeoutError
+                stdout, stderr = communicate.result()
                 if events:
                     for line in stdout.decode("utf-8").splitlines(keepends=True):
                         _ingest_codex_stdout_line(line, state)

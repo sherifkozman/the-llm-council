@@ -33,6 +33,15 @@ Repeat for each selected provider. A deep probe proves reachability only, not a
 valid review, correct model, full phase coverage, or isolation. A sandbox denial,
 missing child credential or expired outer tool timeout is not model-health proof.
 
+Doctor JSON is not a run-result envelope. It contains a `providers` array;
+`probe_ok` is inside each provider object, not at the JSON root. For the
+one-provider command above, require exactly the selected provider's row and
+check `diagnostic["providers"][0]["probe_ok"] is True`. A missing row, missing
+field, skipped probe or false value is not a pass. Exit code 0 alone is not a
+passing deep probe. Inspect the actual saved JSON rather than inventing a
+top-level status field. Do not remove or overwrite earlier diagnostic/result
+files to make a retry look like the first attempt; choose a new output directory.
+
 Claude managed-policy environments are not certified for generation-only use.
 The adapter rejects known local/cached policy but does not detect every remote
 organization policy. Native `claude --safe-mode doctor` can report the current

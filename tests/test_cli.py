@@ -1481,10 +1481,12 @@ class TestCLIRun:
 
     def test_run_with_route_flag_requires_router_subagent(self):
         """--route is rejected for non-router subagents."""
-        result = runner.invoke(app, ["run", "planner", "Test task", "--route"])
+        with patch("llm_council.cli.main._load_config_defaults", return_value={}):
+            result = runner.invoke(app, ["--no-color", "run", "planner", "Test task", "--route"])
 
         assert result.exit_code == 1
-        assert "--route can only be used with the router subagent" in result.stdout
+        assert result.stdout == ""
+        assert result.stderr == "Error: --route can only be used with the router subagent\n"
 
     def test_run_forwards_reasoning_profile(self):
         """Run should pass through the reasoning-profile override."""

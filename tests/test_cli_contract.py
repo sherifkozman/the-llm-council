@@ -11,6 +11,7 @@ import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 
 from llm_council.cli.main import app
@@ -100,7 +101,7 @@ def test_parser_error_remains_stderr_exit_two():
     invoked = CliRunner().invoke(app, ["run", "planner", "task", "--json", "--unknown"])
     assert invoked.exit_code == 2
     assert invoked.stdout == ""
-    assert "--unknown" in invoked.stderr
+    assert "No such option: --unknown" in Text.from_ansi(invoked.stderr).plain
 
 
 def test_json_dry_run_never_loads_credentials_or_models():

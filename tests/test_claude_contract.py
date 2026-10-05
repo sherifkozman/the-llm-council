@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import json
 import os
 import signal
@@ -747,7 +748,7 @@ async def test_delayed_final_beyond_45_seconds_uses_remaining_deadline(
 ):
     clock = [0.0]
     timeouts = []
-    wait_for = asyncio.wait_for
+    wait = asyncio.wait
     spawn = fake_cli.spawn
 
     async def timed_spawn(*cmd, **kwargs):
@@ -761,13 +762,14 @@ async def test_delayed_final_beyond_45_seconds_uses_remaining_deadline(
         proc.communicate = delayed
         return proc
 
-    async def record_wait(awaitable, timeout):
-        timeouts.append(timeout)
-        return await wait_for(awaitable, timeout)
+    async def record_wait(awaitables, *, timeout):
+        if timeout > 1:
+            timeouts.append(timeout)
+        return await wait(awaitables, timeout=timeout)
 
     monkeypatch.setattr(asyncio, "get_running_loop", lambda: SimpleNamespace(time=lambda: clock[0]))
     monkeypatch.setattr(asyncio, "create_subprocess_exec", timed_spawn)
-    monkeypatch.setattr(asyncio, "wait_for", record_wait)
+    monkeypatch.setattr(asyncio, "wait", record_wait)
     result = await provider.generate(GenerateRequest(prompt="hi", timeout_seconds=60))
     assert result.text == "FINAL"
     assert clock[0] == 52
@@ -811,6 +813,103 @@ def assert_groups_gone(processes):
         assert proc.returncode is not None
         with pytest.raises(ProcessLookupError):
             os.killpg(proc.pid, 0)
+
+
+@pytest.mark.parametrize("phase", ["spawn", "generation", "generation_error"])
+async def test_real_completion_race_preserves_original_cancellation(
+    provider, monkeypatch, tmp_path, phase
+):
+    loop = asyncio.get_running_loop()
+    baseline = asyncio.all_tasks()
+    real_spawn = asyncio.create_subprocess_exec
+    processes = []
+    writes = []
+    cancellations = []
+    propagated_cancellations = []
+    loop_errors = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+
+    def cancel_on_completion(completed):
+        assert completed.done()
+        cancellations.append(operation.cancel("ORIGINAL_CANCEL"))
+
+    async def observed_spawn(*cmd, **kwargs):
+        proc = await real_spawn(*cmd, **kwargs)
+        processes.append(proc)
+        write = proc.stdin.write
+
+        def observed_write(data):
+            write(data)
+            writes.append(len(data))
+
+        monkeypatch.setattr(proc.stdin, "write", observed_write)
+        if phase == "spawn":
+            # The real wait has registered its completion callback first.
+            asyncio.current_task().add_done_callback(cancel_on_completion)
+        else:
+            communicate = proc.communicate
+
+            async def observed_communicate(input=None):
+                asyncio.current_task().add_done_callback(cancel_on_completion)
+                result = await communicate(input=input)
+                if phase == "generation_error":
+                    raise RuntimeError("SYNTHETIC_READER_FAILURE")
+                return result
+
+            monkeypatch.setattr(proc, "communicate", observed_communicate)
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observed_spawn)
+    script = (
+        "import time; time.sleep(30)"
+        if phase == "spawn"
+        else "import sys; print(len(sys.stdin.buffer.read()))"
+    )
+
+    async def invoke():
+        try:
+            return await provider._run_cli(
+                [sys.executable, "-I", "-c", script],
+                env={"PATH": "/usr/bin:/bin"},
+                cwd=str(tmp_path),
+                deadline=loop.time() + 10,
+                input_bytes=b"SYNTHETIC_TASK",
+            )
+        except asyncio.CancelledError as exc:
+            # Python 3.10 can drop the message at the completed Task boundary.
+            propagated_cancellations.append(exc.args)
+            raise
+
+    operation = asyncio.create_task(invoke())
+    try:
+        done, _ = await asyncio.wait({operation}, timeout=2)
+        assert operation in done, "Original cancellation lost; watchdog still required"
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await operation
+        assert propagated_cancellations == [("ORIGINAL_CANCEL",)]
+        assert cancellations == [True]
+        assert_groups_gone(processes)
+        if phase == "spawn":
+            assert writes == []
+        else:
+            assert writes == [len(b"SYNTHETIC_TASK")]
+        del caught
+        done.clear()
+    finally:
+        if not operation.done():
+            operation.cancel("TEST_BACKSTOP")
+            await asyncio.wait({operation}, timeout=3)
+        for proc in processes:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            await asyncio.wait_for(proc.wait(), 1)
+        operation = None
+        gc.collect()
+        await asyncio.sleep(0)
+        loop.set_exception_handler(previous_handler)
+    assert not asyncio.all_tasks() - baseline
+    assert not loop_errors, "An owned communication aggregate exception was not consumed"
 
 
 async def test_real_delayed_stdin_feeder_writes_zero_task_bytes(provider, monkeypatch, tmp_path):

@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instruction channel instead of dropping them.
 - Provider attempt deadlines include queue wait and subprocess discovery.
   Cancellation no longer leaves an abandoned waiter that can later take a slot.
+- Codex and Claude request waits preserve cancellation when subprocess startup
+  or generation completes concurrently, including on Python 3.10. Cleanup keeps
+  its separate finite allowance and cannot turn cancellation into a successful
+  provider response.
 - Native model-capacity and overload responses use the existing transient retry
   policy instead of being misclassified as permanently unavailable models.
   Retry limits and permanent auth, billing and unsupported-model handling remain

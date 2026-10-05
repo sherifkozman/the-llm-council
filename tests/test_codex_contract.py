@@ -566,11 +566,31 @@ async def test_exhausted_preparation_budget_does_not_spawn(isolated_env, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_cleanup_failure_does_not_replace_cancellation(isolated_env, monkeypatch, caplog):
+@pytest.mark.parametrize("cancel_at_spawn", [False, True], ids=["reader-ready", "spawn-complete"])
+async def test_cleanup_failure_does_not_replace_cancellation(
+    isolated_env, monkeypatch, caplog, cancel_at_spawn
+):
     from llm_council.providers.cli import codex
 
     calls = stub_cli(monkeypatch, code="import time; time.sleep(30)")
     original = codex.terminate_process_tree
+    original_spawn = asyncio.create_subprocess_exec
+    original_reader = codex._read_codex_stdout
+    reader_ready = asyncio.Event()
+
+    async def spawn(*args, **kwargs):
+        proc = await original_spawn(*args, **kwargs)
+        if cancel_at_spawn and "exec" in args:
+            # Queue cancellation before the completed spawn wakes its owner.
+            asyncio.get_running_loop().call_soon(task.cancel, "native-cancel")
+        return proc
+
+    async def read_stdout(stream, state):
+        reader_ready.set()
+        await original_reader(stream, state)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(codex, "_read_codex_stdout", read_stdout)
 
     async def failed_cleanup(proc, grace_seconds):
         was_running = proc.returncode is None
@@ -589,15 +609,133 @@ async def test_cleanup_failure_does_not_replace_cancellation(isolated_env, monke
             raise
 
     task = asyncio.create_task(invoke())
-    while not any("exec" in c["args"] and "proc" in c for c in calls):
-        await asyncio.sleep(0.01)
-    task.cancel("native-cancel")
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, 2)
-    # Python 3.10 Task.result() loses cancellation metadata after async cleanup.
-    assert str(observed[0]) == "native-cancel"
-    assert isinstance(observed[0].__cause__, RuntimeError)
-    assert "cleanup incomplete" in caplog.text
+    try:
+        if not cancel_at_spawn:
+            await asyncio.wait_for(reader_ready.wait(), 5)
+            task.cancel("native-cancel")
+        done, _ = await asyncio.wait({task}, timeout=5)
+        assert task in done, (
+            "Cancellation did not settle within the cleanup allowance plus headroom"
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # Python 3.10 Task.result() loses cancellation metadata after async cleanup.
+        assert len(observed) == 1
+        assert str(observed[0]) == "native-cancel"
+        assert isinstance(observed[0].__cause__, RuntimeError)
+        assert str(observed[0].__cause__) == "synthetic cleanup failure"
+        assert "cleanup incomplete" in caplog.text
+        assert all(call["proc"].returncode is not None for call in calls)
+    finally:
+        if not task.done():
+            task.cancel("test teardown")
+            await asyncio.wait({task}, timeout=5)
+        for call in calls:
+            if "proc" in call and call["proc"].returncode is None:
+                await original(call["proc"], 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_path", ["joined", "communicate"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_completed_request_wait_preserves_cancellation(
+    isolated_env, monkeypatch, caplog, wait_path, cleanup_fails
+):
+    from llm_council.providers.cli import codex
+
+    original_spawn = asyncio.create_subprocess_exec
+    original_gather = asyncio.gather
+    original_cleanup = codex.terminate_process_tree
+    processes = []
+    request_waits = []
+    observed = []
+    cancel_results = []
+
+    def cancel_owner():
+        cancel_results.append(task.cancel("request-complete-cancel"))
+
+    class CommunicateProxy:
+        stdout = None
+        stderr = None
+
+        def __init__(self, proc):
+            self.proc = proc
+
+        @property
+        def pid(self):
+            return self.proc.pid
+
+        @property
+        def returncode(self):
+            return self.proc.returncode
+
+        async def communicate(self):
+            request_waits.append(asyncio.current_task())
+            result = await self.proc.communicate()
+            asyncio.get_running_loop().call_soon(cancel_owner)
+            return result
+
+    async def spawn(*args, **kwargs):
+        proc = await original_spawn(*args, **kwargs)
+        processes.append(proc)
+        return CommunicateProxy(proc) if wait_path == "communicate" else proc
+
+    def gather(*args, **kwargs):
+        joined = original_gather(*args, **kwargs)
+        if wait_path == "joined":
+            request_waits.append(joined)
+            # Run before the completed join wakes the request's waiter.
+            joined.add_done_callback(lambda _: cancel_owner())
+        return joined
+
+    async def cleanup(proc, grace_seconds):
+        await original_cleanup(proc, grace_seconds)
+        if cleanup_fails:
+            raise RuntimeError("synthetic cleanup failure")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(asyncio, "gather", gather)
+    monkeypatch.setattr(codex, "terminate_process_tree", cleanup)
+
+    async def invoke():
+        try:
+            return await CodexCLIProvider(cli_path="synthetic")._run_cli(
+                [sys.executable, "-c", f"print({FINAL + DONE!r}, end='', flush=True)"],
+                env={"PATH": os.environ["PATH"]},
+                cwd=str(isolated_env),
+                deadline=asyncio.get_running_loop().time() + 10,
+                events=True,
+            )
+        except asyncio.CancelledError as exc:
+            observed.append(exc)
+            raise
+
+    task = asyncio.create_task(invoke())
+    try:
+        done, _ = await asyncio.wait({task}, timeout=5)
+        assert task in done, "Request cancellation did not settle within the bounded observation"
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cancel_results == [True]
+        assert len(observed) == 1
+        assert str(observed[0]) == "request-complete-cancel"
+        if cleanup_fails:
+            assert isinstance(observed[0].__cause__, RuntimeError)
+            assert str(observed[0].__cause__) == "synthetic cleanup failure"
+            assert "cleanup incomplete" in caplog.text
+        else:
+            assert observed[0].__cause__ is None
+        assert len(processes) == 1
+        assert processes[0].returncode is not None
+        assert len(request_waits) == 1
+        assert request_waits[0].done()
+    finally:
+        if not task.done():
+            task.cancel("test teardown")
+            await asyncio.wait({task}, timeout=5)
+        for proc in processes:
+            if proc.returncode is None:
+                await original_cleanup(proc, 1)
 
 
 @pytest.mark.asyncio

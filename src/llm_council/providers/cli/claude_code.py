@@ -340,6 +340,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         proc = None
         reader = None
         feeder = None
+        completion = None
         cancellation: asyncio.CancelledError | None = None
         spawn = asyncio.create_task(
             asyncio.create_subprocess_exec(
@@ -353,7 +354,10 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             )
         )
         try:
-            proc = await asyncio.wait_for(asyncio.shield(spawn), self._remaining(deadline))
+            spawn_done, _ = await asyncio.wait({spawn}, timeout=self._remaining(deadline))
+            if spawn not in spawn_done:
+                raise asyncio.TimeoutError
+            proc = spawn.result()
             remaining = self._remaining(deadline)
             owned_proc = proc
 
@@ -378,9 +382,11 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
 
             reader = asyncio.create_task(communicate_before_deadline())
             feeder = asyncio.create_task(feed_stdin_before_deadline())
-            (stdout, stderr), _ = await asyncio.wait_for(
-                asyncio.shield(asyncio.gather(reader, feeder)), remaining
-            )
+            completion = asyncio.gather(reader, feeder)
+            completion_done, _ = await asyncio.wait({completion}, timeout=remaining)
+            if completion not in completion_done:
+                raise asyncio.TimeoutError
+            (stdout, stderr), _ = completion.result()
             return proc.returncode, stdout, stderr
         except asyncio.TimeoutError as exc:
             raise RuntimeError("Claude Code timed out within the request deadline") from exc
@@ -412,11 +418,15 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                 except (asyncio.TimeoutError, TimeoutError) as exc:
                     raise RuntimeError("Claude cleanup incomplete: process did not settle") from exc
                 finally:
-                    communication_tasks = {task for task in (reader, feeder) if task is not None}
+                    communication_tasks: set[asyncio.Future[Any]] = {
+                        task for task in (reader, feeder) if task is not None
+                    }
                     if communication_tasks:
                         for task in communication_tasks:
                             if not task.done():
                                 task.cancel()
+                        if completion is not None:
+                            communication_tasks.add(completion)
                         done, pending_readers = await asyncio.wait(
                             communication_tasks, timeout=_CLEANUP_SECONDS
                         )
