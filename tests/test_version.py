@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
 from pathlib import Path
 
+from packaging.requirements import Requirement
+
 from llm_council import _detect_version, _read_local_project_version
+
+
+def test_python_310_native_auth_parser_is_a_runtime_dependency():
+    parser = importlib.import_module("tomllib" if sys.version_info >= (3, 11) else "tomli")
+    project = parser.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+    dependencies = [Requirement(item) for item in project["project"]["dependencies"]]
+    backport = next((item for item in dependencies if item.name == "tomli"), None)
+    assert backport is not None, "Python 3.10 users must not depend on developer-only TOML packages"
+    assert backport.marker is not None
+    assert backport.marker.evaluate({"python_version": "3.10"})
+    assert not backport.marker.evaluate({"python_version": "3.11"})
+    assert not backport.marker.evaluate({"python_version": "3.14"})
 
 
 class TestVersionDetection:

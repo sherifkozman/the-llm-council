@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Multi-LLM Council Framework (v0.8.0) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Published as `the-llm-council` on PyPI.
+Multi-LLM Council Framework (v0.8.1) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Published as `the-llm-council` on PyPI.
 
 - **Python**: >=3.10 (tested 3.10, 3.11, 3.12)
 - **Build**: hatchling
@@ -22,6 +22,14 @@ council version                       # Show version
 ```
 
 ## Architecture
+
+Agent and CI callers must follow the
+[portable invocation contract](skills/council/references/invocation-contract.md).
+Use an explicit installed executable and CWD, wait for the existing process,
+then read its full result file even on nonzero exit. Inspect `execution_status`,
+provider errors, degradation and actual request-compilation metadata. Native
+CLI compatibility and effort support are versioned; see the release notes.
+No caller should source host secrets to bypass its credential policy.
 
 ```
 Council (facade) → Orchestrator → Provider Adapters
@@ -287,7 +295,9 @@ pip install -e ".[dev]"
 pytest
 
 # Linting
-ruff check src/
+ruff check src tests
+ruff format --check src tests
+vulture src tests
 mypy src/llm_council
 
 # Install all providers
@@ -296,9 +306,10 @@ pip install -e ".[all]"
 
 ## Known Issues
 
-No open issues are currently tracked. Check `gh issue list` (or the GitHub repo)
-for the latest. `mypy src/` is clean (strict mode) as of v0.7.18 — CI enforces
-it on every push alongside ruff lint/format and the test suite.
+Check `gh issue list` (or the GitHub repo) for current issues. CI enforces strict
+mypy, Ruff lint/format and tests on Python 3.10, 3.11 and 3.12. Release verification
+must state the tested native CLI versions and actual caller/provider coverage;
+unit tests and doctor reachability alone do not establish that coverage.
 
 ### Resolved (historical, v0.6.x)
 - ~~Config wiring: `providers[].default_model` not passed to provider constructors~~ — Fixed in v0.6.0

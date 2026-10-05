@@ -513,7 +513,7 @@ class TestOrchestratorValidation:
         assert "Provider call aborted" in text
         assert "upstream request timed out" in text
 
-    def test_build_reasoning_config_respects_off_profile(self):
+    def test_build_reasoning_config_respects_off_profile(self) -> None:
         """Reasoning can be disabled at runtime even when the subagent budget enables it."""
         config = OrchestratorConfig(reasoning_profile=ReasoningProfile.OFF)
         with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
@@ -523,7 +523,12 @@ class TestOrchestratorValidation:
 
         budget = MagicMock(enabled=True, effort="high", budget_tokens=16384, thinking_level="high")
 
-        assert orch._build_reasoning_config(budget) is None
+        reasoning = orch._build_reasoning_config(budget)
+        assert reasoning is not None
+        assert reasoning.enabled is False
+        assert reasoning.effort is None
+        assert reasoning.budget_tokens is None
+        assert reasoning.thinking_level is None
 
     def test_build_reasoning_config_light_profile_downshifts_budget(self):
         """Light reasoning should cap and downshift the resolved provider-agnostic config."""
@@ -1929,7 +1934,7 @@ class TestOrchestratorRuntimeTruthfulness:
 
         assert provider.last_request is not None
         assert provider.last_request.max_tokens == 321
-        assert provider.last_request.timeout_seconds == 119.0
+        assert 0 < provider.last_request.timeout_seconds <= 119.0
         assert provider.last_request.reasoning is not None
         assert provider.last_request.reasoning.effort == "high"
         assert provider.last_request.reasoning.budget_tokens == 32768

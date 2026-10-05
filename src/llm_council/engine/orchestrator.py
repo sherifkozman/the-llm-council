@@ -33,11 +33,12 @@ from collections.abc import (
 from contextlib import contextmanager
 from typing import (
     Any,
+    Literal,
     TypeVar,
 )
 
 from jsonschema import Draft7Validator
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from llm_council.config.models import get_council_models, is_multi_model_enabled
 from llm_council.engine.capabilities import CapabilityPlan, select_capability_plan
@@ -445,6 +446,7 @@ class CouncilResult(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     success: bool = Field(...)
+    execution_status: Literal["completed", "degraded", "failed", "cancelled"] = "completed"
     error: str | None = Field(default=None, description="Top-level error message, if any.")
     output: dict[str, Any] | None = Field(default=None)
     drafts: dict[str, str] | None = Field(default=None)
@@ -481,6 +483,52 @@ class CouncilResult(BaseModel):
         default=None,
         description="Execution plan from the router run before follow-up execution.",
     )
+
+    @model_validator(mode="after")
+    def classify_execution(self) -> CouncilResult:
+        """Classify final coverage, not transient errors or the review verdict."""
+        if self.execution_status == "cancelled":
+            self.success = False
+            return self
+        if not self.success:
+            self.execution_status = "failed"
+            return self
+        plan = self.execution_plan or {}
+        phases = plan.get("required_phases", ["draft", "critique", "synthesis"])
+        selected = plan.get("selected_providers", plan.get("providers", []))
+        missing_drafts = "draft" in phases and any(
+            not (self.drafts or {}).get(name, "").strip() for name in selected
+        )
+        missing_critique = bool(plan) and "critique" in phases and not (self.critique or "").strip()
+        truncated = any(
+            item.get("truncated") or item.get("status") in {"missing", "skipped_total_limit"}
+            for item in plan.get("context_preparation", {}).get("files", [])
+        )
+        pending_capabilities = plan.get("pending_capabilities") or []
+        # Plans without request provenance retain conservative legacy status.
+        if "requested_capabilities" in plan:
+            pending_capabilities = set(pending_capabilities).intersection(
+                plan["requested_capabilities"]
+            )
+        degraded = (
+            missing_drafts
+            or missing_critique
+            or truncated
+            or plan.get("degraded_output")
+            or plan.get("provider_auto_fallback")
+            or pending_capabilities
+            or plan.get("cleanup_incomplete")
+        )
+        self.execution_status = "degraded" if degraded else "completed"
+        return self
+
+
+class _CouncilRunCancelled(asyncio.CancelledError):
+    """Carry the settled result until the CLI reaches an asyncio Task boundary."""
+
+    def __init__(self, result: CouncilResult, *args: object) -> None:
+        super().__init__(*args)
+        self.result = result
 
 
 class ValidationResult(BaseModel):
@@ -546,6 +594,42 @@ class Orchestrator:
             )
 
     async def run(self, task: str, subagent: str) -> CouncilResult:
+        """Finalize every exit, while preserving cancellation for library callers."""
+        started = time.monotonic()
+        try:
+            result = await self._run(task, subagent)
+        except asyncio.CancelledError as exc:
+            result = self._interrupted_result("Council run cancelled.", started, cancelled=True)
+            self._finish_run(result)
+            raise _CouncilRunCancelled(result, *exc.args) from exc
+        except Exception as exc:
+            result = self._interrupted_result(str(exc), started)
+        self._finish_run(result)
+        return result
+
+    def _interrupted_result(
+        self, error: str, started: float, *, cancelled: bool = False
+    ) -> CouncilResult:
+        return CouncilResult(
+            success=False,
+            error=error,
+            execution_status="cancelled" if cancelled else "failed",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            run_id=self._run_id,
+            execution_plan=self._execution_plan,
+            provider_errors=dict(self._provider_init_errors) or None,
+            cost_estimate=self._build_cost_estimate(),
+        )
+
+    def _finish_run(self, result: CouncilResult) -> None:
+        result.run_id = self._run_id
+        if self._artifact_store and self._run_id:
+            try:
+                self._artifact_store.complete_run(self._run_id, status=result.execution_status)
+            except Exception as exc:
+                logger.warning("Failed to finalize run ledger: %s", exc)
+
+    async def _run(self, task: str, subagent: str) -> CouncilResult:
         """Run a full council workflow for the given task and subagent."""
 
         self._cost_calls = {}
@@ -733,14 +817,6 @@ class Orchestrator:
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
         cost_estimate = self._build_cost_estimate()
-
-        # Complete the run in artifact store if enabled
-        if self._artifact_store and self._run_id:
-            try:
-                status = "completed" if synthesis_result.ok else "failed"
-                self._artifact_store.complete_run(self._run_id, status=status)
-            except Exception as exc:
-                logger.debug("Failed to complete run in artifact store: %s", exc)
 
         # Get degradation report if policy is enabled
         degradation_report_dict = None
@@ -1215,31 +1291,97 @@ class Orchestrator:
         prompt_cache_forwarded = bool(request.prompt_cache and request.prompt_cache.enabled)
 
         while True:
+            cleanup_incomplete = False
+            cancelled_cleanup_error: BaseException | None = None
             try:
-                slot_timeout = request.timeout_seconds or float(self._config.timeout)
-                async with provider_call_slot(
-                    provider_name,
-                    timeout_seconds=max(float(slot_timeout), 1.0),
-                ) as queue_wait_ms:
-                    self._record_provider_queue_wait(
-                        phase=phase,
-                        provider_name=provider_name,
-                        wait_ms=queue_wait_ms,
-                    )
-                    # Use the provider-specific timeout (bounded caps included),
-                    # minus time already spent waiting for the call-slot lock.
-                    effective_timeout = request.timeout_seconds or float(self._config.timeout)
-                    effective_timeout = max(effective_timeout - (queue_wait_ms / 1000.0), 1.0)
-                    result = await asyncio.wait_for(
-                        adapter.generate(request), timeout=effective_timeout
-                    )
-                    if isinstance(result, GenerateResponse):
-                        response = result
-                    else:
-                        response = await asyncio.wait_for(
-                            _consume_stream(result), timeout=effective_timeout
-                        )
+                budget = request.timeout_seconds
+                if budget is None:
+                    budget = float(self._config.timeout)
+                deadline = time.monotonic() + budget
 
+                async def attempt(budget: float, deadline: float) -> GenerateResponse:
+                    nonlocal cancelled_cleanup_error
+                    try:
+                        async with provider_call_slot(
+                            provider_name,
+                            timeout_seconds=budget,
+                        ) as queue_wait_ms:
+                            self._record_provider_queue_wait(
+                                phase=phase,
+                                provider_name=provider_name,
+                                wait_ms=queue_wait_ms,
+                            )
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise TimeoutError("Provider attempt deadline expired in queue")
+                            attempt_request = request.model_copy(
+                                update={"timeout_seconds": remaining}
+                            )
+                            result = await adapter.generate(attempt_request)
+                            if isinstance(result, GenerateResponse):
+                                return result
+                            return await _consume_stream(result)
+                    except asyncio.CancelledError as exc:
+                        # Native adapters chain cleanup failure to cancellation.
+                        # Retain it before Task propagation can discard the cause.
+                        cancelled_cleanup_error = exc.__cause__
+                        raise
+
+                pending = asyncio.create_task(attempt(budget, deadline))
+                try:
+                    done, _ = await asyncio.wait(
+                        {pending}, timeout=max(deadline - time.monotonic(), 0)
+                    )
+                    if not done:
+                        raise TimeoutError("Provider attempt deadline expired")
+                    if pending.cancelled():
+                        # Adapter-originated cancellation needs settlement too;
+                        # only the outcome, not its cause, comes from this Task.
+                        pending.result()
+                except BaseException as attempt_error:
+                    cancelled = (
+                        attempt_error if isinstance(attempt_error, asyncio.CancelledError) else None
+                    )
+                    remaining_cleanup = 5.0
+                    cleanup_deadline = time.monotonic() + remaining_cleanup
+                    if not pending.done():
+                        pending.cancel()
+                    # Repeated library cancellation cannot release ownership or
+                    # grant the adapter a fresh cleanup allowance.
+                    while not pending.done() and remaining_cleanup > 0:
+                        try:
+                            await asyncio.wait({pending}, timeout=remaining_cleanup)
+                            break
+                        except asyncio.CancelledError as exc:
+                            if cancelled is None:
+                                cancelled = exc
+                            remaining_cleanup = max(cleanup_deadline - time.monotonic(), 0)
+
+                    cleanup_error = cancelled_cleanup_error
+                    if not pending.done():
+                        cleanup_error = TimeoutError("Provider cleanup deadline expired")
+                    elif cleanup_error is None and not pending.cancelled():
+                        # Inspect without re-raising here: doing so can attach the
+                        # attempt error as context and create a cyclic cause chain.
+                        cleanup_error = pending.exception()
+
+                    if cleanup_error is not None:
+                        cleanup_incomplete = True
+                        if self._execution_plan is not None:
+                            self._execution_plan["cleanup_incomplete"] = True
+                        self._provider_init_errors[provider_name] = (
+                            f"{self._format_exception_chain(attempt_error)}; "
+                            f"provider cleanup incomplete: {self._format_exception_chain(cleanup_error)}"
+                        )
+                        logger.warning("Provider cleanup incomplete: %s", provider_name)
+                        if cancelled is not None:
+                            raise cancelled from cleanup_error
+                        raise attempt_error from cleanup_error
+                    if cancelled is not None:
+                        raise cancelled
+                    raise
+
+                response = pending.result()
                 self._record_usage(provider_name, response.usage)
                 self._record_prompt_cache_observation(
                     phase=phase,
@@ -1252,6 +1394,11 @@ class Orchestrator:
 
             except Exception as exc:
                 error_detail = self._format_exception_chain(exc)
+                if cleanup_incomplete:
+                    self._provider_init_errors[provider_name] = (
+                        f"{error_detail}; provider cleanup incomplete"
+                    )
+                    raise
                 error_type = classify_error(error_detail)
                 if self._execution_plan is not None and error_type in {
                     ErrorType.TIMEOUT,
@@ -1345,6 +1492,8 @@ class Orchestrator:
             "model_pack": self._resolved_model_pack,
             "model_pack_source": self._model_pack_source,
             "providers": list(self._provider_names),
+            "selected_providers": list(self._provider_names),
+            "required_phases": ["draft", "critique", "synthesis"],
             "system_prompt_configured": bool(self._system_prompt.strip()),
             "temperature_override": self._config.temperature,
             "max_tokens_override": self._config.max_tokens,
@@ -1385,6 +1534,7 @@ class Orchestrator:
             "required_capabilities": (
                 list(self._capability_plan.required_capabilities) if self._capability_plan else []
             ),
+            "requested_capabilities": list(self._config.required_capabilities),
             "registered_tools": list(self._capability_plan.tool_names)
             if self._capability_plan
             else [],
@@ -1406,7 +1556,7 @@ class Orchestrator:
 
         profile = self._config.reasoning_profile
         if profile == ReasoningProfile.OFF:
-            return None
+            return ReasoningConfig(enabled=False)
 
         if budget is None or not budget.enabled:
             return None

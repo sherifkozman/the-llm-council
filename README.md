@@ -61,6 +61,11 @@ A multi-model orchestration package that runs adversarial council workflows acro
 
 This is not a Claude-only framework. Claude Code is one supported client and one supported provider path among several.
 
+For tool-driven calls from Codex, Claude Code, Hermes or CI, use the
+[portable invocation contract](skills/council/references/invocation-contract.md).
+It covers installed-binary identity, timeouts, process completion, credential
+boundaries, complete result files and the 0.8.1 execution-status contract.
+
 This release also includes a mode-aware execution path with runtime profiles,
 routed handoff, capability planning, and deterministic eval tooling. Those
 capabilities materially extend the package runtime and make the public surface

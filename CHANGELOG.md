@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- CLI provider adapters distinguish terminal completion from intermediate text
+  and structured errors. Codex preserves system instructions in its native
+  instruction channel instead of dropping them.
+- Provider attempt deadlines include queue wait and subprocess discovery.
+  Cancellation no longer leaves an abandoned waiter that can later take a slot.
+- Native model-capacity and overload responses use the existing transient retry
+  policy instead of being misclassified as permanently unavailable models.
+  Retry limits and permanent auth, billing and unsupported-model handling remain
+  unchanged.
+- Native response metadata such as `fallback_credit` no longer turns an
+  authentication or rate-limit failure into a false billing error.
+- Whole-file reviews no longer imply degraded execution solely because the
+  default local Git-diff collector has no diff. Missing explicitly requested
+  caller/router capabilities still make execution degraded; pending evidence
+  remains inspectable and completion does not certify evidence sufficiency.
+- Explicit missing or entirely skipped reference files fail before provider
+  calls. Partial truncation remains visible and marks the result degraded.
+
+### Added
+- An additive `execution_status` result field: `completed`, `degraded`, `failed`,
+  or `cancelled`. A review verdict such as `request_changes` is not an execution
+  failure. Callers must inspect status and diagnostics, not only exit code.
+- A portable invocation contract for Codex, Claude Code, Hermes and generic
+  subprocess callers, including executable identity and full result capture.
+
+### Changed
+- Failed runs now exit 1; parser errors remain 2 and handled SIGINT/SIGTERM use
+  130/143. Valid degraded results retain exit 0 with `success: true`.
+- JSON runs separate diagnostics from stdout. Result files are written atomically;
+  explicit Markdown file output remains supported. JSON dry runs are labelled
+  `kind: plan` and `execution_status: not_executed`.
+- Native CLI request controls require a verified CLI contract. Reasoning mappings
+  record supported effort or explicitly uncontrolled behavior; omission does not
+  establish that native reasoning is off.
+- Claude and Codex CLI compilation explicitly records that `max_tokens` is not
+  an enforced whole-generation output limit. Request deadlines remain separate
+  from token limits; API provider mappings are unchanged.
+
 ## [0.8.0] - 2026-07-22
 
 ### Fixed

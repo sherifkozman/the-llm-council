@@ -41,10 +41,11 @@ NON_RETRYABLE_ERRORS = frozenset(
 _BILLING_PATTERNS = (
     "insufficient_quota",
     "billing",
-    "credit",
     "payment",
     "exceeded your current quota",
     "insufficient credits",
+    "requires more credits",
+    "credit balance is too low",
     "account has been suspended",
     "payment required",
     "plan does not include",
@@ -65,6 +66,7 @@ _AUTH_PATTERNS = (
     "unauthorized",
     "authentication",
     "api key not found",
+    "not logged in",
     "401",
 )
 
@@ -72,8 +74,6 @@ _MODEL_UNAVAILABLE_PATTERNS = (
     "model not found",
     "model_not_found",
     "does not exist",
-    "model is currently overloaded",
-    "capacity",
     "model is not supported when using codex with a chatgpt account",
     "not supported when using codex with a chatgpt account",
     "unsupported model",
@@ -112,6 +112,7 @@ _SERVER_ERROR_PATTERNS = (
     "internal server error",
     "bad gateway",
     "service unavailable",
+    "selected model is at capacity",
     "server error",
     "overloaded_error",
     "overloaded",

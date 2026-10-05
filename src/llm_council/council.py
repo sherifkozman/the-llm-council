@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from llm_council.engine.orchestrator import CouncilResult, Orchestrator, OrchestratorConfig
+from llm_council.engine.orchestrator import (
+    CouncilResult,
+    Orchestrator,
+    OrchestratorConfig,
+    _CouncilRunCancelled,
+)
 from llm_council.protocol.types import CouncilConfig
 
 
@@ -152,10 +157,17 @@ class Council:
             }
         )
         routed_orchestrator = self._build_orchestrator(routed_config)
-        routed_result = await routed_orchestrator.run(task=task, subagent=routed_subagent)
+        cancellation: _CouncilRunCancelled | None = None
+        try:
+            routed_result = await routed_orchestrator.run(task=task, subagent=routed_subagent)
+        except _CouncilRunCancelled as exc:
+            routed_result = exc.result
+            cancellation = exc
 
         if routed_result.execution_plan is None:
             routed_result.execution_plan = {}
+        child_status = routed_result.execution_status
+        routed_result.execution_plan["routed_execution_status"] = child_status
         routed_result.execution_plan["routed_via_router"] = True
         routed_result.execution_plan["routing_subagent"] = routed_subagent
         routed_result.execution_plan["routing_mode"] = routed_mode_value
@@ -168,7 +180,27 @@ class Council:
 
         routed_result.routed = True
         routed_result.routing_decision = dict(router_result.output)
-        routed_result.routing_execution_plan = dict(router_result.execution_plan or {})
+        routed_result.routing_execution_plan = {
+            **dict(router_result.execution_plan or {}),
+            "execution_status": router_result.execution_status,
+            "run_id": router_result.run_id,
+            "provider_errors": router_result.provider_errors,
+            "degradation_report": router_result.degradation_report,
+        }
+        if router_result.execution_status == "degraded" and routed_result.success:
+            if not routed_result.execution_plan.get("degraded_output"):
+                routed_result.execution_plan["degraded_output"] = {"source": "routing"}
+            routed_result.execution_plan.setdefault("degradation_notes", []).append(
+                "Routing was degraded; inspect routing_execution_plan before accepting the result."
+            )
+            routed_result = CouncilResult.model_validate(routed_result.model_dump())
+            if routed_result.execution_status != child_status:
+                # The returned child ID is also the final workflow handle. Keep
+                # the child's own status above while finalizing aggregate coverage.
+                routed_orchestrator._finish_run(routed_result)
+        if cancellation is not None:
+            cancellation.result = routed_result
+            raise cancellation
         return routed_result
 
     async def doctor(self) -> dict[str, Any]:

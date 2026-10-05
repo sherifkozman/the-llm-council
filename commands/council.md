@@ -3,7 +3,7 @@ name: council
 description: Run a multi-LLM council task with adversarial debate
 arguments:
   - name: subagent
-    description: "Subagent type: implementer, reviewer, architect, researcher, planner, assessor, red-team, test-designer, shipper, router"
+    description: "Subagent type: drafter, critic, planner, researcher, router, synthesizer"
     required: true
   - name: task
     description: Task description in quotes
@@ -12,22 +12,24 @@ arguments:
 
 Run the LLM Council with the specified subagent and task.
 
-> **Requires:** `pip install the-llm-council` and at least one API key configured.
+> **Requires:** Council 0.8.1 or later and usable credentials for each selected provider.
 
 ## Subagents
-- `implementer` - Feature code, bug fixes
-- `reviewer` - Code review, security audit
-- `architect` - System design, APIs
+- `drafter --mode impl|arch|test` - Implementation, architecture, tests
+- `critic --mode review|security` - Review and security analysis
+- `planner --mode plan|assess` - Plans and assessments
 - `researcher` - Technical research
-- `planner` - Roadmaps, execution plans
-- `assessor` - Build vs buy decisions
-- `red-team` - Security threat analysis
-- `test-designer` - Test suite design
-- `shipper` - Release notes
+- `synthesizer` - Merge findings
 - `router` - Task classification
 
 ## Execution
 
-```bash
-council run $subagent "$task" --json
-```
+Read [the portable invocation contract](../skills/council/references/invocation-contract.md)
+from the installed plugin before calling Council. Resolve the intended executable,
+verify its version, preserve the user's providers/models, and pass the task through
+a UTF-8 input file or stdin. Use an explicit CWD and a unique JSON output file.
+Wait on the original process handle, then inspect the complete result and
+execution_status even on nonzero exit. A request_changes verdict is not an
+execution failure; degraded coverage is not a full review. Never automatically
+retry a live or valid degraded run, invoke a personal wrapper, or bypass a
+client's credential/approval policy.

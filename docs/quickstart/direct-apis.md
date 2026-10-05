@@ -2,6 +2,12 @@
 
 This guide shows how to use LLM Council with direct API access to Anthropic, OpenAI, and Gemini API, instead of going through OpenRouter.
 
+When launching from an agent or CI, follow the
+[portable invocation contract](../../skills/council/references/invocation-contract.md).
+An interactive shell's credentials are not proof that a tool subprocess receives
+them. Run deep doctor in the same authorized child context and inspect the full
+result's `execution_status`, provider errors and execution plan.
+
 ## Why Use Direct APIs?
 
 While OpenRouter is recommended for most users, direct APIs may be preferable when:

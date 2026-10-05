@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.8.0)
+# LLM Council Skill (v0.8.1)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -11,19 +11,28 @@ Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 > provides the agent-side interface; actual runs happen through the installed
 > `council` CLI.
 
+## Agent Invocation Contract
+
+For tool-driven runs, read [the portable invocation contract](references/invocation-contract.md)
+before execution. It requires Council 0.8.1 or later and applies to Codex, Claude
+Code, Hermes and generic subprocess callers. Use an explicit executable/CWD,
+task-file or stdin input, ordered providers/models, a unique result file, and
+wait for completion. Inspect `execution_status` and full diagnostics; exit 0 or
+`success: true` alone is not a complete review. Never retry a still-running run.
+
 ## Setup
 
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.8.0'
+pip install 'the-llm-council>=0.8.1'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.0'
-pip install 'the-llm-council[vertex]>=0.8.0'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.1'
+pip install 'the-llm-council[vertex]>=0.8.1'
 ```
 
 Configure at least one provider key:
@@ -105,7 +114,7 @@ council run router "Should we buy or build auth?" --route
 | `--providers` | Explicit provider list. Omit to use config defaults |
 | `--models` | Explicit model list |
 | `--runtime-profile bounded` | Lower latency and token budgets |
-| `--reasoning-profile off|light` | Reduce reasoning overhead |
+| `--reasoning-profile off\|light` | Request reduced reasoning; inspect provider compilation metadata for unsupported or uncontrolled native effort |
 | `--route` | Follow a router decision into the chosen subagent/mode |
 | `--files` | Add file context to the task |
 | `--dry-run` | Show the resolved plan without executing |
