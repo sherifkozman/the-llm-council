@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-05
+
 ### Fixed
 - CLI provider adapters distinguish terminal completion from intermediate text
   and structured errors. Codex preserves system instructions in its native
@@ -780,7 +782,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.18...v0.8.0
 [0.7.18]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.17...v0.7.18
 [0.7.17]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.16...v0.7.17
