@@ -19,7 +19,9 @@ from llm_council.providers.anthropic import (
 )
 from llm_council.providers.base import GenerateRequest, ReasoningConfig, StructuredOutputConfig
 from llm_council.providers.cli.claude_code import _VERIFIED_VERSION as CLAUDE_CLI_VERSION
+from llm_council.providers.cli.claude_code import _VERIFIED_VERSIONS as CLAUDE_CLI_VERSIONS
 from llm_council.providers.cli.codex import _VERIFIED_VERSION as CODEX_CLI_VERSION
+from llm_council.providers.cli.codex import _VERIFIED_VERSIONS as CODEX_CLI_VERSIONS
 from llm_council.providers.gemini import LEGACY_MODEL_PREFIXES, STRUCTURED_OUTPUT_MODEL_PREFIXES
 from llm_council.providers.openai import (
     JSON_MODE_ONLY_MODELS,
@@ -72,7 +74,7 @@ class CompiledProviderRequest:
 
     request: GenerateRequest
     decisions: tuple[CompilationDecision, ...]
-    reasoning_control: dict[str, str] | None = None
+    reasoning_control: dict[str, str | list[str]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         metadata: dict[str, Any] = {
@@ -438,7 +440,7 @@ def compile_request_for_provider(
 
 def _compile_cli_reasoning(
     identity: str, request: GenerateRequest, decide: Any
-) -> tuple[ReasoningConfig | None, dict[str, str]]:
+) -> tuple[ReasoningConfig | None, dict[str, str | list[str]]]:
     reasoning = request.reasoning
     if reasoning is None:
         return None, {"status": "uncontrolled"}
@@ -469,13 +471,19 @@ def _compile_cli_reasoning(
         if getattr(reasoning, option) is not None:
             decide(f"reasoning.{option}", "ignored", f"{identity} uses native effort, not {option}")
     version = CODEX_CLI_VERSION if identity == "codex" else CLAUDE_CLI_VERSION
+    versions = CODEX_CLI_VERSIONS if identity == "codex" else CLAUDE_CLI_VERSIONS
     decide(
-        "reasoning.effort", "supported", f"Native effort={effort}; adapter must verify {version}"
+        "reasoning.effort",
+        "supported",
+        f"Native effort={effort}; adapter admits only verified versions: {', '.join(versions)}",
     )
     return ReasoningConfig(enabled=reasoning.enabled, effort=reasoning.effort), {
         "status": "requested",
         "effort": str(effort),
         "requires_cli_version": version,
+        "cli_version_requirement": "verified_versions_only",
+        "verified_baseline_cli_version": version,
+        "supported_cli_versions": list(versions),
     }
 
 

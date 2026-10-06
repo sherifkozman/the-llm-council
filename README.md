@@ -64,7 +64,16 @@ This is not a Claude-only framework. Claude Code is one supported client and one
 For tool-driven calls from Codex, Claude Code, Hermes or CI, use the
 [portable invocation contract](skills/council/references/invocation-contract.md).
 It covers installed-binary identity, timeouts, process completion, credential
-boundaries, complete result files and the 0.8.1 execution-status contract.
+boundaries, complete result files and execution-status handling. The shipped
+skill and caller examples require Council 0.8.2 or later for the safety fixes.
+
+The native CLI allowlist covers Codex **0.149.1 and 0.153.3**, and Claude Code
+**2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292**. Unknown versions fail
+explicitly; this is not a future auto-update compatibility guarantee. Report the
+chosen executable path and observed version from doctor failure diagnostics,
+not an assumed shell binary. Do not edit package constants to bypass the check.
+See the invocation contract and release notes for the synthetic-test scope;
+version acceptance alone does not prove live reachability or review quality.
 
 This release also includes a mode-aware execution path with runtime profiles,
 routed handoff, capability planning, and deterministic eval tooling. Those
@@ -259,6 +268,10 @@ subprocesses from inheriting the parent Codex agent's MCP tools, plugins, or
 skills while preserving your local Codex authentication. It also preserves the
 ambient Codex runtime environment, so `council doctor` reflects real login
 status instead of a false healthy result caused by over-stripped subprocess env.
+For Codex, a base doctor success reports login status only, not generation
+readiness. Require `probe_ok: true` from a deep probe for reachability; neither
+result proves large-review success. Do not infer path/version details absent
+from the diagnostic.
 
 ### Run Deterministic Evals
 
@@ -551,9 +564,9 @@ council version                     # Show installed version
 --mode             Agent mode (impl/arch/test for drafter, review/security for critic, etc.)
 --providers, -p    Comma-separated provider list
 --models, -m       Comma-separated OpenRouter model IDs for multi-model council
---files, -f        File paths as context (repeatable or comma-separated; 50KB/file, 200KB total)
+--files, -f        File paths as context (repeatable or comma-separated; 50,000 chars/file, 200,000 total)
 --context, --system  Additional system context/instructions
---timeout, -t      Request timeout in seconds
+--timeout, -t      Per-attempt timeout in seconds (10-3600; default 120)
 --temperature      Model temperature (0.0-2.0)
 --max-tokens       Max output tokens
 --input, -i        Read task from file (use '-' for stdin)
@@ -584,7 +597,31 @@ council run critic --mode review \
 council run critic --mode security -f src/payment.py "Audit payment handler"
 ```
 
-Limits: 50KB per file, 200KB total. Files exceeding limits are truncated with a warning.
+Limits are **50,000 characters per file** and **200,000 retained characters in
+total**, not KB or UTF-8 bytes. A file above the per-file limit is truncated with
+a warning. If the retained total exceeds the total limit, the run fails before
+provider calls; it does not silently skip the excess file.
+
+Inspect `execution_plan.context_preparation.files` for `path`, `original_chars`,
+`retained_chars`, and `truncated`. Truncation is also reported in
+`degradation_report.context_warnings` with `kind: "file_truncated"`, even when
+graceful degradation is disabled. A successful run with truncated input has
+`execution_status: "degraded"`. Do not describe it as a full-file review. Review
+the omitted material separately or narrow the input and state the actual scope.
+
+### Timeout Budgets
+
+`--timeout` accepts 10 through 3600 seconds; its default remains 120. It limits
+each provider attempt, not the whole workflow. Retries, multiple phases, queue
+waits, backoff and cleanup can make the workflow longer. Set the caller's outer
+deadline separately and wait for the original process to finish before reading
+its result or considering another run.
+
+For long-deadline work, use `--runtime-profile default`. The `bounded` profile
+keeps its shorter provider/phase caps even with `--timeout 3600`. Inspect
+`execution_plan.provider_request_timeouts_by_provider` for effective budgets.
+A successful `doctor --deep` probe proves reachability only, not large-review
+completion, full input coverage, or review quality.
 
 ## Development
 

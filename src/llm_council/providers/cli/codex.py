@@ -38,6 +38,7 @@ from llm_council.providers.base import (
     ProviderCapabilities,
     classify_error,
 )
+from llm_council.providers.cli._compatibility import check_verified_version
 from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "gpt-5.4"
 # Generation only: native tools are separately disabled and catalog-validated.
 DEFAULT_FLAGS = "--sandbox read-only --skip-git-repo-check"
+# The compiler imports this tested baseline; runtime metadata reports the observed version.
 _VERIFIED_VERSION = "codex-cli 0.149.1"
+_VERIFIED_VERSIONS = (_VERIFIED_VERSION, "codex-cli 0.153.3")
 _CLEANUP_SECONDS = 1.0
 _GENERATION_CONFIG = {
     "features.shell_tool": False,
@@ -664,8 +667,13 @@ class CodexCLIProvider(ProviderAdapter):
             cleanup_task.result()
 
     async def _verify_native_contract(
-        self, *, env: dict[str, str], cwd: str, deadline: float
-    ) -> None:
+        self,
+        *,
+        env: dict[str, str],
+        cwd: str,
+        deadline: float,
+        diagnostics_env: dict[str, str] | None = None,
+    ) -> str:
         if not self._cli_path:
             raise RuntimeError("Codex CLI not found")
         code, state = await self._run_cli(
@@ -674,10 +682,12 @@ class CodexCLIProvider(ProviderAdapter):
             cwd=cwd,
             deadline=deadline,
         )
-        if code != 0 or "".join(state.stdout_parts).strip() != _VERIFIED_VERSION:
-            raise RuntimeError(
-                f"Codex unsupported or unverified CLI version; native contract requires {_VERIFIED_VERSION}"
-            )
+        version = "".join(state.stdout_parts).strip()
+        if version not in _VERIFIED_VERSIONS:
+            # Sanitize before constructing an exception, including its cause/context.
+            version = self._redact(version, diagnostics_env if diagnostics_env is not None else env)
+        check_verified_version(version, _VERIFIED_VERSIONS, path=self._cli_path, code=code)
+        return version
 
     async def _login_status_text(
         self,
@@ -685,6 +695,7 @@ class CodexCLIProvider(ProviderAdapter):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         deadline: float | None = None,
+        native_details: dict[str, str] | None = None,
     ) -> str | None:
         if not self._cli_path:
             return None
@@ -701,7 +712,11 @@ class CodexCLIProvider(ProviderAdapter):
                 cwd = str(Path(cli_home) / "work")
                 native = runtime.config
                 diagnostics_env = runtime.diagnostics_env()
-                await self._verify_native_contract(env=env, cwd=cwd, deadline=deadline)
+                version = await self._verify_native_contract(
+                    env=env, cwd=cwd, deadline=deadline, diagnostics_env=diagnostics_env
+                )
+                if native_details is not None:
+                    native_details.update(cli_path=self._cli_path, cli_version=version)
             if cwd is None:
                 raise ValueError("Codex login status requires an isolated working directory")
             code, state = await self._run_cli(
@@ -888,10 +903,13 @@ class CodexCLIProvider(ProviderAdapter):
         if runtime.category == "missing":
             raise ValueError("Codex has no supported auth in the selected root or CODEX_API_KEY")
         cli_home = self._create_isolated_cli_home(runtime)
+        version = "not observed"
         try:
             env = self._isolated_env(cli_home, runtime)
             cwd = str(Path(cli_home) / "work")
-            await self._verify_native_contract(env=env, cwd=cwd, deadline=deadline)
+            version = await self._verify_native_contract(
+                env=env, cwd=cwd, deadline=deadline, diagnostics_env=runtime.diagnostics_env()
+            )
             model = request.model or self._default_model
             root = Path(cli_home)
             catalog_path = await self._generation_catalog(
@@ -958,7 +976,8 @@ class CodexCLIProvider(ProviderAdapter):
                 usage=state.usage,
                 raw={
                     "stdout": "".join(state.stdout_parts),
-                    "native_version": _VERIFIED_VERSION,
+                    "native_version": version,
+                    "cli_path": self._cli_path,
                     "model": model,
                     "auth_category": runtime.category,
                     "reasoning": {
@@ -967,6 +986,11 @@ class CodexCLIProvider(ProviderAdapter):
                     },
                 },
             )
+        except (ValueError, RuntimeError) as exc:
+            raise type(exc)(
+                f"{self._cli_path!r} ({version}): "
+                f"{self._redact(str(exc), runtime.diagnostics_env())}"
+            ) from exc
         finally:
             _cleanup_home(cli_home)
 
@@ -977,8 +1001,9 @@ class CodexCLIProvider(ProviderAdapter):
         if not self._cli_path:
             return DoctorResult(ok=False, message="CLI not found")
 
+        native_details: dict[str, str] = {}
         try:
-            status_text = await self._login_status_text()
+            status_text = await self._login_status_text(native_details=native_details)
         except asyncio.TimeoutError:
             return DoctorResult(ok=False, message="CLI login status check timed out")
         except Exception as exc:  # pragma: no cover - defensive path
@@ -986,12 +1011,16 @@ class CodexCLIProvider(ProviderAdapter):
 
         status_text = status_text or "CLI login status check failed"
         lowered = status_text.lower()
+        if native_details:
+            status_text = (
+                f"{native_details['cli_path']} ({native_details['cli_version']}): {status_text}"
+            )
 
         if "not logged in" in lowered or "logged out" in lowered:
-            return DoctorResult(ok=False, message=status_text)
+            return DoctorResult(ok=False, message=status_text, details=native_details or None)
         if "logged in" in lowered:
-            return DoctorResult(ok=True, message=status_text)
-        return DoctorResult(ok=False, message=status_text)
+            return DoctorResult(ok=True, message=status_text, details=native_details or None)
+        return DoctorResult(ok=False, message=status_text, details=native_details or None)
 
 
 def _register() -> None:

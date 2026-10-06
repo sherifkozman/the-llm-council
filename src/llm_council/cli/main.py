@@ -578,7 +578,9 @@ def run(
     ] = False,
     timeout: Annotated[
         int | None,
-        typer.Option("--timeout", "-t", help="Request timeout in seconds"),
+        typer.Option(
+            "--timeout", "-t", help="Per-attempt timeout in seconds (10-3600; default 120)"
+        ),
     ] = None,
     temperature: Annotated[
         float | None,
@@ -656,7 +658,7 @@ def run(
         raise ValueError("No task provided. Use positional argument or --input")
 
     # Input validation: limit task size to prevent resource exhaustion
-    max_task_length = 100_000  # 100KB limit
+    max_task_length = 100_000  # Character limit, not UTF-8 bytes.
     if len(task_text) > max_task_length:
         raise ValueError(
             f"Task too long ({len(task_text):,} chars). Maximum is {max_task_length:,} characters."
@@ -767,8 +769,8 @@ def run(
 
     # Get timeout (CLI > config > default)
     effective_timeout = timeout if timeout is not None else config_defaults.get("timeout", 120)
-    if not 10 <= effective_timeout <= 600:
-        raise ValueError("Timeout must be between 10 and 600 seconds")
+    if not 10 <= effective_timeout <= 3600:
+        raise ValueError("Timeout must be between 10 and 3600 seconds")
     max_retries = config_defaults.get("max_retries", 3)
     enable_degradation = config_defaults.get("enable_degradation", True)
 
@@ -1158,7 +1160,11 @@ def doctor(
     async def _run_deep_probe(name: str, provider: Any) -> dict[str, Any]:
         from time import perf_counter
 
-        from llm_council.providers.base import GenerateRequest
+        from llm_council.providers.base import (
+            GenerateRequest,
+            GenerateResponse,
+            ensure_text_response,
+        )
 
         start = perf_counter()
         async with provider_call_slot(name, timeout_seconds=max(float(probe_timeout), 1.0)):
@@ -1169,10 +1175,13 @@ def doctor(
                 )
             )
         latency_ms = round((perf_counter() - start) * 1000, 1)
-        text = (response.text if hasattr(response, "text") else str(response)).strip()
+        if not isinstance(response, GenerateResponse):
+            raise TypeError("Deep probe requires a non-streaming GenerateResponse.")
+        ensure_text_response(response, provider=name, phase="probe")
+        text = (response.text or "").strip()
         return {
             "probe_ok": True,
-            "probe_message": text[:120] or "Probe completed",
+            "probe_message": text[:120],
             "probe_latency_ms": latency_ms,
         }
 
@@ -1187,6 +1196,9 @@ def doctor(
                 "message": result.message or "",
                 "latency_ms": result.latency_ms,
             }
+            details = dict(result.details or {})
+            if details:
+                payload["details"] = details
             if deep:
                 if result.ok:
                     try:

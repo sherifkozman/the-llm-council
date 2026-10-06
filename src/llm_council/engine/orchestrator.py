@@ -61,6 +61,7 @@ from llm_council.providers.base import (
     ReasoningConfig,
     StructuredOutputConfig,
     classify_error,
+    ensure_text_response,
 )
 from llm_council.providers.compiler import compile_request_for_provider
 from llm_council.providers.concurrency import provider_call_slot
@@ -176,21 +177,19 @@ _PHASE_PROMPT_PROFILES: dict[str, list[dict[str, int | None]]] = {
             "critique_limit": 1_200,
         },
         {
-            "draft_limit": 0,
-            "excerpt_limit": 0,
-            "max_sources": 0,
-            "max_findings": 0,
+            "draft_limit": 1_200,
+            "excerpt_limit": 160,
+            "max_sources": 1,
+            "max_findings": 3,
             "critique_limit": 1_800,
-            "omit_drafts": 1,
             "omit_context": 1,
         },
         {
-            "draft_limit": 0,
+            "draft_limit": 220,
             "excerpt_limit": 0,
             "max_sources": 0,
-            "max_findings": 0,
+            "max_findings": 1,
             "critique_limit": 1_000,
-            "omit_drafts": 1,
             "omit_context": 1,
         },
     ],
@@ -323,7 +322,7 @@ class OrchestratorConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    timeout: int = Field(default=120, ge=10, le=600, description="Timeout per provider call.")
+    timeout: int = Field(default=120, ge=10, le=3600, description="Timeout per provider call.")
     max_retries: int = Field(default=3, ge=1, le=10, description="Max synthesis retries.")
     summary_tier: SummaryTier = Field(
         default=SummaryTier.ACTIONS, description="Desired summarization depth."
@@ -487,6 +486,21 @@ class CouncilResult(BaseModel):
     @model_validator(mode="after")
     def classify_execution(self) -> CouncilResult:
         """Classify final coverage, not transient errors or the review verdict."""
+        context_warnings = [
+            {
+                "kind": "file_truncated",
+                "path": item.get("path"),
+                "original_chars": item.get("original_chars"),
+                "retained_chars": item.get("retained_chars"),
+            }
+            for item in (self.execution_plan or {}).get("context_preparation", {}).get("files", [])
+            if item.get("truncated")
+        ]
+        if context_warnings:
+            self.degradation_report = {
+                **(self.degradation_report or {}),
+                "context_warnings": context_warnings,
+            }
         if self.execution_status == "cancelled":
             self.success = False
             return self
@@ -734,6 +748,14 @@ class Orchestrator:
 
             drafts, draft_timing = await self._timed(self._run_parallel_drafts, "drafts")
             phase_timings.append(draft_timing)
+            if not any(text.strip() for text in drafts.values()):
+                raise RuntimeError(
+                    "No usable draft responses; critique and synthesis were not run."
+                )
+            # Decide containment after all parallel drafts settle. A whole-file
+            # peer must not restore raw files discarded by a chunked peer.
+            if any(handoff.get("findings") for handoff in self._draft_handoffs.values()):
+                self._phase_context_override = self._reference_context_blocks()[0]
 
             # Store drafts as artifacts if enabled
             if self._artifact_store and self._run_id:
@@ -761,6 +783,12 @@ class Orchestrator:
                 provider_errors=dict(self._provider_init_errors) or None,
                 cost_estimate=self._build_cost_estimate(),
                 execution_plan=self._execution_plan,
+                run_id=self._run_id,
+                degradation_report=(
+                    self._degradation_policy.get_report().to_dict()
+                    if self._degradation_policy
+                    else None
+                ),
             )
 
         try:
@@ -887,13 +915,17 @@ class Orchestrator:
     def _format_exception_chain(self, error: BaseException) -> str:
         """Render an exception with its direct cause chain for diagnostics."""
 
-        parts = [str(error)]
-        current = error.__cause__ or error.__context__
-        while current is not None:
+        parts: list[str] = []
+        seen: set[int] = set()
+        current: BaseException | None = error
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
             text = str(current)
             if text:
-                parts.append(f"caused by: {text}")
-            current = current.__cause__ or current.__context__
+                parts.append(f"caused by: {text}" if parts else text)
+            current = current.__cause__ or (
+                None if current.__suppress_context__ else current.__context__
+            )
         return " | ".join(part for part in parts if part)
 
     async def _run_critique(self, drafts: dict[str, str]) -> str:
@@ -913,7 +945,6 @@ class Orchestrator:
         )
         last_error: Exception | None = None
         skipped_over_budget = False
-        context_chars = len(self._context_source(self._phase_context_override))
 
         for index, (provider_name, adapter) in enumerate(candidates):
             user_prompt, prompt_meta = self._select_prompt_profile(
@@ -962,7 +993,7 @@ class Orchestrator:
                 max_tokens=request.max_tokens,
                 timeout_seconds=request.timeout_seconds,
                 raw_source_chars=self._prepared_context_metadata.get("raw_source_chars", 0),
-                evidence_pack_chars=context_chars + len(user_prompt),
+                evidence_pack_chars=self._phase_evidence_chars(drafts, prompt_meta["profile"]),
             )
             try:
                 response = await self._call_provider(
@@ -992,6 +1023,8 @@ class Orchestrator:
 
         if self._task is None or self._subagent_config is None:
             raise RuntimeError("Orchestrator.run must be called before synthesis.")
+        if not any(text.strip() for text in drafts.values()):
+            raise RuntimeError("Synthesis requires usable draft evidence.")
 
         candidates = await self._candidate_providers_for_phase("synthesis")
         self._record_phase_provider_candidates("synthesis", [name for name, _adapter in candidates])
@@ -1041,17 +1074,24 @@ class Orchestrator:
                         max_sources=profile.get("max_sources"),
                         max_findings=profile.get("max_findings"),
                         critique_limit=profile.get("critique_limit"),
-                        omit_drafts=bool(profile.get("omit_drafts")),
                         inline_schema=_inline_schema,
                         omit_context=bool(profile.get("omit_context")),
                     )
 
-                user_prompt, _prompt_meta = self._select_prompt_profile(
+                user_prompt, prompt_meta = self._select_prompt_profile(
                     provider_name=provider_name,
                     phase="synthesis",
                     system_prompt=system_prompt,
                     prompt_builder=_build_synthesis_prompt,
                 )
+                if prompt_meta.get("over_budget"):
+                    last_error = RuntimeError(
+                        f"{provider_name} synthesis skipped: retained draft evidence exceeds "
+                        "the effective prompt budget. Use a focused file set or a longer timeout."
+                    )
+                    if self._execution_plan is not None:
+                        self._execution_plan.setdefault("warnings", []).append(str(last_error))
+                    break
 
                 request = GenerateRequest(
                     model=self._model_override(provider_name),
@@ -1086,8 +1126,12 @@ class Orchestrator:
                     structured_output=request.structured_output is not None,
                     attempt=total_attempts,
                     raw_source_chars=self._prepared_context_metadata.get("raw_source_chars", 0),
-                    evidence_pack_chars=len(self._context_source(self._phase_context_override))
-                    + len(user_prompt),
+                    evidence_pack_chars=self._phase_evidence_chars(
+                        drafts,
+                        prompt_meta["profile"],
+                        critique=critique,
+                        use_raw_drafts=use_raw_drafts,
+                    ),
                 )
 
                 try:
@@ -1125,6 +1169,8 @@ class Orchestrator:
                         "was insufficient to satisfy schema validation."
                     )
 
+        if last_raw is None and last_error is not None:
+            raise last_error
         fallback = self._fallback_synthesis_from_evidence(drafts, critique, errors)
         if fallback is not None:
             return fallback, total_attempts
@@ -1160,7 +1206,7 @@ class Orchestrator:
         )
         chunk_plan = self._draft_chunk_plan(provider_name, system_prompt, user_prompt)
         if chunk_plan is not None:
-            self._phase_context_override = chunk_plan["prefix"] or None
+            self._phase_context_override = chunk_plan["prefix"]
             self._draft_handoffs[provider_name] = {
                 "strategy": "chunked_context",
                 "chunk_count": chunk_plan["chunk_count"],
@@ -1198,9 +1244,13 @@ class Orchestrator:
                             Message(role="system", content=system_prompt),
                             Message(role="user", content=chunk_user_prompt),
                         ],
-                        "max_tokens": min(
-                            request.max_tokens or _CHUNKED_DRAFT_MAX_TOKENS,
-                            _CHUNKED_DRAFT_MAX_TOKENS,
+                        "max_tokens": (
+                            self._config.max_tokens
+                            if self._config.max_tokens is not None
+                            else min(
+                                request.max_tokens or _CHUNKED_DRAFT_MAX_TOKENS,
+                                _CHUNKED_DRAFT_MAX_TOKENS,
+                            )
                         ),
                     }
                 )
@@ -1274,12 +1324,23 @@ class Orchestrator:
         async def _consume_stream(stream: AsyncIterator[GenerateResponse]) -> GenerateResponse:
             text_parts: list[str] = []
             usage: dict[str, int] | None = None
+            finish_reason: str | None = None
+            tool_calls: list[Any] = []
             async for chunk in stream:
                 if chunk.text:
                     text_parts.append(chunk.text)
                 if chunk.usage:
                     usage = dict(chunk.usage)
-            return GenerateResponse(text="".join(text_parts), usage=usage)
+                if chunk.finish_reason is not None:
+                    finish_reason = chunk.finish_reason
+                if chunk.tool_calls:
+                    tool_calls.append(chunk.tool_calls)
+            return GenerateResponse(
+                text="".join(text_parts),
+                usage=usage,
+                finish_reason=finish_reason,
+                tool_calls=tool_calls or None,
+            )
 
         prompt_cache_requested = bool(request.prompt_cache and request.prompt_cache.enabled)
         compiled = compile_request_for_provider(provider_name, request)
@@ -1391,6 +1452,7 @@ class Orchestrator:
                     forwarded=prompt_cache_forwarded,
                     usage=response.usage,
                 )
+                ensure_text_response(response, provider=provider_name, phase=phase or "call")
                 return response
 
             except Exception as exc:
@@ -1424,7 +1486,7 @@ class Orchestrator:
                     decision = self._degradation_policy.decide(
                         provider=provider_name,
                         error=exc,
-                        phase="call",
+                        phase=phase or "call",
                         remaining_providers=remaining,
                     )
 
@@ -2634,6 +2696,35 @@ class Orchestrator:
         rendered = "\n\n".join(part for part in parts if part)
         return rendered, len(rendered)
 
+    def _phase_evidence_chars(
+        self,
+        drafts: Mapping[str, str],
+        profile: Mapping[str, int | None],
+        *,
+        critique: str = "",
+        use_raw_drafts: bool = False,
+    ) -> int:
+        """Count only evidence retained by the selected downstream prompt profile."""
+        _, draft_chars = self._compose_draft_blocks(
+            drafts,
+            use_raw_drafts=use_raw_drafts,
+            draft_limit=profile.get("draft_limit"),
+            excerpt_limit=int(profile.get("excerpt_limit") or 320),
+            max_sources=profile.get("max_sources"),
+            max_findings=profile.get("max_findings"),
+        )
+        context_chars = (
+            0
+            if profile.get("omit_context")
+            else len(self._context_source(self._phase_context_override))
+        )
+        return (
+            context_chars
+            + draft_chars
+            + len(self._build_collected_evidence_block())
+            + len(self._compact_text(critique, profile.get("critique_limit")))
+        )
+
     def _record_usage(self, provider: str, usage: Mapping[str, int] | None) -> None:
         """Accumulate token usage and call counts for cost estimation."""
 
@@ -2821,6 +2912,19 @@ class Orchestrator:
             if errors:
                 return ValidationResult(ok=False, errors=errors, raw=raw_text)
 
+        if (
+            self._schema_name == "reviewer"
+            and isinstance(parsed, dict)
+            and isinstance(parsed.get("scope"), dict)
+            and parsed["scope"].get("files_reviewed") == 0
+            and self._reference_context_blocks()[1]
+        ):
+            return ValidationResult(
+                ok=False,
+                errors=["Reviewer reported files_reviewed=0 despite explicitly supplied files."],
+                raw=raw_text,
+            )
+
         return ValidationResult(ok=True, data=parsed, raw=raw_text)
 
     def _fallback_synthesis_from_drafts(
@@ -2874,6 +2978,8 @@ class Orchestrator:
             return None
 
         issues = self._build_reviewer_fallback_issues(drafts, critique)
+        if not issues:
+            return None
         recommendations = self._build_reviewer_fallback_recommendations(issues)
         if not recommendations:
             recommendations = [
@@ -2884,17 +2990,13 @@ class Orchestrator:
                 }
             ]
 
-        if issues:
-            high_severity = {"critical", "high", "medium"}
-            verdict = (
-                "request_changes"
-                if any(issue["severity"] in high_severity for issue in issues)
-                else "approve_with_comments"
-            )
-            summary_basis = "; ".join(issue["description"] for issue in issues[:2])
-        else:
-            verdict = "approve_with_comments"
-            summary_basis = "Draft findings were incomplete, so this result is based on bounded evidence fallback."
+        high_severity = {"critical", "high", "medium"}
+        verdict = (
+            "request_changes"
+            if any(issue["severity"] in high_severity for issue in issues)
+            else "approve_with_comments"
+        )
+        summary_basis = "; ".join(issue["description"] for issue in issues[:2])
 
         review_summary = self._compact_text(
             f"Fallback reviewer synthesis based on bounded chunk evidence: {summary_basis}",
@@ -2912,7 +3014,7 @@ class Orchestrator:
             "recommendations": recommendations,
             "reasoning": reasoning,
             "review_type": "code_quality",
-            "confidence": 58 if issues else 42,
+            "confidence": 58,
             "blocking_issues": [
                 issue["description"]
                 for issue in issues
@@ -3456,7 +3558,6 @@ class Orchestrator:
         max_sources: int | None = None,
         max_findings: int | None = None,
         critique_limit: int | None = None,
-        omit_drafts: bool = False,
         inline_schema: bool = True,
         omit_context: bool = False,
     ) -> str:
@@ -3465,22 +3566,16 @@ class Orchestrator:
         context_block = "" if omit_context else self._build_context_block(context_override)
         collected_evidence = self._build_collected_evidence_block()
         evidence_block = self._build_evidence_requirements_block()
-        if omit_drafts:
-            draft_blocks = (
-                "Draft details omitted to fit bounded review budget. "
-                "Rely on the critique plus prior draft analysis summaries."
-            )
-        else:
-            draft_blocks, _draft_chars = self._compose_draft_blocks(
-                drafts,
-                use_raw_drafts=use_raw_drafts,
-                draft_limit=draft_limit,
-                excerpt_limit=excerpt_limit,
-                max_sources=max_sources,
-                max_findings=max_findings,
-            )
-            if not draft_blocks:
-                draft_blocks = "No successful draft responses available."
+        draft_blocks, _draft_chars = self._compose_draft_blocks(
+            drafts,
+            use_raw_drafts=use_raw_drafts,
+            draft_limit=draft_limit,
+            excerpt_limit=excerpt_limit,
+            max_sources=max_sources,
+            max_findings=max_findings,
+        )
+        if not draft_blocks:
+            raise ValueError("Synthesis requires usable draft evidence.")
         schema_block = json.dumps(schema, indent=2) if schema and inline_schema else "{}"
         error_block = "\n".join(f"- {err}" for err in errors) if errors else "None"
         critique_block = self._compact_text(critique, critique_limit)

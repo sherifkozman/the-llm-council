@@ -27,11 +27,20 @@ from llm_council.providers.base import (
     ProviderCapabilities,
     classify_error,
 )
+from llm_council.providers.cli._compatibility import check_verified_version
 from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "sonnet"
+# The compiler imports this tested baseline; runtime metadata reports the observed version.
 _VERIFIED_VERSION = "2.1.288 (Claude Code)"
+_VERIFIED_VERSIONS = (
+    _VERIFIED_VERSION,
+    "2.1.289 (Claude Code)",
+    "2.1.290 (Claude Code)",
+    "2.1.291 (Claude Code)",
+    "2.1.292 (Claude Code)",
+)
 _CLEANUP_SECONDS = 1.0
 
 _ENV_ALLOWLIST = {
@@ -478,7 +487,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
 
     async def _verify_native_contract(
         self, *, env: dict[str, str], cwd: str, deadline: float
-    ) -> None:
+    ) -> str:
         if not self._cli_path:
             raise RuntimeError("Claude Code CLI not found")
         code, stdout, stderr = await self._run_cli(
@@ -487,14 +496,18 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             cwd=cwd,
             deadline=deadline,
         )
-        if code != 0 or stdout.decode("utf-8", errors="replace").strip() != _VERIFIED_VERSION:
+        version = stdout.decode("utf-8", errors="replace").strip()
+        try:
+            check_verified_version(version, _VERIFIED_VERSIONS, path=self._cli_path, code=code)
+        except RuntimeError as exc:
             raise self._failure(
-                f"unsupported or unverified version; requires {_VERIFIED_VERSION}",
-                stdout.decode("utf-8", errors="replace"),
+                self._redact(str(exc), env),
+                version,
                 stderr.decode("utf-8", errors="replace"),
                 code,
                 env,
-            )
+            ) from None
+        return version
 
     def _parse_response(
         self, code: int | None, stdout: bytes, stderr: bytes, env: dict[str, str]
@@ -570,7 +583,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             cwd = str(Path(scratch) / "work")
             Path(cwd).mkdir()
             env = self._isolated_env(source, environment, scratch)
-            await self._verify_native_contract(env=env, cwd=cwd, deadline=deadline)
+            version = await self._verify_native_contract(env=env, cwd=cwd, deadline=deadline)
             self._assert_unmanaged_environment(environment)
             self._assert_unmanaged_environment(env)
             code, stdout, stderr = await self._run_cli(
@@ -580,13 +593,17 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                 deadline=deadline,
                 input_bytes=prompt,
             )
-            response = self._parse_response(code, stdout, stderr, env)
+            try:
+                response = self._parse_response(code, stdout, stderr, env)
+            except RuntimeError as exc:
+                raise RuntimeError(f"{self._cli_path!r} ({version}): {exc}") from exc
             effort = self._reasoning_effort(request)
             raw = response.raw if isinstance(response.raw, dict) else {}
             raw.update(
                 {
                     "auth_source": source,
-                    "cli_version": _VERIFIED_VERSION,
+                    "cli_version": version,
+                    "cli_path": self._cli_path,
                     "reasoning": {
                         "status": "native" if effort else "uncontrolled",
                         "effort": effort,
@@ -607,14 +624,17 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             self._assert_unmanaged_environment(environment)
             with _scratch_directory() as scratch:
                 env = self._isolated_env(source, environment, scratch)
-                await self._verify_native_contract(env=env, cwd=scratch, deadline=deadline)
+                version = await self._verify_native_contract(
+                    env=env, cwd=scratch, deadline=deadline
+                )
             return DoctorResult(
                 ok=True,
-                message=f"Claude Code {_VERIFIED_VERSION}; authentication not verified",
+                message=f"Claude Code {version}; authentication not verified",
                 details={
                     "auth_source": source,
                     "authentication": "not_verified",
-                    "cli_version": _VERIFIED_VERSION,
+                    "cli_version": version,
+                    "cli_path": self._cli_path,
                 },
             )
         except Exception as exc:

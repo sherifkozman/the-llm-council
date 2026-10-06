@@ -79,6 +79,11 @@ def fake_cli(monkeypatch):
         stderr = b""
         code = 0
         version = b"2.1.288 (Claude Code)\n"
+        help_text = (
+            b"--bare --safe-mode --setting-sources --tools --strict-mcp-config --mcp-config "
+            b"--disable-slash-commands --settings --no-chrome --no-session-persistence "
+            b"--permission-mode --permission-prompts --system-prompt --effort --output-format --model"
+        )
 
         def __init__(self):
             self.calls = []
@@ -87,6 +92,8 @@ def fake_cli(monkeypatch):
             proc = (
                 FakeProcess(self.version)
                 if "--version" in cmd
+                else FakeProcess(self.help_text)
+                if "--help" in cmd
                 else FakeProcess(self.stdout, self.stderr, self.code)
             )
             self.calls.append((cmd, kwargs, proc))
@@ -349,15 +356,71 @@ async def test_conflicting_or_unsupported_auth_never_spawns(provider, fake_cli, 
     assert not fake_cli.calls
 
 
-@pytest.mark.parametrize(
-    "version", [b"2.1.287 (Claude Code)", b"2.1.289 (Claude Code)", b"garbage"]
-)
+@pytest.mark.parametrize("version", [b"2.1.287 (Claude Code)", b"2.2.0 (Claude Code)", b"garbage"])
 async def test_unverified_version_never_generates(provider, fake_cli, version):
     fake_cli.version = version
     with pytest.raises(RuntimeError, match="version"):
         await provider.generate(GenerateRequest(prompt="hi"))
     assert len(fake_cli.calls) == 1
     assert "--version" in fake_cli.calls[0][0]
+
+
+@pytest.mark.parametrize("version", ["2.1.288", "2.1.289", "2.1.290", "2.1.291", "2.1.292"])
+async def test_verified_release_reports_observed_claude_version(provider, fake_cli, version):
+    fake_cli.version = f"{version} (Claude Code)".encode()
+    response = await provider.generate(
+        GenerateRequest(
+            prompt="test",
+            model="claude-opus-5",
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+    )
+    assert response.text == "FINAL"
+    assert response.raw["cli_version"] == f"{version} (Claude Code)"
+    assert response.raw["cli_path"] == "/synthetic/claude"
+    assert response.raw["reasoning"] == {"status": "native", "effort": "high"}
+    assert len(fake_cli.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "version", ["2.1.287", "2.1.293", "2.1.999", "2.2.0", "3.1.288", "2.1.289-beta"]
+)
+async def test_claude_version_boundary_has_observed_diagnostics(provider, fake_cli, version):
+    fake_cli.version = f"{version} (Claude Code)".encode()
+    with pytest.raises(RuntimeError) as caught:
+        await provider.generate(GenerateRequest(prompt="test"))
+    assert version in str(caught.value)
+    assert "/synthetic/claude" in str(caught.value)
+    assert len(fake_cli.calls) == 1
+
+
+async def test_claude_patch_doctor_reports_actual_version(provider, fake_cli):
+    fake_cli.version = b"2.1.292 (Claude Code)"
+    result = await provider.doctor()
+    assert result.ok
+    assert result.details["cli_version"] == "2.1.292 (Claude Code)"
+    assert result.details["authentication"] == "not_verified"
+
+
+async def test_unknown_version_diagnostics_still_redact_auth(provider, fake_cli, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-version-secret")
+    fake_cli.version = b"unknown build synthetic-version-secret"
+    with pytest.raises(RuntimeError) as caught:
+        await provider.generate(GenerateRequest(prompt="test"))
+    assert "synthetic-version-secret" not in str(caught.value)
+    assert "[REDACTED]" in str(caught.value)
+    assert "/synthetic/claude" in str(caught.value)
+    assert len(fake_cli.calls) == 1
+
+
+async def test_claude_patch_unknown_envelope_has_native_diagnostics(provider, fake_cli):
+    fake_cli.version = b"2.1.292 (Claude Code)"
+    fake_cli.stdout = b'{"type":"unknown-result","result":"not accepted"}'
+    with pytest.raises(RuntimeError) as caught:
+        await provider.generate(GenerateRequest(prompt="test"))
+    assert "terminal" in str(caught.value)
+    assert "2.1.292" in str(caught.value)
+    assert "/synthetic/claude" in str(caught.value)
 
 
 @pytest.mark.parametrize(

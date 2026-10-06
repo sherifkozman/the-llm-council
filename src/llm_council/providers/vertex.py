@@ -610,23 +610,44 @@ class VertexAIProvider(ProviderAdapter):
             config=config if config else None,
         )
         async for chunk in stream:
-            if chunk.text:
-                yield GenerateResponse(text=chunk.text, content=chunk.text)
+            yield self._parse_response(chunk, preserve_whitespace=True)
 
     def _parse_response(
-        self, response: Any, *, prompt_cache: dict[str, Any] | None = None
+        self,
+        response: Any,
+        *,
+        prompt_cache: dict[str, Any] | None = None,
+        preserve_whitespace: bool = False,
     ) -> GenerateResponse:
         """Parse Vertex AI response."""
-        text = ""
-        try:
-            text = response.text
-        except Exception:
-            if hasattr(response, "candidates") and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, "content") and candidate.content:
-                    parts = candidate.content.parts
-                    if parts:
-                        text = "".join(part.text for part in parts if hasattr(part, "text"))
+        candidates = getattr(response, "candidates", None) or []
+        candidate = candidates[0] if candidates else None
+        candidate_content = getattr(candidate, "content", None)
+        parts = getattr(candidate_content, "parts", None) or []
+        text_parts = []
+        tool_calls = []
+        # SDK .text drops non-text parts and can log warnings. Read parts directly
+        # so tool-only responses remain diagnosable without exposing thoughts.
+        for part in parts:
+            part_text = getattr(part, "text", None)
+            if isinstance(part_text, str) and not getattr(part, "thought", False):
+                text_parts.append(part_text)
+            function_call = getattr(part, "function_call", None)
+            if function_call is not None:
+                tool_calls.append(
+                    {
+                        "id": getattr(function_call, "id", None),
+                        "type": "function",
+                        "function": {
+                            "name": function_call.name,
+                            "arguments": function_call.args or {},
+                        },
+                    }
+                )
+        text = "".join(text_parts)
+        # Stream separators must survive concatenation; only whole answers can
+        # normalize whitespace-only text to an empty response.
+        answer_text = text if text_parts and (preserve_whitespace or text.strip()) else None
 
         usage = None
         if hasattr(response, "usage_metadata") and response.usage_metadata:
@@ -641,14 +662,14 @@ class VertexAIProvider(ProviderAdapter):
                 usage["cache_read_tokens"] = cache_read_tokens
 
         finish_reason = None
-        if hasattr(response, "candidates") and response.candidates:
-            fr = getattr(response.candidates[0], "finish_reason", None)
-            if fr:
-                finish_reason = str(fr)
+        fr = getattr(candidate, "finish_reason", None)
+        if fr:
+            finish_reason = str(getattr(fr, "value", fr))
 
         return GenerateResponse(
-            text=text,
-            content=text,
+            text=answer_text,
+            content=answer_text,
+            tool_calls=tool_calls or None,
             usage=usage,
             finish_reason=finish_reason,
             raw=response,

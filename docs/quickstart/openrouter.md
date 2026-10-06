@@ -177,7 +177,7 @@ defaults:
 ```
 
 If `council doctor --provider openrouter --deep` reports that the configured
-model is deprecated, the provider is still healthy. Update
+model is deprecated, that diagnostic does not establish provider health. Update
 `providers.openrouter.default_model` or use a one-off `--models` override.
 
 Via environment variable:
@@ -309,13 +309,36 @@ Check model status at [openrouter.ai/models](https://openrouter.ai/models)
 
 **Why this happens**:
 - bounded review caps are intentionally conservative
-- large document reviews are now sliced and chunked, but a single provider can still be forced onto the conservative fallback path if critique stays over budget or synthesis refuses valid JSON
+- large document reviews can be sliced and chunked; a run can still fail or use a degraded fallback if its evidence or phase budgets are insufficient
 
 **Mitigations**:
 1. Prefer mixed providers for large review runs: `--providers openai,vertex-ai,openrouter`
 2. Reduce broad `--files` inputs, especially large backlog or task files
-3. Increase timeout for doc-heavy reviews: `--timeout 180`
-4. Inspect `execution_plan.context_preparation`, `draft_budget_decisions`, and `phase_prompt_compaction` in `--json` output to see what was truncated, sliced, skipped, or compacted
+3. For longer attempts, use `--runtime-profile default --timeout 180`. The allowed timeout range is 10-3600 seconds; the default is still 120. Increasing `--timeout` does not lift the shorter caps in `bounded` mode.
+4. Set the caller's outer workflow deadline separately. Each retry receives another attempt budget; multiple phases, queue waits, backoff and cleanup can make the workflow longer than `--timeout`.
+5. Inspect `execution_plan.context_preparation`, `draft_budget_decisions`, `phase_prompt_compaction`, and `provider_request_timeouts_by_provider` in `--json` output for retained evidence and effective budgets.
+
+An `empty_response` with `finish_reason=length` can indicate an exhausted chunk
+output budget, not a model-health failure. Only final-answer content is accepted:
+reasoning-only JSON is not promoted to an answer, even if it matches the schema.
+A missing final answer remains `empty_response`. One explicit mitigation is
+`--runtime-profile default --timeout 300 --max-tokens 8000`, keeping
+`--reasoning-profile default` and the configured model unchanged. These values
+are examples, not new defaults. The default chunk output budget remains 900
+tokens; an explicit `--max-tokens` override is honored. Larger budgets can
+increase cost and do not guarantee success. Inspect the failure before deciding
+to run again; do not retry automatically.
+
+`--files` limits are **50,000 characters per file** and **200,000 retained
+characters total**, not KB. Per-file overflow truncates the file. Exceeding the
+retained total fails before provider calls. Check
+`execution_plan.context_preparation.files` and
+`degradation_report.context_warnings` for the path, original and retained
+character counts, and `kind: "file_truncated"` in the warning entry. These
+warnings remain available when graceful degradation is disabled. Do not claim
+a full review when the input was truncated, or when required phases or provider
+drafts are missing. A successful deep doctor probe is only reachability evidence,
+not proof that this larger workload completed.
 
 ## Cost Optimization
 
