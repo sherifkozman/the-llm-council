@@ -12,12 +12,14 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from llm_council.engine.orchestrator import Orchestrator
 from llm_council.providers.base import GenerateRequest, Message, ReasoningConfig
 from llm_council.providers.cli.codex import CodexCLIProvider
 from llm_council.providers.compiler import compile_request_for_provider
@@ -49,6 +51,12 @@ MCP_CREDENTIALS = {
         "expires_at": 4102444800,
     }
 }
+
+
+def _native_codex_binary(monkeypatch):
+    binary = os.environ.get("COUNCIL_TEST_CODEX_BINARY") or shutil.which("codex")
+    assert binary
+    return binary
 
 
 @pytest.fixture
@@ -84,6 +92,12 @@ def stub_cli(
         calls.append(record)
         if "--version" in args:
             body = f"print('codex-cli {version}')"
+        elif "--help" in args:
+            body = (
+                "print('--ignore-user-config --ignore-rules --ephemeral --strict-config "
+                "--json --sandbox --output-schema --output-last-message --model "
+                "--config --skip-git-repo-check')"
+            )
         elif "login" in args:
             body = f"import time; time.sleep({login_delay}); print('Logged in using ChatGPT')"
         elif "--bundled" in args:
@@ -536,6 +550,165 @@ async def test_unverified_version_rejected_before_generation(isolated_env, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["0.149.1", "0.153.3"])
+async def test_verified_release_reports_observed_codex_version(isolated_env, monkeypatch, version):
+    calls = stub_cli(monkeypatch, version=version)
+    result = await CodexCLIProvider(cli_path="/synthetic/codex").generate(
+        GenerateRequest(prompt="test", reasoning=ReasoningConfig(enabled=True, effort="high"))
+    )
+    assert result.text == "FINAL"
+    assert result.raw["native_version"] == f"codex-cli {version}"
+    assert result.raw["cli_path"] == "/synthetic/codex"
+    assert 'model_reasoning_effort="high"' in calls[-1]["args"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["0.149.1", "0.153.3"])
+async def test_codex_doctor_reports_existing_verified_identity_without_extra_probe(
+    isolated_env, monkeypatch, version
+):
+    calls = stub_cli(monkeypatch, version=version)
+    path = "/synthetic/not logged in/codex"
+    result = await CodexCLIProvider(cli_path=path).doctor()
+    assert result.ok
+    assert result.details == {"cli_path": path, "cli_version": f"codex-cli {version}"}
+    assert path in result.message
+    assert f"codex-cli {version}" in result.message
+    assert "Logged in using ChatGPT" in result.message
+    assert len(calls) == 2
+    assert "--version" in calls[0]["args"]
+    assert "login" in calls[1]["args"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "version",
+    ["0.149.0", "0.149.2", "0.153.2", "0.153.4", "0.160.0", "1.149.1", "0.149.2-beta"],
+)
+async def test_codex_version_boundary_has_observed_diagnostics(isolated_env, monkeypatch, version):
+    calls = stub_cli(monkeypatch, version=version)
+    with pytest.raises(RuntimeError) as caught:
+        await CodexCLIProvider(cli_path="/synthetic/codex").generate(GenerateRequest(prompt="test"))
+    assert version in str(caught.value)
+    assert "/synthetic/codex" in str(caught.value)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", ["verifier", "generate", "login"])
+async def test_codex_unknown_version_redacts_entire_exception_chain(
+    isolated_env, monkeypatch, entrypoint
+):
+    secret = "synthetic-version-api-key-sentinel"
+    monkeypatch.setenv("FAKE_APIKEY", secret)
+    calls = stub_cli(monkeypatch, version=f"unverified-{secret}")
+    provider = CodexCLIProvider(cli_path="/synthetic/codex")
+    with pytest.raises(RuntimeError) as caught:
+        if entrypoint == "verifier":
+            await provider._verify_native_contract(
+                env=dict(os.environ),
+                cwd=str(isolated_env),
+                deadline=asyncio.get_running_loop().time() + 5,
+            )
+        elif entrypoint == "login":
+            await provider._login_status_text()
+        else:
+            await provider.generate(GenerateRequest(prompt="test"))
+
+    pending = [caught.value]
+    visited = set()
+    while pending:
+        error = pending.pop()
+        if id(error) in visited:
+            continue
+        visited.add(id(error))
+        assert secret not in str(error)
+        assert secret not in repr(error.args)
+        # Inspect even suppressed contexts; no formatter behavior may hide a leak.
+        pending.extend(
+            linked for linked in (error.__cause__, error.__context__) if linked is not None
+        )
+    assert "[REDACTED]" in str(caught.value)
+    assert "/synthetic/codex" in str(caught.value)
+    assert "unverified-" in str(caught.value)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["codex-env", "api-file", "chatgpt-file"])
+@pytest.mark.parametrize("entrypoint", ["generate", "login", "doctor"])
+async def test_codex_version_diagnostics_redact_selected_auth_without_exporting_it(
+    isolated_env, monkeypatch, source, entrypoint
+):
+    monkeypatch.delenv("CODEX_API_KEY")
+    root = isolated_env / ".codex"
+    root.mkdir()
+    secrets = ["selected-auth-api-key-sentinel"]
+    if source == "codex-env":
+        monkeypatch.setenv("CODEX_API_KEY", secrets[0])
+    elif source == "api-file":
+        (root / "auth.json").write_text(
+            json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": secrets[0]})
+        )
+    else:
+        tokens = {
+            key: f"selected-chatgpt-{key}-sentinel"
+            for key in ("id_token", "access_token", "refresh_token", "account_id")
+        }
+        secrets = list(tokens.values())
+        (root / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "tokens": tokens}))
+    calls = stub_cli(monkeypatch, version="unverified-" + "-".join(secrets))
+    provider = CodexCLIProvider(cli_path="/synthetic/codex")
+    if entrypoint == "doctor":
+        result = await provider.doctor()
+        assert not result.ok
+        rendered = [result.message]
+    else:
+        with pytest.raises(RuntimeError) as caught:
+            if entrypoint == "login":
+                await provider._login_status_text()
+            else:
+                await provider.generate(GenerateRequest(prompt="test"))
+        error = caught.value
+        rendered = [
+            Orchestrator._format_exception_chain(None, error),
+            "".join(traceback.format_exception(type(error), error, error.__traceback__)),
+        ]
+        pending = [error]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+            rendered.extend([str(current), repr(current.args)])
+            pending.extend(
+                linked for linked in (current.__cause__, current.__context__) if linked is not None
+            )
+    for text in rendered:
+        assert all(secret not in text for secret in secrets)
+        assert "[REDACTED]" in text
+        assert "/synthetic/codex" in text
+    assert len(calls) == 1
+    child_env = calls[0]["env"]
+    assert "CODEX_API_KEY" not in child_env
+    assert "OPENAI_API_KEY" not in child_env
+    assert not any(key.startswith("AUTH_SECRET_") for key in child_env)
+    assert all(secret not in child_env.values() for secret in secrets)
+
+
+@pytest.mark.asyncio
+async def test_codex_patch_unknown_catalog_has_native_diagnostics(isolated_env, monkeypatch):
+    calls = stub_cli(monkeypatch, version="0.153.3", catalog={"unexpected": []})
+    with pytest.raises(ValueError) as caught:
+        await CodexCLIProvider(cli_path="/synthetic/codex").generate(GenerateRequest(prompt="test"))
+    assert "catalog" in str(caught.value)
+    assert "0.153.3" in str(caught.value)
+    assert "/synthetic/codex" in str(caught.value)
+    assert not any("exec" in call["args"] and "--help" not in call["args"] for call in calls)
+
+
+@pytest.mark.asyncio
 async def test_login_discovery_consumes_supplied_deadline(isolated_env, monkeypatch):
     calls = stub_cli(monkeypatch, login_delay=0.25)
     started = time.monotonic()
@@ -954,8 +1127,7 @@ async def test_unsupported_reasoning_is_not_silently_dropped(isolated_env, monke
 @pytest.mark.parametrize("through_adapter", [False, True])
 def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapter):
     """Pin native channels, not a model's compliance with sentinel instructions."""
-    binary = shutil.which("codex")
-    assert binary
+    binary = _native_codex_binary(monkeypatch)
     home = tmp_path / "home"
     home.mkdir()
     codex_home = home / ".codex"
@@ -979,7 +1151,7 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
         timeout=5,
         check=True,
     ).stdout.strip()
-    assert version == "codex-cli 0.149.1", version
+    assert version in ("codex-cli 0.149.1", "codex-cli 0.153.3"), version
     captured = []
 
     class Capture(BaseHTTPRequestHandler):
@@ -1187,8 +1359,7 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
 def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
     tmp_path, monkeypatch, source, attack
 ):
-    binary = shutil.which("codex")
-    assert binary
+    binary = _native_codex_binary(monkeypatch)
     home = tmp_path / "parent"
     home.mkdir()
     default_root = home / ".codex"

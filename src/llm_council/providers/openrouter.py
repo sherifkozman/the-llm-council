@@ -9,7 +9,6 @@ Docs: https://openrouter.ai/docs
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
@@ -328,7 +327,7 @@ class OpenRouterProvider(ProviderAdapter):
         response.raise_for_status()
         data = response.json()
 
-        return self._parse_response(data, structured_output=bool(request.structured_output))
+        return self._parse_response(data)
 
     async def _generate_stream(
         self, client: httpx.AsyncClient, body: dict[str, Any]
@@ -355,49 +354,18 @@ class OpenRouterProvider(ProviderAdapter):
                 except Exception:
                     continue
 
-    def _extract_structured_output_text(self, message: dict[str, Any]) -> str | None:
-        """Recover structured JSON payloads from provider-specific reasoning fields."""
-
-        reasoning = message.get("reasoning")
-        if isinstance(reasoning, str):
-            json_text = self._extract_json_text(reasoning)
-            if json_text is not None:
-                return json_text
-
-        details = message.get("reasoning_details")
-        if isinstance(details, list):
-            parts: list[str] = []
-            for item in details:
-                if not isinstance(item, dict):
-                    continue
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    parts.append(text)
-            if parts:
-                return self._extract_json_text("\n".join(parts))
-
-        return None
-
-    def _extract_json_text(self, text: str) -> str | None:
-        """Return text only when it is valid JSON."""
-        candidate = text.strip()
-        if not candidate:
-            return None
-        try:
-            json.loads(candidate)
-        except json.JSONDecodeError:
-            return None
-        return candidate
-
-    def _parse_response(
-        self, data: dict[str, Any], *, structured_output: bool = False
-    ) -> GenerateResponse:
-        """Parse OpenRouter API response."""
-        choice = data.get("choices", [{}])[0]
+    def _parse_response(self, data: dict[str, Any]) -> GenerateResponse:
+        """Parse final answer content, never provider reasoning fields."""
+        choices = data.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else {}
+        if not isinstance(choice, dict):
+            choice = {}
         message = choice.get("message", {})
+        if not isinstance(message, dict):
+            message = {}
         content = message.get("content")
-        if structured_output and content in (None, ""):
-            content = self._extract_structured_output_text(message)
+        if not isinstance(content, str) or not content.strip():
+            content = None
 
         usage = data.get("usage", {})
         usage_dict = None
@@ -431,12 +399,20 @@ class OpenRouterProvider(ProviderAdapter):
 
     def _parse_stream_chunk(self, data: dict[str, Any]) -> GenerateResponse:
         """Parse a streaming chunk from OpenRouter API."""
-        choice = data.get("choices", [{}])[0]
+        choices = data.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else {}
+        if not isinstance(choice, dict):
+            choice = {}
         delta = choice.get("delta", {})
+        if not isinstance(delta, dict):
+            delta = {}
+        content = delta.get("content")
+        if not isinstance(content, str):
+            content = None
 
         return GenerateResponse(
-            text=delta.get("content"),
-            content=delta.get("content"),
+            text=content,
+            content=content,
             tool_calls=delta.get("tool_calls"),
             finish_reason=choice.get("finish_reason"),
             raw=data,

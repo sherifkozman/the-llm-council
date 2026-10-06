@@ -46,7 +46,7 @@ def test_copied_skill_examples_read_result_after_nonzero_exit(
         "with open(os.environ['STUB_CALLS'], 'a') as stream:\n"
         "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "if sys.argv[1:] == ['--version']:\n"
-        "    print('LLM Council v' + os.environ.get('STUB_VERSION', '0.8.1'))\n"
+        "    print('LLM Council v' + os.environ.get('STUB_VERSION', '0.8.2'))\n"
         "    raise SystemExit(0)\n"
         "output = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])\n"
         "output.write_text(os.environ['STUB_PAYLOAD'])\n"
@@ -89,7 +89,7 @@ def test_copied_skill_examples_read_result_after_nonzero_exit(
     assert [json.loads(line) for line in calls.read_text().splitlines()] == [["--version"]]
 
     calls.write_text("")
-    env["STUB_VERSION"] = "0.8.1"
+    env["STUB_VERSION"] = "0.8.2"
     env["STUB_PAYLOAD"] = json.dumps({"success": True})
     missing_contract = subprocess.run(
         cmd, cwd=work, env=env, capture_output=True, text=True, timeout=15
@@ -105,4 +105,4 @@ def test_shipped_command_and_skill_link_the_portable_contract():
     assert "skills/council/references/invocation-contract.md" in command
     assert "council_wrapper.py" not in command
     for extra in ("", "[anthropic,openai,gemini]", "[vertex]"):
-        assert f"the-llm-council{extra}>=0.8.1" in skill
+        assert f"the-llm-council{extra}>=0.8.2" in skill

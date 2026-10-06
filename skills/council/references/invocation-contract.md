@@ -1,6 +1,6 @@
 # Portable Council Invocation Contract
 
-Requires Council 0.8.1 or later. This file travels with a copied Council skill;
+Requires Council 0.8.2 or later for the safety fixes. This file travels with a copied Council skill;
 it does not require a repository checkout or a client-specific wrapper.
 
 ## Before Calling
@@ -41,6 +41,12 @@ field, skipped probe or false value is not a pass. Exit code 0 alone is not a
 passing deep probe. Inspect the actual saved JSON rather than inventing a
 top-level status field. Do not remove or overwrite earlier diagnostic/result
 files to make a retry look like the first attempt; choose a new output directory.
+An empty or whitespace-only generation is a failed probe with an `empty_response`
+diagnostic. Doctor requests a non-streaming response; an unexpected stream is
+rejected, not converted to a success message.
+For Codex, base doctor `ok: true` reports login status only, not generation
+readiness. Require a successful deep probe for reachability. Do not infer an
+executable path or version from a healthy row that does not report those fields.
 
 Claude managed-policy environments are not certified for generation-only use.
 The adapter rejects known local/cached policy but does not detect every remote
@@ -49,6 +55,25 @@ auth route's policy status; a failed, pending or skipped eligible fetch is not
 proof of absence. Account, policy or native-version changes need fresh evidence.
 Do not change credentials, endpoints or administrative controls to bypass policy.
 
+### Native CLI Versions
+
+Council uses an explicit native-version allowlist, not a patch-version range:
+
+| Provider | Accepted native versions |
+| --- | --- |
+| `codex` | 0.149.1, 0.153.3 |
+| `claude` | 2.1.288, 2.1.289, 2.1.290, 2.1.291, 2.1.292 |
+
+These entries are backed by synthetic native-contract checks. They do not prove
+live provider access, review quality, or compatibility with future auto-updates.
+See the release notes for the recorded checks and final verification scope.
+Unknown versions remain explicitly unsupported, even if their help output lists
+the same flags. On an unsupported-version error, report the executable path and
+observed version in doctor diagnostics from the actual caller environment. Do
+not edit package version constants or bypass the check; use a verified version
+or wait for a release that verifies the new one. This resolves the known
+versions, not generic future native-CLI compatibility.
+
 ## Run And Wait
 
 The examples below require these caller-provided environment values: COUNCIL_BIN,
@@ -56,13 +81,19 @@ COUNCIL_WORKDIR, COUNCIL_TASK_FILE, COUNCIL_REFERENCE_FILE, COUNCIL_PROVIDERS an
 COUNCIL_MODELS. Paths are absolute; providers and models are comma-separated.
 These are example inputs, not new Council configuration variables.
 
-`--timeout` is a per-attempt budget. Queue wait, CLI discovery, spawn, generation
+`--timeout` accepts 10-3600 seconds; the default remains 120. It is a per-attempt
+budget, not an outer workflow deadline. Queue wait, CLI discovery, spawn, generation
 and stream consumption share it. Retries receive a new attempt budget; phases,
 backoff and bounded cleanup can make a whole run much longer. Set the outer tool
 budget accordingly. The Python example uses 900 seconds as an example, not a
 package-wide guarantee. On an outer timeout, send SIGTERM and allow cleanup before
 forcing termination. A second signal, SIGKILL or host death can leave cleanup
 incomplete, especially outside the owned POSIX process groups.
+
+Use `--runtime-profile default` when a long attempt deadline is required.
+`bounded` keeps its existing shorter provider/phase caps even with `--timeout 3600`;
+inspect `execution_plan.provider_request_timeouts_by_provider`. Raising
+the attempt limit neither extends the caller's deadline nor proves completion.
 
 For Claude and Codex CLI providers, `max_tokens` is not a verified whole-generation
 limit; inspect its dropped-option entry in request compilation. Native output may
@@ -86,8 +117,8 @@ import tempfile
 binary = os.environ["COUNCIL_BIN"]
 version = subprocess.run([binary, "--version"], check=True, capture_output=True, text=True)
 match = re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)", version.stdout.strip())
-if not match or tuple(map(int, match.groups())) < (0, 8, 1):
-    raise SystemExit("Council 0.8.1 or later is required")
+if not match or tuple(map(int, match.groups())) < (0, 8, 2):
+    raise SystemExit("Council 0.8.2 or later is required")
 result_file = Path(tempfile.mkdtemp(prefix="council-result-")) / "result.json"
 argv = [binary, "run", "critic", "--mode", "review",
         "--providers", os.environ["COUNCIL_PROVIDERS"],
@@ -136,7 +167,7 @@ short. The temporary result directory is retained for inspection.
 ```sh
 set -eu
 version=$("$COUNCIL_BIN" --version)
-python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,1) else "Council 0.8.1 or later is required")' "$version"
+python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,2) else "Council 0.8.2 or later is required")' "$version"
 run_dir=$(mktemp -d)
 result_file="$run_dir/result.json"
 cd "$COUNCIL_WORKDIR"
@@ -189,7 +220,14 @@ Parser usage errors remain stderr plus exit 2 and need not produce JSON. A
 with restored required coverage are not automatically degraded. Missing explicit
 reference files and files skipped entirely by the total cap fail before model
 calls. Retained-but-truncated files make the execution degraded. The existing
-50,000-character per-file and 200,000-character total caps still apply.
+50,000-character per-file and 200,000-retained-character total caps still apply.
+They count characters, not KB or UTF-8 bytes. Inspect
+`execution_plan.context_preparation.files` for `path`, `original_chars`,
+`retained_chars`, and `truncated`. The corresponding
+`degradation_report.context_warnings` entry includes `kind: "file_truncated"`,
+path and original/retained counts, even with graceful degradation disabled.
+Do not claim a full-file review when a file was truncated. State the retained
+scope and review omitted material separately instead of treating exit 0 as proof.
 
 New execution plans distinguish `requested_capabilities` (effective caller or
 router requirements) from the default local-evidence collection profile.
@@ -207,6 +245,22 @@ Check actual providers/models, required phase participation, evidence retained,
 and any context truncation/slicing/chunking. A valid execution does not prove the
 model's conclusions. Do not accept fallback or missing drafts as full coverage.
 Do not retry a valid degraded run automatically; assess the specific failure first.
+For large reviews, synthesis retains compact draft evidence rather than silently
+dropping every draft. No usable drafts, or no evidence-bearing synthesis prompt
+that fits the budget, must not be accepted as a full review. Inspect the failure
+or degraded fallback and `execution_plan.phase_prompt_compaction` before accepting
+the result. Empty provider text is a non-retryable `empty_response` failure, not
+a successful independent draft.
+OpenRouter accepts final-answer content only. Reasoning-only content is not
+promoted to a final answer, even if it contains schema-shaped JSON; a missing
+final answer remains `empty_response`. Do not rely on the legacy promotion path.
+If an OpenRouter chunk reports `empty_response` with `finish_reason=length`,
+inspect its output budget; this is not by itself a model-health failure. An
+explicit mitigation is `--runtime-profile default --timeout 300 --max-tokens 8000`,
+keeping `--reasoning-profile default` and the configured model unchanged. These
+are example overrides, not new defaults: the default chunk output budget remains
+900 tokens, while an explicit `--max-tokens` override is honored. Larger budgets
+can increase cost and do not guarantee success; do not retry automatically.
 When critique compaction records `omit_schema: 1`, full output-schema details were
 omitted from that critique. Inspect its warning; do not claim equivalent
 schema-specific scrutiny. Synthesis's configured schema handling is unchanged.

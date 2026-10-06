@@ -8,13 +8,32 @@ For agent and CI integrations, start with the
 [portable invocation contract](../skills/council/references/invocation-contract.md).
 Council 0.8.1 adds execution status and exact exit semantics. Wait for the process,
 read the full JSON result even after a nonzero exit, and inspect degradation.
+The shipped skill and invocation examples require 0.8.2 or later for the safety
+fixes. An installed version string does not establish live provider verification.
 
-The public package now supports both:
+The public package supports:
 
 - the core three-phase council flow
 - a mode-aware execution path with lightweight capability
   planning, routed handoff, and evaluation tooling
 - provider-specific prompt-cache controls and cache telemetry where supported
+
+## Input And Deadline Limits
+
+`--files` retains at most 50,000 characters per file and 200,000 retained
+characters in total. These are character limits, not KB or UTF-8 byte limits.
+Per-file truncation is visible in `execution_plan.context_preparation.files` and
+`degradation_report.context_warnings` (`kind: "file_truncated"`, path, original
+and retained character counts), even when graceful degradation is disabled.
+A successful truncated run is `degraded`, not a full-file review. Exceeding the
+retained total fails before provider calls rather than silently skipping files.
+
+`--timeout` accepts 10-3600 seconds per provider attempt, with the default still
+120. Retries and multiple phases can exceed that duration in total; set a
+separate outer workflow deadline and allow cancellation cleanup. Long-deadline
+runs need `--runtime-profile default`: `bounded` keeps its existing shorter
+provider/phase caps. Inspect `execution_plan.provider_request_timeouts_by_provider`
+for the effective budgets.
 
 ## Overview
 
@@ -70,6 +89,18 @@ refresh, expiry handling, and best-effort cleanup.
 `council doctor --deep` distinguishes “installed/configured” from “can answer a
 trivial non-interactive prompt right now.” This is useful for diagnosing local
 CLI providers and flaky auth or SDK setup.
+It proves reachability only, not successful large reviews or complete evidence
+coverage. Those claims require the actual run result and retained-input checks.
+For Codex, base doctor `ok: true` reports login status only. It does not prove
+generation readiness or supply path/version evidence unless those details are
+actually present in the diagnostic.
+
+Native CLI compatibility is an explicit allowlist: Codex 0.149.1 and 0.153.3;
+Claude Code 2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292. Unknown future
+versions stay unsupported. A matching help flag does not prove compatibility.
+If doctor rejects a version, report the path and version in its diagnostic;
+do not edit package constants to bypass validation. Release notes record the
+synthetic native-contract evidence and final verification scope.
 
 For the Codex CLI provider, council runs nested Codex subprocesses under an
 isolated temporary `HOME` that only carries forward the local Codex auth files.

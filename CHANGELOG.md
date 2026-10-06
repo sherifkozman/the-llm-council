@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-06
+
+### Fixed
+- Native CLI compatibility admits separately verified releases instead of one
+  exact version: Codex 0.149.1 and 0.153.3; Claude Code 2.1.288 through 2.1.292.
+  Errors and doctor identify the executable/version. Unknown updates still fail
+  closed; no unverified range or isolation bypass is introduced. (#64)
+- Synthesis compaction retains draft findings even when full source context is
+  omitted. Requests that cannot fit the provider budget are not sent. Reviews
+  cannot accept an explicit zero-files result when files were supplied, or
+  manufacture an approving fallback without findings. (#63)
+- Mixed chunked and whole-file drafts preserve downstream context containment;
+  a whole-file peer cannot restore the raw source after a chunked peer. (#63)
+- Downstream evidence-size metadata counts retained material, not omitted raw
+  context. Exception diagnostics respect suppressed/redacted context and stop
+  safely when a cause chain contains a cycle.
+- Empty and whitespace-only generations fail with `empty_response`, provider,
+  phase, sanitized finish reason, and tool-call presence. They are not retried as
+  transport errors. All-empty drafts stop before critique and synthesis, including
+  when graceful degradation is disabled. (#65, #67)
+- Chunked drafts honor an explicit `--max-tokens` value instead of silently
+  reducing it to the 900-token default chunk cap. This allows a caller to raise
+  an insufficient output budget without changing models or reasoning. (#67)
+- Vertex preserves function-call metadata without executing calls or treating
+  thought text as answers. OpenRouter preserves empty-response stop metadata.
+  Deep doctor probes no longer report an empty response as successful. (#65, #67)
+- OpenRouter no longer treats JSON found in reasoning fields as a final answer,
+  including structured-output requests with empty final content. (#67)
+
+### Changed
+- `--timeout` accepts 10 through 3600 seconds per provider attempt. The default
+  remains 120 seconds; bounded-profile caps and finite cancellation cleanup stay
+  unchanged. This is not a whole-workflow deadline. (#66)
+- Existing per-file truncation metadata also appears as structured
+  `degradation_report.context_warnings`. File caps remain 50,000 characters per
+  file and 200,000 total; truncated reviews remain degraded. (#66)
+- Shipped skill and command guidance requires 0.8.2 and explains partial context,
+  empty responses, per-attempt budgets, and the limits of doctor probes.
+
 ## [0.8.1] - 2026-10-05
 
 ### Fixed
@@ -782,7 +821,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.18...v0.8.0
 [0.7.18]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.17...v0.7.18

@@ -25,6 +25,7 @@ class ErrorType(str, Enum):
     AUTH = "auth"  # API key invalid or missing
     MODEL_UNAVAILABLE = "model_unavailable"
     NETWORK = "network"
+    EMPTY_RESPONSE = "empty_response"
     UNKNOWN = "unknown"
 
 
@@ -34,6 +35,7 @@ NON_RETRYABLE_ERRORS = frozenset(
         ErrorType.BILLING,
         ErrorType.AUTH,
         ErrorType.CLI_NOT_FOUND,
+        ErrorType.EMPTY_RESPONSE,
     }
 )
 
@@ -134,6 +136,9 @@ def classify_error(error_text: str, return_code: int = -1) -> ErrorType:
         return ErrorType.NONE
 
     error_lower = error_text.lower() if error_text else ""
+
+    if "empty_response:" in error_lower:
+        return ErrorType.EMPTY_RESPONSE
 
     # Check billing errors first (most critical, don't waste money retrying)
     for pattern in _BILLING_PATTERNS:
@@ -448,6 +453,35 @@ class GenerateResponse(BaseModel):
 
 
 GenerateResult = GenerateResponse | AsyncIterator[GenerateResponse]
+
+
+def ensure_text_response(response: GenerateResponse, *, provider: str, phase: str) -> None:
+    """Reject empty generation without disclosing raw responses or tool arguments."""
+    if (response.text or "").strip():
+        return
+    finish_reason = (response.finish_reason or "unknown").lower()
+    if finish_reason not in {
+        "unknown",
+        "stop",
+        "length",
+        "max_tokens",
+        "end_turn",
+        "tool_use",
+        "tool_calls",
+        "safety",
+        "recitation",
+        "content_filter",
+        "error",
+        "malformed_function_call",
+        "unexpected_tool_call",
+        "other",
+    }:
+        finish_reason = "unrecognized"
+    raise RuntimeError(
+        f"empty_response: {provider} {phase} returned no usable text; "
+        f"finish_reason={finish_reason}; "
+        f"tool_calls_present={str(bool(response.tool_calls)).lower()}"
+    )
 
 
 class DoctorResult(BaseModel):

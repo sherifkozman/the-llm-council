@@ -1832,13 +1832,12 @@ class TestOrchestratorRuntimeTruthfulness:
             schema={"type": "object"},
             errors=[],
             context_override=orch._phase_context_override,
-            omit_drafts=True,
             inline_schema=False,
             omit_context=True,
         )
 
         assert "Provided Reference Material" not in prompt
-        assert "Draft details omitted to fit bounded review budget." in prompt
+        assert "placeholder" in prompt
         assert "Schema is enforced separately by structured output." in prompt
 
     def test_restore_transient_draft_providers_after_critique_failure(self):

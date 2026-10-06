@@ -1356,7 +1356,17 @@ class TestVertexPromptCaching:
         provider._gemini_client = client
 
         async def stream_chunks():
-            yield SimpleNamespace(text="ok")
+            yield SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(
+                            parts=[SimpleNamespace(text="ok", thought=False, function_call=None)]
+                        ),
+                        finish_reason="STOP",
+                    )
+                ],
+                usage_metadata=None,
+            )
 
         client.aio.caches.create = AsyncMock(
             return_value=SimpleNamespace(name="cachedContents/tmp")
@@ -2530,8 +2540,8 @@ class TestOpenRouterProviderEnvModel:
         provider = OpenRouterProvider(default_model="anthropic/claude-opus-4-5")
         assert provider._default_model == "anthropic/claude-opus-4-5"
 
-    def test_parse_response_uses_reasoning_for_structured_output_when_content_missing(self):
-        """Structured-output requests should recover JSON from reasoning-only responses."""
+    def test_parse_response_rejects_reasoning_json_when_structured_content_missing(self):
+        """Valid reasoning JSON is not a final answer, even in structured mode."""
         provider = OpenRouterProvider(api_key="sk-or-test")
         data = {
             "model": "qwen/qwen3-max-thinking",
@@ -2553,13 +2563,13 @@ class TestOpenRouterProviderEnvModel:
             ],
         }
 
-        response = provider._parse_response(data, structured_output=True)
+        response = provider._parse_response(data)
 
-        assert response.text == '{\n  "result": "READY"\n}'
-        assert response.content == '{\n  "result": "READY"\n}'
+        assert response.text is None
+        assert response.content is None
 
-    def test_parse_response_uses_reasoning_details_for_structured_output_when_content_missing(self):
-        """Structured-output requests should recover JSON from reasoning_details-only payloads."""
+    def test_parse_response_rejects_reasoning_details_when_structured_content_missing(self):
+        """Reasoning details cannot supply missing structured final content."""
         provider = OpenRouterProvider(api_key="sk-or-test")
         data = {
             "model": "qwen/qwen3-max-thinking",
@@ -2580,13 +2590,13 @@ class TestOpenRouterProviderEnvModel:
             ],
         }
 
-        response = provider._parse_response(data, structured_output=True)
+        response = provider._parse_response(data)
 
-        assert response.text == '{\n  "result": "READY"\n}'
-        assert response.content == '{\n  "result": "READY"\n}'
+        assert response.text is None
+        assert response.content is None
 
     def test_parse_response_ignores_non_json_reasoning_for_structured_output(self):
-        """Reasoning fallback should not treat plain prose as the structured payload."""
+        """Reasoning prose is not a structured final payload."""
         provider = OpenRouterProvider(api_key="sk-or-test")
         data = {
             "model": "qwen/qwen3-max-thinking",
@@ -2608,7 +2618,7 @@ class TestOpenRouterProviderEnvModel:
             ],
         }
 
-        response = provider._parse_response(data, structured_output=True)
+        response = provider._parse_response(data)
 
         assert response.text is None
         assert response.content is None
@@ -2630,7 +2640,7 @@ class TestOpenRouterProviderEnvModel:
             ],
         }
 
-        response = provider._parse_response(data, structured_output=False)
+        response = provider._parse_response(data)
 
         assert response.text is None
         assert response.content is None
@@ -2652,7 +2662,7 @@ class TestOpenRouterProviderEnvModel:
             ],
         }
 
-        response = provider._parse_response(data, structured_output=True)
+        response = provider._parse_response(data)
 
         assert response.text == '{"result":"CONTENT"}'
         assert response.content == '{"result":"CONTENT"}'

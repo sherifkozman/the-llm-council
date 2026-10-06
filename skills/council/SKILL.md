@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.8.1)
+# LLM Council Skill (v0.8.2)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -14,7 +14,7 @@ Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 ## Agent Invocation Contract
 
 For tool-driven runs, read [the portable invocation contract](references/invocation-contract.md)
-before execution. It requires Council 0.8.1 or later and applies to Codex, Claude
+before execution. It requires Council 0.8.2 or later and applies to Codex, Claude
 Code, Hermes and generic subprocess callers. Use an explicit executable/CWD,
 task-file or stdin input, ordered providers/models, a unique result file, and
 wait for completion. Inspect `execution_status` and full diagnostics; exit 0 or
@@ -25,14 +25,14 @@ wait for completion. Inspect `execution_status` and full diagnostics; exit 0 or
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.8.1'
+pip install 'the-llm-council>=0.8.2'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.1'
-pip install 'the-llm-council[vertex]>=0.8.1'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.2'
+pip install 'the-llm-council[vertex]>=0.8.2'
 ```
 
 Configure at least one provider key:
@@ -114,11 +114,22 @@ council run router "Should we buy or build auth?" --route
 | `--providers` | Explicit provider list. Omit to use config defaults |
 | `--models` | Explicit model list |
 | `--runtime-profile bounded` | Lower latency and token budgets |
+| `--timeout` | Per-attempt seconds, 10-3600 (default 120); use the default runtime profile for long deadlines |
 | `--reasoning-profile off\|light` | Request reduced reasoning; inspect provider compilation metadata for unsupported or uncontrolled native effort |
 | `--route` | Follow a router decision into the chosen subagent/mode |
-| `--files` | Add file context to the task |
+| `--files` | Add file context, capped at 50,000 characters/file and 200,000 retained characters total |
 | `--dry-run` | Show the resolved plan without executing |
 | `--schema` | Use a custom output schema |
+
+These file limits count characters, not KB. Per-file overflow truncates input;
+total retained overflow fails before calls. Inspect
+`execution_plan.context_preparation.files` and
+`degradation_report.context_warnings`; never present truncated input as a full
+review. Context warnings remain visible with graceful degradation disabled.
+The caller's outer deadline must cover the whole workflow, not just one attempt.
+The `bounded` profile retains shorter phase caps regardless of a larger timeout.
+Successful deep doctor probes prove reachability, not large-review completion or
+quality. Codex base doctor success reports login status only, not generation readiness.
 
 ## Provider Names
 
@@ -136,6 +147,13 @@ Canonical provider names:
 User-selected providers and models should be respected. Health checks and deep
 doctor probes are for diagnostics, not for silently overriding explicit
 configuration.
+
+For native CLI providers, consult the invocation contract's exact version list:
+Codex 0.149.1/0.153.3 and Claude Code 2.1.288/2.1.289/2.1.290/2.1.291/2.1.292.
+Unknown versions are unsupported, not automatically admitted by a patch range
+or help-flag check. Report the chosen path/version from doctor failure diagnostics;
+never edit package constants to bypass the gate. Synthetic contract checks are
+not live-provider or future auto-update compatibility proof.
 
 ## When To Use It
 
