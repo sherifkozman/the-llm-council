@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-06
+
+Tested candidate, not a publication or global-install claim. See
+[the release record](docs/releases/0.8.3.md) for exact proof and limitations.
+
+### Reporting Repair Scope
+- Resolve omitted models from instantiated adapter defaults before capability
+  compilation through an optional, non-abstract `resolve_model` hook. The hook
+  is backward compatible, does not re-read the environment or change defaults,
+  and preserves explicit model choices. Attempt metadata distinguishes
+  `adapter_resolved_model` from requested and reported models; resolution is not
+  explicit selection or provider confirmation.
+- Restore schema forwarding for OpenAI's `gpt-5.4` default. Existing policy still
+  forwards reasoning controls only for o-series models, not `gpt-5.4`; the
+  capability matrix is unchanged and o-series controls have regression coverage.
+- Add a built-in-reviewer prompt boundary that treats bounded prepared-coverage
+  metadata as data, not source evidence. Security/custom schemas are unchanged;
+  no task-intent detector or semantic regex filter. Public result schemas are
+  unchanged; the optional adapter hook above is additive.
+- Remove the prose-manufacturing reviewer fallback and its exclusive helpers.
+  Schema-validation exhaustion fails while preserving drafts, critique and errors;
+  invalid raw synthesis is artifact-only if storage succeeds. Exception-triggered
+  fallback to an existing schema-valid JSON draft remains degraded, not proof
+  of semantic truth.
+- Admit exact Codex 0.160.1 with version-specific tool controls that preserve
+  authentication, selected model and reasoning effort. The unchanged `gpt-5.4`
+  default is absent from its tested catalog; an explicit supported model is
+  required. This is not universal model or future-version support.
+- Use `execution_status` across JSON, Markdown and console; a legacy success
+  boolean does not establish full review coverage or correct findings.
+- Separate file ingestion from delivered source coverage and downstream draft
+  compaction, including profile 0 and submitted versus unsent candidates. Only
+  submitted evidence cuts count toward compaction-based degradation. Keep
+  pipeline limitations separate from findings about the reviewed source.
+- Account for executed retries and synthesis attempts, including failed calls
+  before fallback, excluding queued requests that never start the adapter;
+  retain completed evidence on handled cancellation.
+- Preserve phase/provider artifact occurrences and expose persistence errors.
+  Hard-killed `running` ledger rows are not liveness proof and are not repaired
+  automatically.
+- Distinguish Council runtime identity, selected native executable/version and
+  requested model for CLI and library callers; do not label the requested model
+  provider-confirmed. Persist allowlisted `started`/`settled` execution manifests;
+  the settled snapshot precedes ledger finalization. Hard kills may retain only
+  the start snapshot, not later native identity; no heartbeat or repair is added.
+- Reject provider-prefixed `provider:model` mappings while preserving official
+  slash namespaces and colon suffixes in literal model IDs.
+- Update shipped skill, command and plugin target to 0.8.3. Document approved
+  exact-version uv tool reinstalls that replace the executable and stored pin,
+  rather than treating isolated test installs as global upgrades.
+
+### Verification Boundary
+- Full source suite: 1,237 passed, 52 opt-in skipped, 84% coverage. Dev-only
+  CI-equivalent suite: 1,222 passed, 67 skipped, including 15 additional optional
+  SDK skips. Isolated installed-v5 regressions: 155 passed; source byte-identical.
+- Contained native checks: 34/34 cases on Codex 0.160.1 with configured
+  `gpt-6.1-sol`, 34/34 on Codex 0.149.1, and 23 unchanged Claude native cases.
+  Codex 0.153.3 retains historical native evidence and synthetic coverage, with
+  no fresh native matrix.
+- Final v5 API attribution acceptance passed with one OpenAI synthesis and
+  restored `gpt-5.4` schema forwarding; reasoning remains dropped by existing
+  policy. Partial source/draft coverage was truthfully degraded, not a full review.
+- Claude's explicit-model v4 caller passed. The original Codex v4 caller failed
+  to read its completed result; a later read-only correction passed without a
+  Council rerun or full caller re-pass. Hermes remains deferred. Copied-contract
+  tests do not certify an installed plugin. Publication/global-install receipts
+  remain separate from this candidate verification.
+
 ## [0.8.2] - 2026-10-06
 
 ### Fixed
@@ -821,7 +889,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/sherifkozman/the-llm-council/compare/v0.7.18...v0.8.0

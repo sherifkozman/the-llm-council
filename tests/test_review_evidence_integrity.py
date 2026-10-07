@@ -231,10 +231,18 @@ def test_reviewer_explicit_zero_files_is_invalid_for_supplied_files():
     assert any("files_reviewed" in error for error in result.errors)
 
 
-def test_reviewer_fallback_cannot_approve_without_findings():
-    orch = orchestrator({"openai": ReviewProvider()})
-    orch._schema_name = "reviewer"
-    assert orch._fallback_synthesis_from_evidence({}, "", ["No evidence"]) is None
+@pytest.mark.asyncio
+async def test_invalid_review_cannot_manufacture_approval_from_prose():
+    prose = "Council omitted evidence; this is not a source finding or a validated review."
+    orch = orchestrator({"openai": ReviewProvider(GenerateResponse(text=prose))})
+    result = await orch.run("Review supplied source.", "critic")
+    assert not result.success
+    assert result.execution_status == "failed"
+    assert result.output is None
+    assert result.drafts == {"openai": prose}
+    assert result.critique == prose
+    assert result.validation_errors == ["Failed to parse JSON."]
+    assert result.synthesis_attempts == orch._config.max_retries
 
 
 @pytest.mark.asyncio

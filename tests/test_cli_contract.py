@@ -149,7 +149,7 @@ def test_markdown_output_file_is_atomic_and_stdout_empty(tmp_path, monkeypatch, 
     output = tmp_path / "result.md"
     output.write_text("old result")
     expected = (
-        "# Council Result: SUCCESS\n\n## Output\n\n```json\n"
+        "# Council Result: COMPLETED\n\n## Output\n\n```json\n"
         '{\n  "result": "ship it"\n}\n```\n\n## Metrics\n\n'
         "- Duration: 0ms\n- Synthesis attempts: 1\n- Providers: openrouter\n"
     )

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Multi-LLM Council Framework (v0.8.1) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Published as `the-llm-council` on PyPI.
+Multi-LLM Council Framework (v0.8.3 release target) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Package name: `the-llm-council` on PyPI. See [0.8.3 release notes](docs/releases/0.8.3.md) for pending verification and publication status.
 
 - **Python**: >=3.10 (tested 3.10, 3.11, 3.12)
 - **Build**: hatchling
@@ -29,7 +29,49 @@ Use an explicit installed executable and CWD, wait for the existing process,
 then read its full result file even on nonzero exit. Inspect `execution_status`,
 provider errors, degradation and actual request-compilation metadata. Native
 CLI compatibility and effort support are versioned; see the release notes.
+Exact Codex 0.160.1 is admitted, not future versions or every model. Its tested
+catalog omits the unchanged `gpt-5.4` default; explicitly select a supported model
+through `--models` or provider configuration. Version-specific tool controls
+preserve authentication, selected model and reasoning effort.
 No caller should source host secrets to bypass its credential policy.
+
+`success: true` and exit 0 can describe a degraded result, not a complete review.
+Ingestion counts in `execution_plan.context_preparation.files` do not prove
+delivery: inspect `context_preparation.coverage` and `phase_prompt_compaction`
+under the execution plan, including profile 0. `evidence_compacted` excludes
+schema-only omission. `submitted` distinguishes unsent candidates from adapter
+dispatch; only submitted evidence cuts count toward compaction-based degradation.
+Council's pipeline cuts are not defects in the reviewed source.
+The added prepared-coverage prompt boundary applies only to the built-in reviewer,
+not security/custom schemas. Schema-validation exhaustion fails while preserving
+drafts, critique and errors; arbitrary prose no longer manufactures reviewer
+findings. Invalid raw synthesis is artifact-only if storage succeeds. A synthesis
+exception can still fall back to a schema-valid JSON draft as degraded output;
+schema validity does not establish semantic truth. Public result schemas are unchanged;
+the optional, non-abstract `resolve_model` adapter hook is additive.
+
+Read executed `degradation_report.total_retries` separately from `planned_retries`,
+and inspect `synthesis_attempts` (adapter starts, not queued requests), completed
+cancellation evidence,
+`execution_plan.artifact_occurrences` and `execution_plan.persistence`. Hard-killed
+`running` ledger rows do not prove liveness; never automatically repair them or
+restart paid runs. Runtime identity and `execution_plan.provider_attempts` must
+distinguish selected CLI path/realpath/version, `requested_model`,
+`adapter_resolved_model` and `adapter_reported_model`. Resolution can use the
+instantiated adapter default; it is not explicit selection or provider confirmation.
+Defaults resolve before capability policy without an environment re-read or
+default change. OpenAI `gpt-5.4` schema forwarding is restored, but Council's
+unchanged policy forwards reasoning controls only for o-series, not `gpt-5.4`.
+The shared engine identity helper covers library callers too. `TOOL_LOG`
+`council_execution` manifests retain allowlisted `started`/`settled` metadata;
+the settled snapshot says `ledger_finalization: not_yet_attempted`, so read the
+terminal ledger separately. A hard kill may preserve only the start snapshot;
+learned native identity is not durable there until settlement is persisted.
+No heartbeat or automatic repair is added.
+Reject `provider:model` mappings while preserving official slash/colon model IDs.
+Use the portable contract for approved exact-version uv tool reinstalls; isolated
+test installs do not update the real executable or pin. Do not delete native
+installations or change PATH to hide selection mismatches.
 
 ```
 Council (facade) → Orchestrator → Provider Adapters
@@ -118,11 +160,11 @@ council run <subagent> "<task>" [OPTIONS]
 |--------|-------------|
 | `--mode` | Agent mode (impl/arch/test, review/security, plan/assess) |
 | `--providers, -p` | Comma-separated provider list |
-| `--models, -m` | Comma-separated OpenRouter model IDs for multi-model council |
+| `--models, -m` | Literal model IDs in provider order, or multiple OpenRouter IDs; not `provider:model` mappings |
 | `--timeout, -t` | Request timeout in seconds |
 | `--temperature` | Model temperature (0.0-2.0) |
 | `--max-tokens` | Max output tokens |
-| `--files, -f` | File paths as context (repeatable or comma-separated; 50KB/file, 200KB total) |
+| `--files, -f` | File paths as context (repeatable or comma-separated; 50,000 characters/file, 200,000 retained characters total) |
 | `--input, -i` | Read task from file (use `-` for stdin) |
 | `--output, -o` | Write output to file |
 | `--context, --system` | Additional system context/instructions |
@@ -263,7 +305,8 @@ config = CouncilConfig(
 council = Council(config=config)
 result = await council.run(task="Build a login page", subagent="drafter")
 print(result.output)      # Validated JSON output
-print(result.success)     # bool
+print(result.execution_status) # Inspect diagnostics, not success alone
+print(result.success)     # Legacy bool; also true for degraded output
 print(result.duration_ms) # Execution time
 print(result.cost_estimate.estimated_cost_usd)
 ```

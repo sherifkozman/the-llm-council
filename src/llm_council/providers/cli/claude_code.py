@@ -27,7 +27,11 @@ from llm_council.providers.base import (
     ProviderCapabilities,
     classify_error,
 )
-from llm_council.providers.cli._compatibility import check_verified_version
+from llm_council.providers.cli._compatibility import (
+    check_verified_version,
+    native_identity,
+    selected_cli_path,
+)
 from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
@@ -121,7 +125,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         default_model: str | None = None,
         timeout: int = 120,
     ) -> None:
-        self._cli_path = cli_path or shutil.which("claude")
+        self._cli_path = selected_cli_path(cli_path, "claude")
         self._default_model = default_model or DEFAULT_MODEL
         self._timeout = timeout
 
@@ -486,7 +490,12 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         return RuntimeError(f"Claude Code {reason} ({category.value}, exit {code}): {details}")
 
     async def _verify_native_contract(
-        self, *, env: dict[str, str], cwd: str, deadline: float
+        self,
+        *,
+        env: dict[str, str],
+        cwd: str,
+        deadline: float,
+        identity: dict[str, str | None] | None = None,
     ) -> str:
         if not self._cli_path:
             raise RuntimeError("Claude Code CLI not found")
@@ -496,7 +505,9 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             cwd=cwd,
             deadline=deadline,
         )
-        version = stdout.decode("utf-8", errors="replace").strip()
+        version = self._redact(stdout.decode("utf-8", errors="replace").strip(), env)
+        if identity is not None:
+            identity["cli_version"] = version
         try:
             check_verified_version(version, _VERIFIED_VERSIONS, path=self._cli_path, code=code)
         except RuntimeError as exc:
@@ -571,6 +582,18 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
+        identity = native_identity(self._cli_path)
+        try:
+            response = await self._generate(request, identity)
+        except BaseException as exc:
+            exc.__dict__["native_identity"] = dict(identity)
+            raise
+        response.raw = {**(response.raw or {}), "native_identity": dict(identity)}
+        return response
+
+    async def _generate(
+        self, request: GenerateRequest, identity: dict[str, str | None]
+    ) -> GenerateResponse:
         deadline = asyncio.get_running_loop().time() + self._request_timeout(request)
         if request.stream:
             raise NotImplementedError("Streaming not supported for CLI providers")
@@ -583,7 +606,9 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             cwd = str(Path(scratch) / "work")
             Path(cwd).mkdir()
             env = self._isolated_env(source, environment, scratch)
-            version = await self._verify_native_contract(env=env, cwd=cwd, deadline=deadline)
+            version = await self._verify_native_contract(
+                env=env, cwd=cwd, deadline=deadline, identity=identity
+            )
             self._assert_unmanaged_environment(environment)
             self._assert_unmanaged_environment(env)
             code, stdout, stderr = await self._run_cli(

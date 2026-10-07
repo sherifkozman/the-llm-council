@@ -382,6 +382,64 @@ async def test_verified_release_reports_observed_claude_version(provider, fake_c
     assert len(fake_cli.calls) == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "version", "generation", "auth", "spawn"])
+async def test_claude_native_identity_survives_success_and_failures(
+    provider, fake_cli, monkeypatch, failure
+):
+    version = "2.999.0" if failure == "version" else "2.1.292"
+    fake_cli.version = f"{version} (Claude Code)".encode()
+    if failure == "generation":
+        fake_cli.stdout = b"{}"
+    if failure == "auth":
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-key")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "synthetic-token")
+    if failure == "spawn":
+
+        async def failed_spawn(*args, **kwargs):
+            raise FileNotFoundError("synthetic absent executable")
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", failed_spawn)
+    request = GenerateRequest(prompt="test")
+    if failure:
+        with pytest.raises((ValueError, RuntimeError, FileNotFoundError)) as caught:
+            await provider.generate(request)
+        identity = getattr(caught.value, "native_identity", None)
+    else:
+        result = await provider.generate(request)
+        identity = result.raw.get("native_identity")
+    assert identity == {
+        "cli_path": "/synthetic/claude",
+        "cli_realpath": "/synthetic/claude",
+        "cli_version": None if failure in ("auth", "spawn") else f"{version} (Claude Code)",
+    }
+    if failure == "version":
+        assert len(fake_cli.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_claude_identity_is_per_call_not_shared_provider_state(
+    provider, fake_cli, monkeypatch
+):
+    spawn = fake_cli.spawn
+    versions = iter([b"2.1.288 (Claude Code)", b"2.1.292 (Claude Code)"])
+
+    async def changing_version(*cmd, **kwargs):
+        if "--version" in cmd:
+            fake_cli.version = next(versions)
+        return await spawn(*cmd, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", changing_version)
+    responses = await asyncio.gather(
+        provider.generate(GenerateRequest(prompt="first")),
+        provider.generate(GenerateRequest(prompt="second")),
+    )
+    assert {response.raw["native_identity"]["cli_version"] for response in responses} == {
+        "2.1.288 (Claude Code)",
+        "2.1.292 (Claude Code)",
+    }
+
+
 @pytest.mark.parametrize(
     "version", ["2.1.287", "2.1.293", "2.1.999", "2.2.0", "3.1.288", "2.1.289-beta"]
 )
@@ -408,6 +466,7 @@ async def test_unknown_version_diagnostics_still_redact_auth(provider, fake_cli,
     with pytest.raises(RuntimeError) as caught:
         await provider.generate(GenerateRequest(prompt="test"))
     assert "synthetic-version-secret" not in str(caught.value)
+    assert "synthetic-version-secret" not in json.dumps(caught.value.native_identity)
     assert "[REDACTED]" in str(caught.value)
     assert "/synthetic/claude" in str(caught.value)
     assert len(fake_cli.calls) == 1
@@ -553,8 +612,11 @@ async def test_deadline_covers_each_phase_and_cleans_owned_processes(
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", slow_spawn)
-    with pytest.raises(RuntimeError, match="timed out|deadline"):
+    with pytest.raises(RuntimeError, match="timed out|deadline") as caught:
         await provider.generate(GenerateRequest(prompt="hi", timeout_seconds=0.01))
+    assert caught.value.native_identity["cli_version"] == (
+        "2.1.288 (Claude Code)" if phase == "generation" else None
+    )
     assert all(proc.cleaned for _, _, proc in fake_cli.calls)
     if phase != "generation":
         assert not any("-p" in cmd for cmd, _, _ in fake_cli.calls)

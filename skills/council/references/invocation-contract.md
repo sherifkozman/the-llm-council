@@ -1,6 +1,6 @@
 # Portable Council Invocation Contract
 
-Requires Council 0.8.2 or later for the safety fixes. This file travels with a copied Council skill;
+Requires Council 0.8.3 or later for the reporting fixes. This file travels with a copied Council skill;
 it does not require a repository checkout or a client-specific wrapper.
 
 ## Before Calling
@@ -10,10 +10,39 @@ its version before a paid call. During candidate testing, use the candidate's
 absolute executable path and verify its installed source identity. A version
 string alone does not prove that local fixes were installed.
 
+Inspect `execution_plan.runtime_identity` for the Council entrypoint, imported
+package path/version and Python executable/version. The shared engine helper
+records this identity for library callers too, not only the CLI. Keep native
+provider identity separate: report the selected executable and observed version when available,
+and label the model as requested, not provider-confirmed. Native attempt metadata
+in `execution_plan.provider_attempts` includes `cli_path`, `cli_realpath` and
+`cli_version` when available. Keep `requested_model`, `adapter_resolved_model`
+and `adapter_reported_model` distinct. Resolution may select the instantiated
+adapter's default; it is not proof of explicit selection or provider confirmation.
+An adapter-reported value is not independent provider confirmation either. Neither a current shell
+lookup nor a configured model proves what an earlier child process selected.
+Missing identity metadata is unknown, not permission to infer it.
+
+An omitted model is resolved before capability compilation through the optional,
+non-abstract `resolve_model` adapter hook. This backward-compatible addition uses
+the instantiated adapter's default without re-reading environment variables or
+changing defaults; explicit models are preserved and unknown defaults stay unknown.
+The OpenAI `gpt-5.4` default now receives schema forwarding, but Council's unchanged
+capability policy does **not** forward reasoning controls for `gpt-5.4`. It forwards
+those controls only for o-series models, covered by separate regression checks.
+Do not describe `gpt-5.4` as receiving high reasoning based on requested options;
+inspect compilation metadata. The capability matrix is unchanged.
+
 Select providers and their model IDs explicitly. Keep model order aligned with
 provider order. Use models verified for those accounts, not a model substituted
 after a failure. For substantial review, use a mixed-provider run and inspect
 every selected draft; an exit code is not evidence of independent participation.
+
+`--models` is a positional list of literal IDs, not a `provider:model` mapping.
+For example, `codex:gpt-5.4` and `vertex-ai:gemini-3.1-pro-preview` are invalid.
+Official IDs can contain slashes or colons: keep `openai/gpt-5.4` and
+`qwen/qwen3.6-plus:free` intact for providers that accept them. Do not strip vendor
+namespaces or suffixes, or invent a different model after validation fails.
 
 Use an explicit working directory, UTF-8 task file (`--input`), absolute reference
 paths (`--files`), and a new result path for every invocation. Alternatively send
@@ -61,18 +90,46 @@ Council uses an explicit native-version allowlist, not a patch-version range:
 
 | Provider | Accepted native versions |
 | --- | --- |
-| `codex` | 0.149.1, 0.153.3 |
+| `codex` | 0.149.1, 0.153.3, 0.160.1 |
 | `claude` | 2.1.288, 2.1.289, 2.1.290, 2.1.291, 2.1.292 |
 
-These entries are backed by synthetic native-contract checks. They do not prove
-live provider access, review quality, or compatibility with future auto-updates.
-See the release notes for the recorded checks and final verification scope.
+Fresh contained native checks cover Codex 0.149.1 and 0.160.1; 0.153.3 retains
+synthetic coverage with no fresh native run. See the release notes for the
+recorded Codex and Claude checks and final verification scope. These checks do
+not prove live provider access, review quality or future auto-update compatibility.
+
+The Codex default remains `gpt-5.4`; it is absent from the tested 0.160.1 catalog.
+Use `--models` or provider configuration to explicitly select a model supported
+by the selected CLI and account. The 0.160.1 native checks used `gpt-6.1-sol`;
+they do not establish universal model support. The 0.160.1 tool settings are
+exact-version-specific and preserve authentication, selected model and reasoning
+effort. Do not silently switch models or weaken effort to bypass a catalog error.
+
 Unknown versions remain explicitly unsupported, even if their help output lists
 the same flags. On an unsupported-version error, report the executable path and
 observed version in doctor diagnostics from the actual caller environment. Do
 not edit package version constants or bypass the check; use a verified version
 or wait for a release that verifies the new one. This resolves the known
 versions, not generic future native-CLI compatibility.
+
+### Updating The Installed Tool
+
+After publication, an approved exact-version uv tool reinstall is:
+
+```bash
+uv tool install --reinstall 'the-llm-council[all]==0.8.3'
+```
+
+First preserve local package edits and the uv receipt without copying credentials.
+This updates the uv-managed tool, its exposed executable and stored version pin.
+An isolated test environment does not update the command used by real clients.
+`uv tool upgrade` respects the old constraint; an exact pin needs explicit
+replacement. Verify the resolved Council path, imported source/version and receipt
+in each actual caller environment. See
+[uv's tool upgrade rules](https://docs.astral.sh/uv/concepts/tools/#upgrading-tools).
+Report native selection mismatches, but do not delete native installations or
+change PATH. These instructions neither authorize an install nor prove release
+publication, provider reachability or cross-client compatibility.
 
 ## Run And Wait
 
@@ -103,6 +160,22 @@ from deadlines. If a valid high-effort request exceeds its deadline, inspect the
 captured diagnostics before choosing a larger explicit timeout and outer budget;
 do not lower reasoning, swap models, or repeat the failed run automatically.
 
+### Result Read Sequence
+
+1. With `--json --output`, empty stdout is expected; the result goes to the
+   exact output path supplied for this invocation.
+2. An early `FileNotFoundError` is provisional, not a terminal result. Wait on
+   the same process handle; do not start a replacement Council run.
+3. After terminal completion, perform a fresh read of that exact output path,
+   even on nonzero exit and even if an earlier read found no file. Do not reuse
+   a cached missing-file observation.
+4. Parse the result envelope: the schema-defined final payload is under `output`,
+   not guessed `final`, `review` or `result` keys. Inspect `execution_status` and
+   diagnostics separately; the payload can be absent on failure.
+5. If the fresh read fails, report the read failure, exact path and terminal
+   process outcome. Do not automatically rerun Council or claim a missing result
+   from the earlier provisional observation.
+
 ### Python Subprocess
 
 ```python
@@ -117,8 +190,8 @@ import tempfile
 binary = os.environ["COUNCIL_BIN"]
 version = subprocess.run([binary, "--version"], check=True, capture_output=True, text=True)
 match = re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)", version.stdout.strip())
-if not match or tuple(map(int, match.groups())) < (0, 8, 2):
-    raise SystemExit("Council 0.8.2 or later is required")
+if not match or tuple(map(int, match.groups())) < (0, 8, 3):
+    raise SystemExit("Council 0.8.3 or later is required")
 result_file = Path(tempfile.mkdtemp(prefix="council-result-")) / "result.json"
 argv = [binary, "run", "critic", "--mode", "review",
         "--providers", os.environ["COUNCIL_PROVIDERS"],
@@ -167,7 +240,7 @@ short. The temporary result directory is retained for inspection.
 ```sh
 set -eu
 version=$("$COUNCIL_BIN" --version)
-python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,2) else "Council 0.8.2 or later is required")' "$version"
+python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,3) else "Council 0.8.3 or later is required")' "$version"
 run_dir=$(mktemp -d)
 result_file="$run_dir/result.json"
 cd "$COUNCIL_WORKDIR"
@@ -210,7 +283,7 @@ host failures. Use a unique path so an old artifact cannot be mistaken for this 
 | Execution status | Legacy success | CLI exit | Meaning |
 | --- | --- | --- | --- |
 | completed | true | 0 | Required execution completed without known lost coverage. |
-| degraded | true | 0 | Valid output, but selected coverage, a required phase or input was lost, or fallback was used. |
+| degraded | true | 0 | Valid output with coverage/phase loss, fallback or persistence errors. Inspect diagnostics. |
 | failed | false | 1 | Execution/input/output failure. Inspect the available result and stderr. |
 | cancelled | false | 130 or 143 | Gracefully handled SIGINT or SIGTERM. Inspect cleanup diagnostics. |
 | not_executed | not a result | 0 | JSON dry-run, with kind=plan. No provider-health or execution claim. |
@@ -229,6 +302,28 @@ path and original/retained counts, even with graceful degradation disabled.
 Do not claim a full-file review when a file was truncated. State the retained
 scope and review omitted material separately instead of treating exit 0 as proof.
 
+These file counters describe ingestion, not what reached providers. Inspect
+`execution_plan.context_preparation.coverage` for `source_chars`,
+`delivered_source_chars`, `complete`, `selection_applied`, `source_sections` and
+`delivered_sections`. Selection can discard
+source sections even when ingestion reports `truncated: false`. These counts
+describe prepared source coverage, not proof of delivery to every downstream
+phase or proof that a provider used all evidence.
+
+Inspect `execution_plan.phase_prompt_compaction` for source and draft reductions
+at each phase, including `original_prompt_chars`, `delivered_prompt_chars` and
+profile index 0. `submitted` distinguishes an unsent candidate from adapter
+dispatch; only submitted evidence cuts contribute to compaction-based degradation.
+`evidence_compacted` excludes schema-only omission. Submitted source/draft cuts
+promote an otherwise valid result to `degraded`; schema-only omission is not
+itself evidence loss. The first profile can truncate
+drafts; do not assume compaction starts at profile 1. Compare retained draft
+artifacts with the text sent downstream before assigning responsibility for an
+incomplete heading or missing finding. Council's slicing, draft truncation and
+schema omission are pipeline limitations, not source-code findings or proof of
+provider generation failure. Report them separately from defects in the reviewed
+material. Untracked or partial delivery is not a full-source review.
+
 New execution plans distinguish `requested_capabilities` (effective caller or
 router requirements) from the default local-evidence collection profile.
 A requested capability still listed in `pending_capabilities` makes execution
@@ -245,6 +340,22 @@ Check actual providers/models, required phase participation, evidence retained,
 and any context truncation/slicing/chunking. A valid execution does not prove the
 model's conclusions. Do not accept fallback or missing drafts as full coverage.
 Do not retry a valid degraded run automatically; assess the specific failure first.
+For the built-in reviewer, critique/synthesis receive bounded prepared-coverage
+metadata as data, not source evidence or proof of every-phase delivery. The added
+prompt boundary separates pipeline limitations from source findings while allowing
+genuine defects in pipeline code when supported by supplied source. Security and
+custom schemas do not receive this added reviewer boundary. Public result schemas
+are unchanged; the optional adapter hook is additive. No task-intent detector or
+semantic regex filter is added.
+
+When synthesis exhausts schema validation, the result is `failed`, with drafts,
+critique and validation errors preserved. Council no longer manufactures reviewer
+findings from arbitrary prose by inferring severity, category, location or
+remediation. Raw invalid synthesis is retained only as an artifact if storage
+succeeds, not as valid result output. Exception-triggered fallback to an existing
+schema-valid JSON draft remains available and is degraded. Schema validity does
+not establish semantic truth or approval; inspect the actual finding evidence.
+
 For large reviews, synthesis retains compact draft evidence rather than silently
 dropping every draft. No usable drafts, or no evidence-bearing synthesis prompt
 that fits the budget, must not be accepted as a full review. Inspect the failure
@@ -264,6 +375,43 @@ can increase cost and do not guarantee success; do not retry automatically.
 When critique compaction records `omit_schema: 1`, full output-schema details were
 omitted from that critique. Inspect its warning; do not claim equivalent
 schema-specific scrutiny. Synthesis's configured schema handling is unchanged.
+
+### Attempts, Cancellation And Persistence
+
+`degradation_report.total_retries` describes extra calls actually started, not
+the configured budget. `planned_retries` separately records retry decisions that
+may not execute, for example when cancelled during backoff. `synthesis_attempts`
+counts actual synthesis adapter starts, excluding queued requests that never
+start, and includes failures before draft fallback; check
+phase timings and errors as well as the final output. An empty `fallbacks_used`
+list alone does not rule out final-output fallback. Recovery of required coverage
+can still produce `completed`; attempts are not quality scores.
+
+Handled cancellation retains completed drafts, critique, timings and artifact
+references where available. This does not promise evidence from unfinished calls,
+or a final JSON file after SIGKILL or host failure. Inspect cleanup diagnostics
+and the original caller process handle. A hard-killed run may leave a ledger row
+marked `running`: that row does not prove liveness. Conversely, caller termination
+does not establish that every descendant exited. Do not automatically repair
+ledger rows, overwrite evidence or start a replacement paid run.
+
+`execution_plan.artifact_occurrences` associates persisted artifact IDs with
+phase/provider occurrences. Identical draft and synthesis text must not be treated
+as a single phase occurrence just because content hashes match. Inspect
+`execution_plan.persistence` for errors and ledger finalization diagnostics;
+storage failure can leave useful output but incomplete persisted evidence.
+Disabled persistence is not an error. Missing artifacts do not prove no calls ran,
+and a result does not prove every storage write succeeded. Persistence diagnostics
+do not authorize automatic ledger repair.
+
+With persistence enabled, Council writes two `TOOL_LOG` manifests with
+`manifest_type: council_execution`: `started` and `settled`. They retain only
+allowlisted runtime, attempt, artifact-occurrence, coverage and persistence-error
+metadata, not task/draft text, config or credentials. The settled snapshot says
+`ledger_finalization: not_yet_attempted`; read the terminal ledger separately.
+A hard kill may leave only the started manifest. Native identity learned during
+execution is not durable in these manifests until settlement is persisted.
+These are snapshots, not a heartbeat or automatic repair mechanism.
 
 For `router --route`, the returned child `run_id` is also the final workflow
 handle; its ledger status reflects combined router/child coverage. The child's

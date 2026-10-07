@@ -734,7 +734,7 @@ class TestMarkdownOutputFormat:
             resolved_mode="impl",
             provider_list=["openrouter"],
         )
-        assert md.startswith("# Council Result: SUCCESS")
+        assert md.startswith("# Council Result: COMPLETED")
         assert "## Output" in md
         assert '"result": "ship it"' in md
         assert "## Critique" in md
@@ -793,7 +793,7 @@ class TestMarkdownOutputFormat:
 
             result = runner.invoke(app, ["run", "router", "Test task", "--format", "markdown"])
             assert result.exit_code == 0
-            assert "# Council Result: SUCCESS" in result.stdout
+            assert "# Council Result: COMPLETED" in result.stdout
             assert "## Metrics" in result.stdout
 
     def test_run_format_md_alias(self):
@@ -813,7 +813,7 @@ class TestMarkdownOutputFormat:
 
             result = runner.invoke(app, ["run", "router", "Test task", "--format", "md"])
             assert result.exit_code == 0
-            assert "# Council Result: SUCCESS" in result.stdout
+            assert "# Council Result: COMPLETED" in result.stdout
 
     def test_run_format_json_matches_json_flag(self):
         """--format json behaves like --json (raw JSON, no rich panel)."""
@@ -882,7 +882,7 @@ class TestMarkdownOutputFormat:
             assert out_file.exists()
             content = out_file.read_text()
             assert content == (
-                "# Council Result: SUCCESS\n\n## Output\n\n```json\n"
+                "# Council Result: COMPLETED\n\n## Output\n\n```json\n"
                 '{\n  "result": "ship it"\n}\n```\n\n## Metrics\n\n'
                 "- Duration: 0ms\n- Synthesis attempts: 1\n- Providers: openrouter\n"
             )
@@ -905,7 +905,7 @@ class TestMarkdownOutputFormat:
 
             result = runner.invoke(app, ["run", "router", "Test task"])
             assert result.exit_code == 0
-            assert "# Council Result: SUCCESS" in result.stdout
+            assert "# Council Result: COMPLETED" in result.stdout
 
 
 class TestCLIContextMetadata:

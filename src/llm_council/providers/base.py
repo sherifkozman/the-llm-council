@@ -519,6 +519,17 @@ class ProviderAdapter(ABC):
     name: ClassVar[str]
     capabilities: ClassVar[ProviderCapabilities]
 
+    def resolve_model(self, requested: str | None) -> str | None:
+        """Resolve the instantiated adapter's model without I/O or changing defaults.
+
+        Built-ins keep their selected default in ``_default_model``. Other adapters
+        may override this hook; an unknown default remains unknown.
+        """
+        if requested:
+            return requested
+        default = getattr(self, "_default_model", None)
+        return default if isinstance(default, str) else None
+
     @abstractmethod
     async def generate(self, request: GenerateRequest) -> GenerateResult:
         """Generate a response for the given request."""
