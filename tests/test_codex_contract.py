@@ -2,11 +2,14 @@
 
 import asyncio
 import base64
+import errno
 import json
 import os
 import shlex
 import shutil
 import signal
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -20,7 +23,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from llm_council.engine.orchestrator import Orchestrator
-from llm_council.providers.base import GenerateRequest, Message, ReasoningConfig
+from llm_council.providers.base import (
+    GenerateRequest,
+    Message,
+    ReasoningConfig,
+    StructuredOutputConfig,
+)
+from llm_council.providers.cli import codex as codex_module
 from llm_council.providers.cli.codex import CodexCLIProvider
 from llm_council.providers.compiler import compile_request_for_provider
 
@@ -54,9 +63,75 @@ MCP_CREDENTIALS = {
 
 
 def _native_codex_binary(monkeypatch):
+    _require_loopback_network_sandbox()
     binary = os.environ.get("COUNCIL_TEST_CODEX_BINARY") or shutil.which("codex")
     assert binary
     return binary
+
+
+def _native_request_channels(request):
+    if "tools" in request:
+        return request["tools"], request["instructions"]
+    # The exact 0.160.1 Responses Lite contract moves both channels into input.
+    tools, instructions = request["input"][:2]
+    assert tools["type"] == "additional_tools"
+    assert tools["role"] == "developer"
+    assert isinstance(tools["tools"], list)
+    assert instructions["type"] == "message", instructions
+    assert instructions["role"] == "developer", instructions
+    assert len(instructions["content"]) == 1, instructions
+    assert instructions["content"][0]["type"] == "input_text", instructions
+    return tools["tools"], instructions["content"][0]["text"]
+
+
+def _require_loopback_network_sandbox():
+    """Refuse native execution without OS-enforced network containment."""
+    with socket.socket() as probe:
+        probe.settimeout(0.2)
+        try:
+            probe.connect(("192.0.2.1", 9))
+        except OSError as exc:
+            assert exc.errno in (errno.EPERM, errno.EACCES), (
+                "Native tests require an OS loopback-only network sandbox"
+            )
+        else:
+            pytest.fail("Native test network containment is absent")
+
+
+def _loopback_tls_context(tmp_path):
+    certificate = tmp_path / "loopback.pem"
+    key = tmp_path / "loopback.key"
+    config = tmp_path / "loopback.cnf"
+    config.write_text(
+        "[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n"
+        "[dn]\nCN=localhost\n[ext]\nsubjectAltName=IP:127.0.0.1\n"
+        "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
+        "extendedKeyUsage=serverAuth\n"
+    )
+    subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-config",
+            str(config),
+            "-keyout",
+            str(key),
+            "-out",
+            str(certificate),
+        ],
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificate, key)
+    return context, certificate
 
 
 @pytest.fixture
@@ -143,6 +218,84 @@ async def test_generation_only_catalog_preserves_identity(isolated_env, monkeypa
     ):
         assert setting in request["args"]
     assert "--strict-config" in request["args"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["0.149.1", "0.153.3", "0.160.1"])
+async def test_goal_tool_control_is_exact_version_only(isolated_env, monkeypatch, version):
+    calls = stub_cli(monkeypatch, version=version)
+    await CodexCLIProvider(cli_path="synthetic").generate(GenerateRequest(prompt="test"))
+    assert ("features.goals=false" in calls[-1]["args"]) is (version == "0.160.1")
+
+
+@pytest.mark.asyncio
+async def test_01601_catalog_removes_only_verified_tool_controls(isolated_env, monkeypatch):
+    monkeypatch.setattr(codex_module, "_VERIFIED_VERSIONS", ("codex-cli 0.160.1",))
+    catalog = json.loads(json.dumps(CATALOG))
+    selected = catalog["models"][0]
+    selected.update(
+        {
+            "slug": "gpt-6.1-sol",
+            "experimental_supported_tools": ["send_user_message_async", "clock"],
+            "tool_mode": "code_mode_only",
+            "multi_agent_version": "v2",
+            "multi_agent_reasoning_effort": "xhigh",
+            "use_responses_lite": True,
+        }
+    )
+    catalog["models"].append(CATALOG["models"][0])
+    calls = stub_cli(monkeypatch, version="0.160.1", catalog=catalog)
+    result = await CodexCLIProvider(cli_path="synthetic").generate(
+        GenerateRequest(
+            prompt="test",
+            model="gpt-6.1-sol",
+            reasoning=ReasoningConfig(enabled=True, effort="high"),
+        )
+    )
+    expected = json.loads(json.dumps(catalog))
+    expected["models"][0].update(
+        {
+            "apply_patch_tool_type": None,
+            "experimental_supported_tools": [],
+            "tool_mode": "direct",
+            "multi_agent_version": "disabled",
+        }
+    )
+    assert calls[-1]["catalog"] == expected
+    assert result.raw["native_identity"]["cli_version"] == "codex-cli 0.160.1"
+    assert result.raw["reasoning"] == {"status": "mapped", "effort": "high"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("experimental_supported_tools", ["unverified_tool"]),
+        ("tool_mode", "unverified_mode"),
+        ("multi_agent_version", "unverified_version"),
+    ],
+)
+async def test_01601_unknown_tool_controls_fail_closed(isolated_env, monkeypatch, field, value):
+    monkeypatch.setattr(codex_module, "_VERIFIED_VERSIONS", ("codex-cli 0.160.1",))
+    catalog = json.loads(json.dumps(CATALOG))
+    catalog["models"][0][field] = value
+    calls = stub_cli(monkeypatch, version="0.160.1", catalog=catalog)
+    with pytest.raises(ValueError, match="catalog tool shape"):
+        await CodexCLIProvider(cli_path="synthetic").generate(GenerateRequest(prompt="test"))
+    assert not any("exec" in call["args"] for call in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["0.149.1", "0.153.3"])
+async def test_older_versions_do_not_gain_01601_catalog_handling(
+    isolated_env, monkeypatch, version
+):
+    catalog = json.loads(json.dumps(CATALOG))
+    catalog["models"][0]["experimental_supported_tools"] = ["send_user_message_async", "clock"]
+    calls = stub_cli(monkeypatch, version=version, catalog=catalog)
+    with pytest.raises(ValueError, match="catalog tool shape"):
+        await CodexCLIProvider(cli_path="synthetic").generate(GenerateRequest(prompt="test"))
+    assert not any("exec" in call["args"] for call in calls)
 
 
 @pytest.mark.asyncio
@@ -425,10 +578,11 @@ async def test_multiple_messages_select_last_at_clean_terminal_exit(isolated_env
 async def test_terminal_event_with_lingering_process_times_out(isolated_env, monkeypatch):
     code = f"import time; print({FINAL + DONE!r}, flush=True); time.sleep(30)"
     calls = stub_cli(monkeypatch, code=code)
-    with pytest.raises(RuntimeError, match="timed out"):
+    with pytest.raises(RuntimeError, match="timed out") as caught:
         await CodexCLIProvider(cli_path="synthetic").generate(
             GenerateRequest(prompt="test", timeout_seconds=0.25)
         )
+    assert caught.value.native_identity["cli_version"] == "codex-cli 0.149.1"
     assert calls[-1]["proc"].returncode is not None
 
 
@@ -550,7 +704,7 @@ async def test_unverified_version_rejected_before_generation(isolated_env, monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version", ["0.149.1", "0.153.3"])
+@pytest.mark.parametrize("version", ["0.149.1", "0.153.3", "0.160.1"])
 async def test_verified_release_reports_observed_codex_version(isolated_env, monkeypatch, version):
     calls = stub_cli(monkeypatch, version=version)
     result = await CodexCLIProvider(cli_path="/synthetic/codex").generate(
@@ -563,7 +717,65 @@ async def test_verified_release_reports_observed_codex_version(isolated_env, mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version", ["0.149.1", "0.153.3"])
+@pytest.mark.parametrize("failure", [None, "version", "catalog", "generation", "auth", "spawn"])
+async def test_codex_native_identity_survives_success_and_failures(
+    isolated_env, monkeypatch, failure
+):
+    version = "0.999.0" if failure == "version" else "0.153.3"
+    calls = stub_cli(
+        monkeypatch,
+        version=version,
+        catalog={} if failure == "catalog" else CATALOG,
+        output="" if failure == "generation" else FINAL + DONE,
+    )
+    if failure == "auth":
+        monkeypatch.delenv("CODEX_API_KEY")
+    if failure == "spawn":
+
+        async def failed_spawn(*args, **kwargs):
+            raise FileNotFoundError("synthetic absent executable")
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", failed_spawn)
+    provider = CodexCLIProvider(cli_path="/synthetic/codex")
+    request = GenerateRequest(prompt="test")
+    if failure:
+        with pytest.raises((ValueError, RuntimeError, FileNotFoundError)) as caught:
+            await provider.generate(request)
+        identity = getattr(caught.value, "native_identity", None)
+    else:
+        result = await provider.generate(request)
+        identity = result.raw.get("native_identity")
+    assert identity == {
+        "cli_path": "/synthetic/codex",
+        "cli_realpath": "/synthetic/codex",
+        "cli_version": None if failure in ("auth", "spawn") else f"codex-cli {version}",
+    }
+    if failure == "version":
+        assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_codex_selected_relative_symlink_is_absolute_before_changing_cwd(
+    isolated_env, tmp_path, monkeypatch
+):
+    target = tmp_path / "native-codex"
+    target.touch()
+    (tmp_path / "codex-link").symlink_to(target)
+    monkeypatch.chdir(tmp_path)
+    provider = CodexCLIProvider(cli_path="./codex-link")
+    calls = stub_cli(monkeypatch)
+    monkeypatch.chdir(isolated_env)
+    result = await provider.generate(GenerateRequest(prompt="test"))
+    assert result.raw.get("native_identity") == {
+        "cli_path": str(tmp_path / "codex-link"),
+        "cli_realpath": str(target),
+        "cli_version": "codex-cli 0.149.1",
+    }
+    assert all(call["args"][0] == str(tmp_path / "codex-link") for call in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["0.149.1", "0.153.3", "0.160.1"])
 async def test_codex_doctor_reports_existing_verified_identity_without_extra_probe(
     isolated_env, monkeypatch, version
 ):
@@ -583,7 +795,17 @@ async def test_codex_doctor_reports_existing_verified_identity_without_extra_pro
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "version",
-    ["0.149.0", "0.149.2", "0.153.2", "0.153.4", "0.160.0", "1.149.1", "0.149.2-beta"],
+    [
+        "0.149.0",
+        "0.149.2",
+        "0.153.2",
+        "0.153.4",
+        "0.160.0",
+        "0.160.2",
+        "0.160.1-beta",
+        "1.149.1",
+        "0.149.2-beta",
+    ],
 )
 async def test_codex_version_boundary_has_observed_diagnostics(isolated_env, monkeypatch, version):
     calls = stub_cli(monkeypatch, version=version)
@@ -674,6 +896,8 @@ async def test_codex_version_diagnostics_redact_selected_auth_without_exporting_
             Orchestrator._format_exception_chain(None, error),
             "".join(traceback.format_exception(type(error), error, error.__traceback__)),
         ]
+        if entrypoint == "generate":
+            rendered.append(json.dumps(error.native_identity))
         pending = [error]
         visited = set()
         while pending:
@@ -1092,6 +1316,49 @@ async def test_diagnostics_keep_both_channels_without_secrets(isolated_env, monk
 
 
 @pytest.mark.asyncio
+async def test_diagnostic_flags_do_not_redact_model_identity(isolated_env, monkeypatch):
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "1")
+    monkeypatch.setenv("KEYBOARD_ENABLED", "6")
+    monkeypatch.setenv("KEYCHAIN_ENABLED", "1")
+    monkeypatch.setenv("SECRET_FEATURE_ENABLED", "sol")
+    stub_cli(monkeypatch)
+    with pytest.raises(ValueError) as caught:
+        await CodexCLIProvider(cli_path="synthetic").generate(
+            GenerateRequest(prompt="test", model="gpt-6.1-sol")
+        )
+    assert "unsupported model in bundled catalog: gpt-6.1-sol" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "CODEX_API_KEY",
+        "OPENROUTER_API_KEY",
+        "FAKE_APIKEY",
+        "CUSTOM_TOKEN",
+        "AUTH_SECRET_0",
+        "service_password",
+        "KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "SSH_PRIVATE_KEY",
+        "PRIVATE_KEY",
+        "X_AUTH_KEY",
+    ],
+)
+def test_diagnostics_redact_actual_credentials_even_when_short(key):
+    assert CodexCLIProvider._redact("value: q", {key: "q"}) == "value: [REDACTED]"
+
+
+@pytest.mark.parametrize(
+    "key", ["UNUSUAL_KEY_VALUE", "TOKEN_DATA", "SECRET_SETTING", "PASSWORD_DATA"]
+)
+def test_diagnostics_retain_conservative_long_secret_redaction(key):
+    assert CodexCLIProvider._redact("value: synthetic-secret", {key: "synthetic-secret"}) == (
+        "value: [REDACTED]"
+    )
+
+
+@pytest.mark.asyncio
 async def test_unspecified_reasoning_is_uncontrolled_not_off(isolated_env, monkeypatch):
     calls = stub_cli(monkeypatch)
     result = await CodexCLIProvider(cli_path="synthetic").generate(GenerateRequest(prompt="test"))
@@ -1128,6 +1395,7 @@ async def test_unsupported_reasoning_is_not_silently_dropped(isolated_env, monke
 def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapter):
     """Pin native channels, not a model's compliance with sentinel instructions."""
     binary = _native_codex_binary(monkeypatch)
+    model = os.environ.get("COUNCIL_TEST_CODEX_MODEL", "gpt-5.4")
     home = tmp_path / "home"
     home.mkdir()
     codex_home = home / ".codex"
@@ -1151,7 +1419,7 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
         timeout=5,
         check=True,
     ).stdout.strip()
-    assert version in ("codex-cli 0.149.1", "codex-cli 0.153.3"), version
+    assert version in ("codex-cli 0.149.1", "codex-cli 0.153.3", "codex-cli 0.160.1"), version
     captured = []
 
     class Capture(BaseHTTPRequestHandler):
@@ -1209,7 +1477,7 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
         "--color",
         "never",
         "-m",
-        "gpt-5.4",
+        model,
     ]
     for key, value in config.items():
         cmd.extend(["-c", f"{key}={json.dumps(value)}"])
@@ -1241,7 +1509,7 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
             compiled = compile_request_for_provider(
                 "codex",
                 GenerateRequest(
-                    model="gpt-5.4",
+                    model=model,
                     timeout_seconds=20,
                     reasoning=reasoning,
                     messages=[
@@ -1289,11 +1557,12 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
             thread.join(timeout=2)
     assert captured, (stdout.decode(), stderr.decode())
     request = captured[0]
-    assert request["model"] == "gpt-5.4"
+    assert request["model"] == model
+    tools, system = _native_request_channels(request)
     if through_adapter:
-        assert request["tools"] == []
+        assert tools == []
         assert request["tool_choice"] == "auto"
-    assert request["instructions"] == 'SYSTEM_SENTINEL "priority"\nsecond line'
+    assert system == 'SYSTEM_SENTINEL "priority"\nsecond line'
     messages = request["input"]
     developer_text = "\n".join(
         part.get("text", "")
@@ -1317,10 +1586,10 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
                 "version": version,
                 "binary": os.path.realpath(binary),
                 "through_adapter": through_adapter,
-                "instructions": request["instructions"],
+                "instructions": system,
                 "roles": [m.get("role") for m in messages],
                 "reasoning": request.get("reasoning"),
-                "tools": request.get("tools") if through_adapter else "native baseline",
+                "tools": tools if through_adapter else "native baseline",
                 "tool_choice": request.get("tool_choice"),
                 "user_bytes": len(prompt.encode()),
             }
@@ -1341,6 +1610,11 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
         ("CODEX_API_KEY", None),
         ("custom-file", "exec_command"),
         ("custom-file", "apply_patch"),
+        ("custom-file", "create_goal"),
+        ("custom-file", "current_time"),
+        ("custom-file", "send_user_message_async"),
+        ("custom-file", "exec"),
+        ("custom-file", "spawn_agent"),
         ("chatgpt-default", None),
         ("chatgpt-custom", None),
         ("chatgpt-mixed-OPENAI-native", None),
@@ -1354,12 +1628,18 @@ def test_native_codex_serialization(tmp_path, monkeypatch, effort, through_adapt
         ("chatgpt-mcp-mixed-CODEX-adapter", None),
         ("mcp-default-file", None),
         ("mcp-custom-file", None),
+        ("structured-file", None),
+        ("incomplete-file", None),
     ],
 )
 def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
     tmp_path, monkeypatch, source, attack
 ):
     binary = _native_codex_binary(monkeypatch)
+    model = os.environ.get("COUNCIL_TEST_CODEX_MODEL", "gpt-5.4")
+    structured = source == "structured-file"
+    incomplete = source == "incomplete-file"
+    final_text = '{"result":{"ok":true}}' if structured else "NATIVE_GENERATION_ONLY"
     home = tmp_path / "parent"
     home.mkdir()
     default_root = home / ".codex"
@@ -1377,6 +1657,29 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
         "LANG": "en_US.UTF-8",
         "USER": "council-synthetic",
     }
+    version = subprocess.run(
+        [binary, "--version"],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    ).stdout.strip()
+    tls_bootstrap = version == "codex-cli 0.160.1"
+    tls, certificate = _loopback_tls_context(tmp_path) if tls_bootstrap else (None, None)
+    bundled_catalog = (
+        subprocess.run(
+            [binary, "debug", "models", "--bundled"],
+            env=env,
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+            timeout=5,
+        ).stdout
+        if tls_bootstrap
+        else b""
+    )
     key = "dummy-native-selected-key"
     if custom:
         env["CODEX_HOME"] = str(root)
@@ -1426,6 +1729,7 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
     routes = []
     headers = []
     accounts = []
+    discovery = []
 
     class Capture(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -1434,12 +1738,52 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
             pass
 
         def do_GET(self):
+            discovery.append(self.path)
+            if tls_bootstrap and self.path == "/backend-api/codex/models?client_version=0.160.1":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(bundled_catalog)))
+                self.end_headers()
+                self.wfile.write(bundled_catalog)
+                return
+            if tls_bootstrap and self.path == "/backend-api/wham/accounts/check":
+                body = json.dumps(
+                    {
+                        "accounts": [
+                            {
+                                "id": "dummy-account",
+                                "plan_type": "plus",
+                                "workspace_backend_origin": base_url,
+                                "account_routing_override": "NO_CONSTRAINT",
+                            }
+                        ]
+                    }
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             self.send_response(426)
             self.send_header("Content-Length", "0")
             self.end_headers()
 
         def do_POST(self):
+            if self.path == "/synthetic-refresh-must-not-be-used":
+                discovery.append(self.path)
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             body = self.rfile.read(int(self.headers["Content-Length"]))
+            if tls_bootstrap and not self.path.endswith("/responses"):
+                discovery.append(self.path)
+                self.send_response(
+                    204 if self.path == "/backend-api/codex/analytics-events/events" else 404
+                )
+                self.end_headers()
+                return
             if self.headers.get("Content-Encoding") == "zstd":
                 body = subprocess.run(
                     ["zstd", "-d", "-c"],
@@ -1458,24 +1802,36 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
                 "type": "message",
                 "role": "assistant",
                 "phase": "final_answer",
-                "content": [{"type": "output_text", "text": "NATIVE_GENERATION_ONLY"}],
+                "content": [{"type": "output_text", "text": final_text}],
             }
             if attack and len(captured) == 1:
-                if attack == "exec_command":
+                if attack not in ("apply_patch", "exec"):
                     item = {
                         "type": "function_call",
                         "name": attack,
                         "call_id": "synthetic-call",
                         "id": "synthetic-tool",
-                        "arguments": json.dumps({"cmd": "printf COUNCIL_UNSOLICITED_EXECUTED"}),
+                        "arguments": json.dumps(
+                            {"cmd": "printf COUNCIL_UNSOLICITED_EXECUTED"}
+                            if attack == "exec_command"
+                            else {"objective": "COUNCIL_UNSOLICITED_EXECUTED"}
+                            if attack == "create_goal"
+                            else {"message": "COUNCIL_UNSOLICITED_EXECUTED"}
+                            if attack in ("send_user_message_async", "spawn_agent")
+                            else {}
+                        ),
                     }
+                    if attack == "spawn_agent":
+                        item["namespace"] = "collaboration"
                 else:
                     item = {
                         "type": "custom_tool_call",
                         "name": attack,
                         "call_id": "synthetic-call",
                         "id": "synthetic-tool",
-                        "input": f"*** Begin Patch\n*** Add File: {canary}\n+COUNCIL_UNSOLICITED_EXECUTED\n*** End Patch",
+                        "input": 'text("COUNCIL_UNSOLICITED_EXECUTED")'
+                        if attack == "exec"
+                        else f"*** Begin Patch\n*** Add File: {canary}\n+COUNCIL_UNSOLICITED_EXECUTED\n*** End Patch",
                     }
             response = {
                 "id": "synthetic-response",
@@ -1492,26 +1848,48 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
             self.end_headers()
-            for event in [
+            events = [
                 {
                     "type": "response.created",
                     "response": {"id": "synthetic-response", "status": "in_progress", "output": []},
                 },
-                {"type": "response.output_item.done", "output_index": 0, "item": item},
-                {"type": "response.completed", "response": response},
-            ]:
+            ]
+            if structured:
+                events.append(
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "id": "synthetic-commentary",
+                            "type": "message",
+                            "role": "assistant",
+                            "phase": "commentary",
+                            "content": [{"type": "output_text", "text": "NOT_THE_FINAL_ANSWER"}],
+                        },
+                    }
+                )
+            events.append({"type": "response.output_item.done", "output_index": 1, "item": item})
+            if not incomplete:
+                events.append({"type": "response.completed", "response": response})
+            for event in events:
                 self.wfile.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
             self.wfile.flush()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Capture)
+    if tls:
+        server.socket = tls.wrap_socket(server.socket, server_side=True)
+    base_url = f"{'https' if tls else 'http'}://127.0.0.1:{server.server_port}"
+    if certificate:
+        env["CODEX_CA_CERTIFICATE"] = str(certificate)
+        env["CODEX_REFRESH_TOKEN_URL_OVERRIDE"] = base_url + "/synthetic-refresh-must-not-be-used"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     # Hostile rules and preferences are synthetic. Neither may reach the request.
     (root / "config.toml").write_text(
         (
-            f'openai_base_url = "http://127.0.0.1:{server.server_port}/backend-api/codex"\n'
+            f'openai_base_url = "{base_url}/backend-api/codex"\n'
             if chatgpt
-            else f'openai_base_url = "http://127.0.0.1:{server.server_port}/v1"\n'
+            else f'openai_base_url = "{base_url}/v1"\n'
         )
         + 'model = "UNSELECTED_MODEL"\ndeveloper_instructions = "HOSTILE_CONFIG_SENTINEL"\n'
     )
@@ -1523,6 +1901,15 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     try:
         provider = CodexCLIProvider(cli_path=binary)
+        if tls_bootstrap:
+            run_cli = provider._run_cli
+
+            async def with_local_discovery(cmd, **kwargs):
+                if "exec" in cmd:
+                    cmd = [*cmd, "-c", f'chatgpt_base_url="{base_url}/backend-api"']
+                return await run_cli(cmd, **kwargs)
+
+            monkeypatch.setattr(provider, "_run_cli", with_local_discovery)
         isolated_homes = []
         if "mcp" in source and not direct:
             create_home = provider._create_isolated_cli_home
@@ -1551,10 +1938,22 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
                 "--ephemeral",
                 "--json",
                 "-m",
-                "gpt-5.4",
+                model,
                 "-c",
-                f'openai_base_url="http://127.0.0.1:{server.server_port}/{"backend-api/codex" if chatgpt else "v1"}"',
+                f'openai_base_url="{base_url}/{"backend-api/codex" if chatgpt else "v1"}"',
             ]
+            if tls_bootstrap:
+                # This is an auth-precedence control, not a plugin startup test.
+                cmd.extend(
+                    [
+                        "-c",
+                        f'chatgpt_base_url="{base_url}/backend-api"',
+                        "-c",
+                        "features.plugins=false",
+                        "-c",
+                        "features.apps=false",
+                    ]
+                )
             proc = subprocess.Popen(
                 cmd,
                 env=env,
@@ -1565,7 +1964,15 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
                 stderr=subprocess.PIPE,
             )
             try:
-                stdout, stderr = proc.communicate(b"Return a synthetic final answer", timeout=20)
+                try:
+                    stdout, stderr = proc.communicate(
+                        b"Return a synthetic final answer", timeout=20
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    pytest.fail(
+                        f"Native baseline timed out: {(exc.stderr or b'').decode()[-2500:]}\n"
+                        f"stdout: {(exc.stdout or b'').decode()[-1500:]}\nroutes: {discovery}"
+                    )
                 assert proc.returncode == 0, stderr.decode()
                 assert b'"type":"turn.completed"' in stdout, stdout.decode()
             finally:
@@ -1577,28 +1984,64 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
         else:
             login = asyncio.run(provider._login_status_text())
             assert ("chatgpt" if selected_chatgpt else "api key") in login.lower()
-            response = asyncio.run(
-                provider.generate(
-                    GenerateRequest(
-                        model="gpt-5.4",
-                        prompt="Return a synthetic final answer",
-                        timeout_seconds=20,
-                        messages=[
-                            Message(role="system", content="SYNTHETIC_SYSTEM_ONLY"),
-                            Message(role="user", content="Return a synthetic final answer"),
-                        ],
-                    )
+            request = GenerateRequest(
+                model=model,
+                prompt="Return a synthetic final answer",
+                timeout_seconds=2 if incomplete else 20,
+                structured_output=StructuredOutputConfig(
+                    json_schema={
+                        "type": "object",
+                        "properties": {
+                            "result": {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+                        },
+                    }
                 )
+                if structured
+                else None,
+                messages=[
+                    Message(role="system", content="SYNTHETIC_SYSTEM_ONLY"),
+                    Message(role="user", content="Return a synthetic final answer"),
+                ],
             )
-            assert response.text == "NATIVE_GENERATION_ONLY"
+            if incomplete:
+                with pytest.raises(RuntimeError):
+                    asyncio.run(provider.generate(request))
+                assert captured
+                assert not list(tmp_path.glob("llm-council-codex-home-*"))
+                return
+            response = asyncio.run(provider.generate(request))
+            assert response.text == final_text
             assert response.raw["auth_category"] == ("chatgpt" if selected_chatgpt else "apikey")
         assert captured
+        if tls_bootstrap:
+            assert set(discovery) <= {
+                "/v1/responses",
+                "/backend-api/wham/accounts/check",
+                "/backend-api/codex/responses",
+                "/backend-api/codex/analytics-events/events",
+                "/backend-api/wham/settings/user",
+                "/backend-api/plugins/featured?platform=codex",
+                "/backend-api/codex/models?client_version=0.160.1",
+            }, discovery
+            assert "/synthetic-refresh-must-not-be-used" not in discovery
+            if selected_chatgpt:
+                assert "/backend-api/wham/accounts/check" in discovery
         if not direct:
             assert all(
-                r["tools"] == [] and r["tool_choice"] == "auto" and r["model"] == "gpt-5.4"
+                _native_request_channels(r) == ([], "SYNTHETIC_SYSTEM_ONLY")
+                and r["tool_choice"] == "auto"
+                and r["model"] == model
                 for r in captured
             )
-            assert all(r["instructions"] == "SYNTHETIC_SYSTEM_ONLY" for r in captured)
+        if structured:
+            output_format = captured[0]["text"]["format"]
+            assert output_format["type"] == "json_schema"
+            assert output_format["strict"] is True
+            schema = output_format["schema"]
+            assert schema["additionalProperties"] is False
+            assert schema["required"] == ["result"]
+            assert schema["properties"]["result"]["additionalProperties"] is False
+            assert schema["properties"]["result"]["required"] == ["ok"]
         assert all(
             path == ("/backend-api/codex/responses" if chatgpt else "/v1/responses")
             for path in routes
@@ -1636,7 +2079,7 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
                 {
                     "source": source,
                     "attack": attack,
-                    "tools": captured[0]["tools"] if not direct else "baseline",
+                    "tools": _native_request_channels(captured[0])[0] if not direct else "baseline",
                     "auth_category": "missing"
                     if source == "OPENAI_API_KEY-native"
                     else "chatgpt"

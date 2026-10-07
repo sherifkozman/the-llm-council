@@ -121,7 +121,8 @@ def test_total_character_cap_fails_before_provider_work(invoke, tmp_path, mock_p
     else:
         assert result.exit_code == 0, result.output
         assert payload["success"] is True
-        assert not (payload["degradation_report"] or {}).get("context_warnings")
+        warnings = (payload["degradation_report"] or {}).get("context_warnings", [])
+        assert not any(item["kind"] == "file_truncated" for item in warnings)
         files = payload["execution_plan"]["context_preparation"]["files"]
         assert [item["path"] for item in files] == paths
         assert sum(item["retained_chars"] for item in files) == total

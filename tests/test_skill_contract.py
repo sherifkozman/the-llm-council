@@ -70,14 +70,14 @@ def run_example(request, tmp_path):
     return run
 
 
-@pytest.mark.parametrize("version", ["LLM Council v0.8.1", "LLM Council v0.8.2rc1", "unknown"])
+@pytest.mark.parametrize("version", ["LLM Council v0.8.2", "LLM Council v0.8.3rc1", "unknown"])
 def test_examples_reject_old_or_unverified_versions_before_run(run_example, version):
     result, calls = run_example(version)
     assert result.returncode != 0
     assert not calls.exists()
 
 
-@pytest.mark.parametrize("version", ["LLM Council v0.8.2", "LLM Council v0.9.0"])
+@pytest.mark.parametrize("version", ["LLM Council v0.8.3", "LLM Council v0.9.0"])
 def test_examples_accept_supported_version_and_read_result(run_example, version):
     result, calls = run_example(version)
     assert result.returncode == 0, result.stderr
@@ -98,12 +98,12 @@ def test_examples_accept_supported_version_and_read_result(run_example, version)
     ],
 )
 def test_examples_read_terminal_results_even_on_nonzero_exit(run_example, status, success, code):
-    result, _ = run_example("LLM Council v0.8.2", status=status, success=success, code=code)
+    result, _ = run_example("LLM Council v0.8.3", status=status, success=success, code=code)
     assert result.returncode == code, result.stderr
     assert json.loads(result.stdout)["execution_status"] == status
 
 
 def test_examples_reject_result_exit_disagreement(run_example):
-    result, _ = run_example("LLM Council v0.8.2", code=1)
+    result, _ = run_example("LLM Council v0.8.3", code=1)
     assert result.returncode != 0
     assert "Result and process outcome disagree" in result.stderr

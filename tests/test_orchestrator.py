@@ -28,6 +28,7 @@ from llm_council.providers.base import (
     ProviderAdapter,
     ProviderCapabilities,
 )
+from llm_council.schemas import load_schema
 
 
 class CaptureProvider(ProviderAdapter):
@@ -491,7 +492,7 @@ class TestOrchestratorValidation:
         )
 
         assert "Schema (JSON):" not in prompt
-        assert "Do not produce final JSON" in prompt
+        assert "Return internal source analysis, not final JSON" in prompt
 
     def test_format_exception_chain_includes_root_cause(self):
         """Provider diagnostics should preserve the underlying cause."""
@@ -1650,7 +1651,7 @@ class TestOrchestratorRuntimeTruthfulness:
             (RuntimeProfile.DEFAULT, False, 23600, False, False),
         ],
     )
-    async def test_critique_schema_budget_preserves_context_and_status(
+    async def test_custom_critique_schema_budget_preserves_context_and_status(
         self, runtime, has_schema, file_chars, omitted, skipped
     ):
         context = "\n\n".join(
@@ -1670,6 +1671,7 @@ class TestOrchestratorRuntimeTruthfulness:
                 list(drafts),
                 OrchestratorConfig(
                     mode="review",
+                    output_schema=load_schema("reviewer"),
                     runtime_profile=runtime,
                     timeout=300,
                     system_context=context,
@@ -1741,8 +1743,8 @@ class TestOrchestratorRuntimeTruthfulness:
                 assert warning not in plan.get("warnings", [])
 
     @pytest.mark.asyncio
-    async def test_run_synthesis_falls_back_to_reviewer_evidence_object_on_invalid_json(self):
-        """Reviewer runs should return a conservative fallback object after repeated invalid JSON."""
+    async def test_run_synthesis_fails_without_manufacturing_reviewer_object_on_invalid_json(self):
+        """Unvalidated evidence must not be promoted into a successful reviewer object."""
         config = OrchestratorConfig(
             runtime_profile=RuntimeProfile.BOUNDED,
             system_context=build_markdown_context(),
@@ -1793,22 +1795,18 @@ class TestOrchestratorRuntimeTruthfulness:
             ],
         }
 
+        handoffs = json.dumps(orch._draft_handoffs)
         result, attempts = await orch._run_synthesis(
             {"openrouter": "Draft says the milestone overclaims comparability."},
             "",
         )
 
-        assert result.ok is True
+        assert result.ok is False
         assert attempts == config.max_retries
-        assert result.data is not None
-        assert result.data["verdict"] == "request_changes"
-        assert result.data["issues"]
-        assert result.data["recommendations"]
-        assert result.data["issues"][0]["location"]["file"].startswith("docs/research/plan.md")
-        assert any(
-            "used conservative reviewer fallback built from chunked draft evidence" in error
-            for error in (result.errors or [])
-        )
+        assert result.data is None
+        assert result.raw == "Request changes: the plan overclaims comparability."
+        assert result.errors == ["Failed to parse JSON."]
+        assert json.dumps(orch._draft_handoffs) == handoffs
 
     def test_format_synthesis_prompt_can_omit_context_for_bounded_budget(self):
         """Aggressive bounded synthesis profiles should be able to drop full context blocks."""

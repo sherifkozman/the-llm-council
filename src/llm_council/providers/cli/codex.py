@@ -38,7 +38,11 @@ from llm_council.providers.base import (
     ProviderCapabilities,
     classify_error,
 )
-from llm_council.providers.cli._compatibility import check_verified_version
+from llm_council.providers.cli._compatibility import (
+    check_verified_version,
+    native_identity,
+    selected_cli_path,
+)
 from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
@@ -48,7 +52,7 @@ DEFAULT_MODEL = "gpt-5.4"
 DEFAULT_FLAGS = "--sandbox read-only --skip-git-repo-check"
 # The compiler imports this tested baseline; runtime metadata reports the observed version.
 _VERIFIED_VERSION = "codex-cli 0.149.1"
-_VERIFIED_VERSIONS = (_VERIFIED_VERSION, "codex-cli 0.153.3")
+_VERIFIED_VERSIONS = (_VERIFIED_VERSION, "codex-cli 0.153.3", "codex-cli 0.160.1")
 _CLEANUP_SECONDS = 1.0
 _GENERATION_CONFIG = {
     "features.shell_tool": False,
@@ -79,6 +83,11 @@ _ENV_DENYLIST_PREFIXES = (
     "LANGCHAIN_",
 )
 _ENV_SESSION_KEYS = {"CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"}
+_CREDENTIAL_ENV_KEY = re.compile(
+    r"(?:^|[_-])(?:api[_-]?keys?|secrets?|passwords?|credentials?|authorization|cookies?|"
+    r"(?:access|refresh|auth|bearer|id|session)[_-]?tokens?|key|token)$|^AUTH_SECRET_\d+$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -320,7 +329,7 @@ class CodexCLIProvider(ProviderAdapter):
         default_flags: str | None = None,
         timeout: int = 120,
     ) -> None:
-        self._cli_path = cli_path or shutil.which("codex")
+        self._cli_path = selected_cli_path(cli_path, "codex")
         self._default_model = default_model or DEFAULT_MODEL
         self._default_flags = default_flags or DEFAULT_FLAGS
         self._timeout = timeout
@@ -673,6 +682,7 @@ class CodexCLIProvider(ProviderAdapter):
         cwd: str,
         deadline: float,
         diagnostics_env: dict[str, str] | None = None,
+        identity: dict[str, str | None] | None = None,
     ) -> str:
         if not self._cli_path:
             raise RuntimeError("Codex CLI not found")
@@ -686,6 +696,8 @@ class CodexCLIProvider(ProviderAdapter):
         if version not in _VERIFIED_VERSIONS:
             # Sanitize before constructing an exception, including its cause/context.
             version = self._redact(version, diagnostics_env if diagnostics_env is not None else env)
+        if identity is not None:
+            identity["cli_version"] = version
         check_verified_version(version, _VERIFIED_VERSIONS, path=self._cli_path, code=code)
         return version
 
@@ -738,6 +750,7 @@ class CodexCLIProvider(ProviderAdapter):
         model: str,
         effort: str | None,
         *,
+        version: str,
         env: dict[str, str],
         cwd: str,
         deadline: float,
@@ -774,6 +787,20 @@ class CodexCLIProvider(ProviderAdapter):
         if model not in slugs:
             raise ValueError(f"Codex unsupported model in bundled catalog: {model}")
         selected = models[slugs.index(model)]
+        if version == "codex-cli 0.160.1":
+            if (
+                selected.get("experimental_supported_tools")
+                not in ([], ["send_user_message_async", "clock"])
+                or selected.get("tool_mode") not in (None, "direct", "code_mode_only")
+                or selected.get("multi_agent_version") not in (None, "disabled", "v2")
+            ):
+                raise ValueError("Codex unsupported model catalog tool shape")
+            # These model-level controls override feature flags in exactly 0.160.1.
+            selected["experimental_supported_tools"] = []
+            if selected.get("tool_mode") is not None:
+                selected["tool_mode"] = "direct"
+            if selected.get("multi_agent_version") is not None:
+                selected["multi_agent_version"] = "disabled"
         if (
             "apply_patch_tool_type" not in selected
             or selected["apply_patch_tool_type"] not in (None, "freeform", "function")
@@ -792,7 +819,7 @@ class CodexCLIProvider(ProviderAdapter):
             raise ValueError("Codex unsupported model catalog reasoning shape")
         if effort is not None and effort not in {level["effort"] for level in levels}:
             raise ValueError(f"Codex unsupported reasoning effort {effort} for model {model}")
-        # Preserve all bundled metadata and model identities; only remove this tool.
+        # Preserve model identity, wire format and reasoning; remove only native tools.
         selected["apply_patch_tool_type"] = None
         path = root / "models.json"
         path.write_text(json.dumps(catalog), encoding="utf-8")
@@ -851,9 +878,18 @@ class CodexCLIProvider(ProviderAdapter):
 
     @staticmethod
     def _redact(text: str, env: dict[str, str]) -> str:
-        for key, value in env.items():
-            if value and re.search(r"KEY|TOKEN|SECRET|PASSWORD", key):
-                text = text.replace(value, "[REDACTED]")
+        # Keep conservative long-secret protection without treating short feature flags as secrets.
+        secrets = {
+            value
+            for key, value in env.items()
+            if value
+            and (
+                _CREDENTIAL_ENV_KEY.search(key)
+                or (len(value) >= 4 and re.search(r"KEY|TOKEN|SECRET|PASSWORD", key, re.IGNORECASE))
+            )
+        }
+        for value in sorted(secrets, key=len, reverse=True):
+            text = text.replace(value, "[REDACTED]")
         text = re.sub(r"(?i)(bearer\s+)[^\s\"']+", r"\1[REDACTED]", text)
         return re.sub(r"\bsk-[A-Za-z0-9_-]+", "[REDACTED]", text)
 
@@ -890,6 +926,19 @@ class CodexCLIProvider(ProviderAdapter):
     async def generate(
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
+        identity = native_identity(self._cli_path)
+        try:
+            response = await self._generate(request, identity)
+        except BaseException as exc:
+            # Include validation, spawn, timeout, cancellation and cleanup failures.
+            exc.__dict__["native_identity"] = dict(identity)
+            raise
+        response.raw = {**(response.raw or {}), "native_identity": dict(identity)}
+        return response
+
+    async def _generate(
+        self, request: GenerateRequest, identity: dict[str, str | None]
+    ) -> GenerateResponse:
         if request.stream:
             raise NotImplementedError("Streaming not supported for CLI")
         deadline = asyncio.get_running_loop().time() + self._request_timeout(request)
@@ -908,13 +957,18 @@ class CodexCLIProvider(ProviderAdapter):
             env = self._isolated_env(cli_home, runtime)
             cwd = str(Path(cli_home) / "work")
             version = await self._verify_native_contract(
-                env=env, cwd=cwd, deadline=deadline, diagnostics_env=runtime.diagnostics_env()
+                env=env,
+                cwd=cwd,
+                deadline=deadline,
+                diagnostics_env=runtime.diagnostics_env(),
+                identity=identity,
             )
             model = request.model or self._default_model
             root = Path(cli_home)
             catalog_path = await self._generation_catalog(
                 model,
                 effort,
+                version=version,
                 env=env,
                 cwd=cwd,
                 deadline=deadline,
@@ -940,6 +994,8 @@ class CodexCLIProvider(ProviderAdapter):
             cmd.extend(["--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config"])
             cmd.extend(_config_args(runtime.config))
             cmd.extend(_config_args(_GENERATION_CONFIG))
+            if version == "codex-cli 0.160.1":
+                cmd.extend(["-c", "features.goals=false"])
             cmd.extend(["-c", f"model_catalog_json={json.dumps(catalog_path)}"])
             if instructions:
                 instruction_path = root / "instructions.txt"
@@ -988,7 +1044,7 @@ class CodexCLIProvider(ProviderAdapter):
             )
         except (ValueError, RuntimeError) as exc:
             raise type(exc)(
-                f"{self._cli_path!r} ({version}): "
+                f"{self._cli_path!r} ({identity['cli_version'] or version}): "
                 f"{self._redact(str(exc), runtime.diagnostics_env())}"
             ) from exc
         finally:

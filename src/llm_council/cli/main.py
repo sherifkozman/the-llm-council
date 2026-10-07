@@ -17,11 +17,13 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
 import tempfile
 from collections.abc import Awaitable, Callable
+from copy import copy
 from functools import wraps
 from pathlib import Path
 from types import FrameType
@@ -33,8 +35,10 @@ import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from llm_council import __version__
+from llm_council.engine.orchestrator import runtime_identity
 from llm_council.eval_import import import_github_pr_review
 from llm_council.evaluation import (
     EvalComparisonReport,
@@ -302,6 +306,113 @@ def _set_nested_value(data: dict[str, Any], key: str, value: Any) -> None:
     current[parts[-1]] = final_value
 
 
+def _execution_status(result: Any) -> str:
+    status = getattr(result, "execution_status", None)
+    if status in ("completed", "degraded", "failed", "cancelled"):
+        return str(status)
+    return "completed" if getattr(result, "success", False) else "failed"
+
+
+def _safe_diagnostic(value: Any) -> Any:
+    """Redact credential fields and known secret values, not task/output content."""
+    credential_name = (
+        r"(?:api[_-]?keys?|secrets?|passwords?|credentials?|authorization|cookies?|"
+        r"(?:secret[_-]?access|private)[_-]?keys?|"
+        r"(?:access|refresh|auth|bearer|id|session)[_-]?tokens?)"
+    )
+    secret_key = re.compile(
+        rf"(?:^|[_-]){credential_name}$|^token$",
+        re.IGNORECASE,
+    )
+    secrets = [
+        v
+        for k, v in os.environ.items()
+        if (secret_key.search(k) or k.upper().endswith("_TOKEN")) and len(v) >= 4
+    ]
+
+    def clean(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {
+                key: "[REDACTED]" if secret_key.search(str(key)) else clean(val)
+                for key, val in item.items()
+            }
+        if isinstance(item, (list, tuple)):
+            return [clean(val) for val in item]
+        if isinstance(item, str):
+            for secret in sorted(secrets, key=len, reverse=True):
+                item = item.replace(secret, "[REDACTED]")
+            item = re.sub(r"(?i)\b(Bearer|Basic)\s+[^\s,;\"']+", r"\1 [REDACTED]", item)
+            item = re.sub(
+                rf"(?i)((?<![\w-])(?:(?:[\w-]+[_-])?{credential_name}|token)"
+                r"\b[\"']?\s*[:=]\s*)"
+                r"(?:\"[^\"]*\"|'[^']*'|(?!(?:Bearer|Basic)\b)[^\s,;\"']+)",
+                r"\1[REDACTED]",
+                item,
+            )
+            return item
+        return item
+
+    return clean(value)
+
+
+def _prepare_report_result(result: Any) -> Any:
+    # Do not revalidate/reclassify engine facts merely by attaching CLI metadata.
+    prepared = copy(result)
+    for key in (
+        "error",
+        "validation_errors",
+        "provider_errors",
+        "degradation_report",
+        "health_report",
+        "execution_plan",
+        "routing_execution_plan",
+    ):
+        setattr(prepared, key, _safe_diagnostic(getattr(result, key, None)))
+    prepared.execution_plan = {
+        **(prepared.execution_plan or {}),
+        "runtime_identity": runtime_identity(),
+    }
+    return prepared
+
+
+def _result_diagnostics(result: Any) -> dict[str, Any]:
+    diagnostics = {}
+    for key in ("error", "validation_errors", "provider_errors", "degradation_report"):
+        value = getattr(result, key, None)
+        if value:
+            diagnostics[key] = value
+    plan = getattr(result, "execution_plan", None) or {}
+    for key in (
+        "context_preparation",
+        "persistence",
+        "warnings",
+        "degraded_output",
+        "provider_auto_fallback",
+        "pending_capabilities",
+        "cleanup_incomplete",
+    ):
+        if plan.get(key):
+            diagnostics[key] = plan[key]
+    return {key: _safe_diagnostic(value) for key, value in diagnostics.items()}
+
+
+def _parse_models(models: str | None, providers: list[str]) -> list[str] | None:
+    from llm_council.providers.registry import resolve_provider_name
+
+    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
+    known_providers = {"openai", "openrouter", "vertex-ai", "gemini", "codex", "claude"}
+    known_providers.update(resolve_provider_name(p) for p in providers)
+    for model in model_list or []:
+        prefix, separator, _ = model.partition(":")
+        if separator and prefix and resolve_provider_name(prefix) in known_providers:
+            raise ValueError(
+                "--models accepts positional literal model IDs, not provider:model mappings. "
+                "Remove the provider prefix; order models to match --providers "
+                "(or pass multiple OpenRouter model IDs for a single OpenRouter provider)."
+            )
+    return model_list
+
+
 def _render_result_markdown(
     result: Any,
     *,
@@ -317,11 +428,11 @@ def _render_result_markdown(
     """
     lines: list[str] = []
     success = bool(getattr(result, "success", False))
-    status = "SUCCESS" if success else "FAILED"
+    status = _execution_status(result).upper()
     lines.append(f"# Council Result: {status}")
     lines.append("")
 
-    if success:
+    if success or getattr(result, "output", None) is not None:
         output = getattr(result, "output", None)
         lines.append("## Output")
         lines.append("")
@@ -341,10 +452,23 @@ def _render_result_markdown(
             errors = [top_error, *errors]
         if errors:
             for err in errors:
-                lines.append(f"- {err}")
+                lines.append(f"- {_safe_diagnostic(err)}")
         else:
             lines.append("- Unknown error")
         lines.append("")
+
+    diagnostics = _result_diagnostics(result)
+    if diagnostics:
+        lines.extend(
+            [
+                "## Execution Diagnostics",
+                "",
+                "```json",
+                json.dumps(diagnostics, indent=2, default=str),
+                "```",
+                "",
+            ]
+        )
 
     critique = getattr(result, "critique", None)
     if critique:
@@ -499,16 +623,22 @@ def _run_contract(command: Callable[..., None]) -> Callable[..., None]:
 
         output_file = kwargs.get("output_file")
         output_json = kwargs.get("output_json", False)
+        markdown_output = False
         destination_valid = False
         try:
             output_format = (kwargs.get("output_format") or "").strip().lower()
+            markdown_output = output_format in {"md", "markdown"}
             if output_format == "json":
                 output_json = True
             if output_file:
                 _validate_output_destination(output_file)
                 destination_valid = True
             if not output_format and not output_json:
-                output_json = _load_config_defaults().get("output_format") == "json"
+                default_format = (
+                    (_load_config_defaults().get("output_format") or "").strip().lower()
+                )
+                output_json = default_format == "json"
+                markdown_output = default_format in {"md", "markdown"}
             kwargs["output_json"] = output_json
             command(*args, **kwargs)
         except typer.Exit:
@@ -522,18 +652,26 @@ def _run_contract(command: Callable[..., None]) -> Callable[..., None]:
                 pass
             raise typer.Exit(1)
         except Exception as exc:
-            payload = CouncilResult(success=False, error=str(exc)).model_dump()
+            result = _prepare_report_result(CouncilResult(success=False, error=str(exc)))
+            payload = (
+                _render_result_markdown(result)
+                if markdown_output
+                else json.dumps(result.model_dump(), indent=2, default=str)
+            )
             if output_file:
                 if destination_valid:
                     try:
-                        _write_result(output_file, json.dumps(payload, indent=2, default=str))
+                        _write_result(output_file, payload)
                     except OSError as write_error:
-                        _get_console(stderr=True).print(f"Error writing result: {write_error}")
-                _get_console(stderr=True).print(f"Error: {exc}")
-            elif output_json:
-                print(json.dumps(payload, indent=2, default=str), flush=True)
+                        _get_console(stderr=True).print(
+                            f"Error writing result: {_safe_diagnostic(str(write_error))}",
+                            markup=False,
+                        )
+                _get_console(stderr=True).print(f"Error: {result.error}", markup=False)
+            elif output_json or markdown_output:
+                print(payload, flush=True)
             else:
-                _get_console(stderr=True).print(f"Error: {exc}")
+                _get_console(stderr=True).print(f"Error: {result.error}", markup=False)
             raise typer.Exit(1)
 
     return invoke
@@ -774,7 +912,7 @@ def run(
     max_retries = config_defaults.get("max_retries", 3)
     enable_degradation = config_defaults.get("enable_degradation", True)
 
-    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
+    model_list = _parse_models(models, provider_list)
 
     custom_schema = None
     if schema_file:
@@ -870,6 +1008,7 @@ def run(
         result = _execute_run(
             lambda: council.run(task=task_text, subagent=resolved_agent, follow_router=route)
         )
+        result = _prepare_report_result(result)
 
         if markdown_output:
             output_payload = _render_result_markdown(
@@ -888,22 +1027,22 @@ def run(
         elif output_json:
             print(output_payload, flush=True)
         else:
-            if result.success:
-                console.print(
-                    Panel(
-                        json.dumps(result.output, indent=2),
-                        title="[green]Council Result: SUCCESS[/green]",
-                        border_style="green",
-                    )
-                )
-            else:
-                console.print(
-                    Panel(
-                        "\n".join(result.validation_errors or ["Unknown error"]),
-                        title="[red]Council Result: FAILED[/red]",
-                        border_style="red",
-                    )
-                )
+            status = _execution_status(result)
+            style = (
+                "green" if status == "completed" else "yellow" if status == "degraded" else "red"
+            )
+            body = (
+                json.dumps(result.output, indent=2)
+                if result.success or result.output is not None
+                else "\n".join(result.validation_errors or [result.error or "Unknown error"])
+            )
+            console.print(
+                Panel(Text(body), title=f"Council Result: {status.upper()}", border_style=style)
+            )
+            diagnostics = _result_diagnostics(result)
+            if diagnostics:
+                console.print("Execution Diagnostics:")
+                console.print(json.dumps(diagnostics, indent=2, default=str), markup=False)
 
             if verbose:
                 console.print("\n[bold]Metrics:[/bold]")
@@ -1506,7 +1645,7 @@ def _build_eval_base_config(
 
     from llm_council.protocol.types import CouncilConfig
 
-    model_list = [m.strip() for m in models.split(",") if m.strip()] if models else None
+    model_list = _parse_models(models, provider_list)
     effective_timeout = (
         timeout_override if timeout_override is not None else config_defaults.get("timeout", 120)
     )

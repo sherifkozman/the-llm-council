@@ -65,15 +65,22 @@ For tool-driven calls from Codex, Claude Code, Hermes or CI, use the
 [portable invocation contract](skills/council/references/invocation-contract.md).
 It covers installed-binary identity, timeouts, process completion, credential
 boundaries, complete result files and execution-status handling. The shipped
-skill and caller examples require Council 0.8.2 or later for the safety fixes.
+skill and caller examples require Council 0.8.3 or later for the reporting fixes.
+The [0.8.3 release notes](docs/releases/0.8.3.md) are a candidate record with
+verification pending, not a publication or live-provider compatibility claim.
 
-The native CLI allowlist covers Codex **0.149.1 and 0.153.3**, and Claude Code
+The native CLI allowlist covers Codex **0.149.1, 0.153.3 and 0.160.1**, and Claude Code
 **2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292**. Unknown versions fail
 explicitly; this is not a future auto-update compatibility guarantee. Report the
 chosen executable path and observed version from doctor failure diagnostics,
 not an assumed shell binary. Do not edit package constants to bypass the check.
-See the invocation contract and release notes for the synthetic-test scope;
+See the invocation contract and release notes for native versus synthetic coverage;
 version acceptance alone does not prove live reachability or review quality.
+The Codex default remains `gpt-5.4`, which is absent from the tested 0.160.1
+catalog. That version requires an explicit supported model through `--models`
+or provider configuration; contained native checks used `gpt-6.1-sol`. Exact
+0.160.1 tool controls preserve authentication, selected model and reasoning effort.
+This is not support for every model or future CLI release.
 
 This release also includes a mode-aware execution path with runtime profiles,
 routed handoff, capability planning, and deterministic eval tooling. Those
@@ -608,6 +615,114 @@ Inspect `execution_plan.context_preparation.files` for `path`, `original_chars`,
 graceful degradation is disabled. A successful run with truncated input has
 `execution_status: "degraded"`. Do not describe it as a full-file review. Review
 the omitted material separately or narrow the input and state the actual scope.
+
+### Execution And Evidence Reporting
+
+Use `execution_status`, not `success` alone, in JSON, Markdown and console output.
+A valid degraded result can have `success: true` and exit 0. A `completed` result
+does not prove substantive independent reviews or correct findings. Inspect
+`drafts`, `provider_errors`, `degradation_report`, `execution_plan` and `run_id`.
+
+For the built-in reviewer, critique and synthesis receive bounded prepared-coverage
+metadata as data, not source evidence or proof of every-phase delivery. The review
+prompt separates Council pipeline limitations from source findings; real defects
+in pipeline code under review still require source evidence. This added prompt
+boundary does not apply to security or custom schemas and adds no task-intent
+detector or semantic regex filter. Public result schemas are unchanged; the
+adapter model-resolution hook described below is additive.
+
+Schema-validation exhaustion returns `failed`, preserving drafts, critique and
+validation errors. Council no longer manufactures reviewer findings from arbitrary
+draft/critique prose by inferring severity, category, location or remediation.
+Invalid raw synthesis is retained only as an artifact when storage succeeds,
+not promoted to valid output. A synthesis exception can still use an existing
+schema-valid JSON draft as a degraded fallback. Schema validity is not semantic
+truth; inspect the findings and diagnostics rather than treating fallback as approval.
+
+File ingestion is not delivered coverage. The `context_preparation.files`
+counts above describe files read, before source selection and downstream prompt
+compaction. Inspect `execution_plan.context_preparation.coverage` and
+`execution_plan.phase_prompt_compaction` for delivered source and draft evidence.
+Even profile index 0 can cut content. `truncated: false` at ingestion does not
+establish full delivery to each phase. Council slicing, cut draft text and schema
+omission are pipeline limitations, not defects in the source under review or
+proof that a provider generated incomplete text.
+Compaction metadata includes `original_prompt_chars` and `delivered_prompt_chars`;
+`evidence_compacted` excludes schema-only omission. `submitted` distinguishes
+unsent candidates from adapter dispatch; only submitted evidence cuts count
+toward compaction-based degradation.
+
+`degradation_report.total_retries` counts extra calls actually started;
+`planned_retries` separately records decisions, not executed work or retry budgets.
+Inspect `synthesis_attempts` even when the final output comes from a draft fallback;
+it counts actual adapter starts, not queued requests that never start.
+An empty `fallbacks_used` list alone cannot rule out final-output fallback.
+Handled cancellation retains completed evidence where available, not unfinished
+work. Inspect `execution_plan.artifact_occurrences` for each phase/provider's
+artifact reference and `execution_plan.persistence` for storage/finalization
+errors. Identical text does not make two phase occurrences the same evidence.
+Disabled persistence is not a storage failure; absent artifacts are not proof
+that nothing executed.
+
+With persistence enabled, `TOOL_LOG` manifests of type `council_execution` capture
+`started` and `settled` snapshots of allowlisted runtime, attempt, occurrence,
+coverage and persistence-error metadata. The settled snapshot records
+`ledger_finalization: not_yet_attempted`; read the terminal ledger separately.
+A hard kill may retain only the start snapshot; learned native identity is not
+durable in these manifests until settlement is persisted. No heartbeat or
+automatic repair is added.
+
+A hard kill can leave a ledger row marked `running`. That row does not prove
+process liveness, and a stopped caller does not prove every descendant exited.
+Check the original process handle and caller termination evidence. Do not
+automatically repair ledger rows or restart paid runs.
+
+`execution_plan.runtime_identity` identifies the Council entrypoint, imported
+package and Python runtime for CLI and library callers through a shared engine
+helper. Native diagnostics must distinguish the selected
+executable and observed version from the requested model. A requested model is
+not a provider-confirmed model identity. Inspect `execution_plan.provider_attempts`
+for `cli_path`, `cli_realpath`, `cli_version`, `requested_model`,
+`adapter_resolved_model` and `adapter_reported_model` where available. The resolved
+model can come from the adapter's default, not an explicit caller choice; neither
+resolution nor adapter reporting is independent provider confirmation. Do not infer historical executable
+selection from the current shell, or fill in identity fields absent from a report.
+
+Before applying capability policy, the engine resolves an omitted model from
+the instantiated adapter's default. The optional, non-abstract `resolve_model`
+hook is backward compatible: it does not re-read environment variables, change
+defaults or override an explicit model; unknown defaults remain unknown.
+This restores schema forwarding for the OpenAI adapter's `gpt-5.4` default.
+It does **not** restore or enable `gpt-5.4` reasoning controls: Council's existing
+OpenAI capability policy forwards those controls only for o-series models.
+That policy and model defaults are unchanged. Do not claim that high reasoning
+reached `gpt-5.4`; inspect request-compilation metadata. O-series reasoning
+forwarding is covered separately by regression checks.
+
+`--models` takes literal model IDs in provider order, not provider-prefixed
+`provider:model` mappings: `codex:gpt-5.4` and `vertex-ai:gemini-3.1-pro-preview`
+are invalid mappings. Preserve official IDs such as `openai/gpt-5.4` and
+`qwen/qwen3.6-plus:free` for providers that accept them; slash namespaces and
+colon suffixes are not a reason to rewrite a model ID.
+
+### Updating A Pinned uv Tool
+
+After publication and approval to update the installed tool, preserve any local
+package edits and the uv receipt, then replace the exact version constraint:
+
+```bash
+uv tool install --reinstall 'the-llm-council[all]==0.8.3'
+```
+
+This targets the uv-managed tool and its exposed executable, and updates the
+stored pin. Installing into an isolated test environment does not update the
+command used by real callers. `uv tool upgrade` respects the existing constraint;
+an exact `==0.8.2` pin must be replaced explicitly. See
+[uv tool upgrade rules](https://docs.astral.sh/uv/concepts/tools/#upgrading-tools).
+Verify the resolved Council path, version, imported source and receipt from each
+actual caller. Report native CLI selection mismatches without deleting native
+installations or changing PATH. This instruction does not itself authorize an
+installation, prove publication, or establish live-provider compatibility.
 
 ### Timeout Budgets
 

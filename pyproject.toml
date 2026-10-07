@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-llm-council"
-version = "0.8.2"
+version = "0.8.3"
 description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
 readme = "README.md"
 license = "MIT"
@@ -138,6 +138,7 @@ ignore_names = [
     "isolated_codex_unit_runtime",
     "isolated_locks",
     "offline_slots",  # pytest autouse fixture in evidence-integrity regressions
+    "isolate_reporting",  # pytest autouse fixture in pipeline-reporting regressions
     "pytestmark",
     "protocol_version",
     "log_message",

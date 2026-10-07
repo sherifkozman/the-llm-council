@@ -9,7 +9,12 @@ from llm_council.providers.compiler import compile_request_for_provider
 @pytest.mark.parametrize(
     "provider,model,baseline,supported",
     [
-        ("codex", "gpt-5.4", "codex-cli 0.149.1", ["codex-cli 0.149.1", "codex-cli 0.153.3"]),
+        (
+            "codex",
+            "gpt-5.4",
+            "codex-cli 0.149.1",
+            ["codex-cli 0.149.1", "codex-cli 0.153.3", "codex-cli 0.160.1"],
+        ),
         (
             "claude",
             "claude-opus-5",
