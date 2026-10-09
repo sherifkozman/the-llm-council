@@ -95,12 +95,17 @@ For Codex, base doctor `ok: true` reports login status only. It does not prove
 generation readiness or supply path/version evidence unless those details are
 actually present in the diagnostic.
 
-Native CLI compatibility is an explicit allowlist: Codex 0.149.1 and 0.153.3;
-Claude Code 2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292. Unknown future
-versions stay unsupported. A matching help flag does not prove compatibility.
-If doctor rejects a version, report the path and version in its diagnostic;
-do not edit package constants to bypass validation. Release notes record the
-synthetic native-contract evidence and final verification scope.
+Claude CLI admission checks required option definitions in the selected binary's
+help on every call; its version is diagnostic, not an allowlist gate. Required
+controls depend on the selected auth route and request. Missing controls stop
+execution before task text is sent, rather than weakening isolation.
+Base doctor reports `cli_compatibility: required_flags_advertised` and leaves
+authentication and generation unverified. This is syntax advertisement, not proof
+of future isolation semantics or successful generation; use deep probes and
+inspect actual results. Managed-policy checks and terminal validation remain.
+Codex still uses the exact-version allowlist (0.149.1, 0.153.3, 0.160.1).
+Report selected path/version and missing capabilities from diagnostics. Do not
+edit package constants or remove required controls to bypass an error.
 
 For the Codex CLI provider, council runs nested Codex subprocesses under an
 isolated temporary `HOME` that only carries forward the local Codex auth files.

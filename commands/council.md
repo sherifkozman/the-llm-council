@@ -12,7 +12,7 @@ arguments:
 
 Run the LLM Council with the specified subagent and task.
 
-> **Requires:** Council 0.8.3 or later and usable credentials for each selected provider.
+> **Requires:** Council 0.8.4 or later and usable credentials for each selected provider.
 
 ## Subagents
 - `drafter --mode impl|arch|test` - Implementation, architecture, tests
@@ -70,10 +70,13 @@ identity. Follow the contract for an approved exact-version uv tool reinstall;
 an isolated environment does not update the real caller's executable or pin.
 Do not delete native installations or change PATH to hide selection mismatches.
 
-Native CLI support uses the exact version allowlist in the invocation contract.
+Claude CLI admission checks required capabilities on every call, not exact build
+numbers. Report missing controls from doctor; never strip isolation flags to
+proceed. Help advertises syntax, not authentication or behavioral compatibility.
+Codex still uses the exact version allowlist in the invocation contract.
 Codex 0.160.1 requires an explicit supported model: the unchanged `gpt-5.4`
 default is absent from its tested catalog. Its tool settings are version-specific,
 not universal model support or permission to change authentication/model/effort.
-Unknown versions remain unsupported. Report doctor failure diagnostics with the
+Unknown Codex versions remain unsupported. Report doctor failure diagnostics with the
 chosen executable path and version; do not edit package constants or assume
-future auto-updates are compatible because help flags still exist.
+future builds are behaviorally verified merely because help flags still exist.

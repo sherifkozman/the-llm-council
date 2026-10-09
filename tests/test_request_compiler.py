@@ -111,7 +111,11 @@ class TestRequestCompiler:
         metadata = compiled.to_dict()["reasoning_control"]
         assert metadata["status"] == "requested"
         assert metadata["effort"] == effort
-        assert metadata["requires_cli_version"]
+        if provider == "codex":
+            assert metadata["requires_cli_version"]
+        else:
+            assert metadata["cli_version_requirement"] == "capability_based"
+            assert "requires_cli_version" not in metadata
 
     def test_codex_explicit_off_is_not_conflated_with_uncontrolled_default(self):
         off = compile_request_for_provider(

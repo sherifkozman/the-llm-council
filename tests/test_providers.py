@@ -72,7 +72,7 @@ def isolated_codex_unit_runtime(request, tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def claude_version_process(tmp_path, monkeypatch):
+def claude_probe_processes(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "environ", {"PATH": os.environ["PATH"], "HOME": str(tmp_path)})
     # These are command-shape tests; real process cleanup has separate regressions.
     monkeypatch.setattr("llm_council.providers.cli.claude_code.terminate_process_tree", AsyncMock())
@@ -80,7 +80,35 @@ def claude_version_process(tmp_path, monkeypatch):
     version.stdin = MagicMock(drain=AsyncMock())
     version.returncode = 0
     version.communicate.return_value = (b"2.1.288 (Claude Code)\n", b"")
-    return version
+    help_process = AsyncMock()
+    help_process.stdin = MagicMock(drain=AsyncMock())
+    help_process.returncode = 0
+    help_process.communicate.return_value = (
+        (
+            "Options:\n"
+            + "\n".join(
+                f"  {flag}  Option"
+                for flag in (
+                    "-p",
+                    "--output-format <format>",
+                    "--model <model>",
+                    "--setting-sources <sources>",
+                    "--tools <tools...>",
+                    "--strict-mcp-config",
+                    "--mcp-config <configs...>",
+                    "--disable-slash-commands",
+                    "--settings <file-or-json>",
+                    "--no-chrome",
+                    "--no-session-persistence",
+                    "--permission-mode <mode>",
+                    "--permission-prompts <target>",
+                    "--safe-mode",
+                )
+            )
+        ).encode(),
+        b"",
+    )
+    return [version, help_process]
 
 
 class TestProviderCapabilities:
@@ -2081,7 +2109,7 @@ class TestCLIProviderTimeouts:
             await provider.generate(GenerateRequest(prompt="test"))
 
     @pytest.mark.asyncio
-    async def test_claude_cli_starts_new_session(self, claude_version_process):
+    async def test_claude_cli_starts_new_session(self, claude_probe_processes):
         provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude")
         process = AsyncMock()
         process.stdin = MagicMock(drain=AsyncMock())
@@ -2092,7 +2120,7 @@ class TestCLIProviderTimeouts:
         process.returncode = 0
 
         with patch(
-            "asyncio.create_subprocess_exec", side_effect=[claude_version_process, process]
+            "asyncio.create_subprocess_exec", side_effect=[*claude_probe_processes, process]
         ) as mock_exec:
             response = await provider.generate(GenerateRequest(prompt="test"))
 
@@ -2100,7 +2128,7 @@ class TestCLIProviderTimeouts:
         assert mock_exec.await_args.kwargs["start_new_session"] is True
 
     @pytest.mark.asyncio
-    async def test_claude_cli_parses_list_envelopes(self, claude_version_process):
+    async def test_claude_cli_parses_list_envelopes(self, claude_probe_processes):
         provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude")
         process = AsyncMock()
         process.stdin = MagicMock(drain=AsyncMock())
@@ -2114,7 +2142,9 @@ class TestCLIProviderTimeouts:
         )
         process.returncode = 0
 
-        with patch("asyncio.create_subprocess_exec", side_effect=[claude_version_process, process]):
+        with patch(
+            "asyncio.create_subprocess_exec", side_effect=[*claude_probe_processes, process]
+        ):
             response = await provider.generate(GenerateRequest(prompt="test"))
 
         assert response.text == "READY"
@@ -2930,7 +2960,7 @@ class TestCLIPromptOnStdin:
     LONG_PROMPT = "x" * 50_000
 
     @pytest.mark.asyncio
-    async def test_claude_code_sends_prompt_via_stdin(self, claude_version_process):
+    async def test_claude_code_sends_prompt_via_stdin(self, claude_probe_processes):
         provider = ClaudeCodeCLIProvider(cli_path="/usr/local/bin/claude")
         process = AsyncMock()
         process.stdin = MagicMock(drain=AsyncMock())
@@ -2941,7 +2971,7 @@ class TestCLIPromptOnStdin:
         process.returncode = 0
 
         with patch(
-            "asyncio.create_subprocess_exec", side_effect=[claude_version_process, process]
+            "asyncio.create_subprocess_exec", side_effect=[*claude_probe_processes, process]
         ) as mock_exec:
             await provider.generate(GenerateRequest(prompt=self.LONG_PROMPT))
 
@@ -3191,7 +3221,7 @@ class TestCLIAdapterAuthAndIsolation:
         assert not leaked, f"secrets leaked into subprocess env: {leaked}"
 
     @pytest.mark.asyncio
-    async def test_claude_runs_from_empty_scratch_cwd(self, claude_version_process):
+    async def test_claude_runs_from_empty_scratch_cwd(self, claude_probe_processes):
         """CLAUDE.md auto-discovery walks up from the CWD, so the subprocess
         must never run from the caller's directory (prompt-injection vector on
         the non---bare fallback path)."""
@@ -3205,7 +3235,7 @@ class TestCLIAdapterAuthAndIsolation:
         process.returncode = 0
 
         with patch(
-            "asyncio.create_subprocess_exec", side_effect=[claude_version_process, process]
+            "asyncio.create_subprocess_exec", side_effect=[*claude_probe_processes, process]
         ) as mock_exec:
             await provider.generate(GenerateRequest(prompt="test"))
 
