@@ -1,4 +1,4 @@
-"""Generation-only Claude Code adapter for the versioned native JSON contract.
+"""Generation-only Claude Code adapter with runtime CLI capability checks.
 
 Flags reduce inherited execution surfaces; they are not a filesystem/network
 sandbox. Safe mode retains native context and managed enterprise policy.
@@ -28,7 +28,6 @@ from llm_council.providers.base import (
     classify_error,
 )
 from llm_council.providers.cli._compatibility import (
-    check_verified_version,
     native_identity,
     selected_cli_path,
 )
@@ -36,15 +35,6 @@ from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "sonnet"
-# The compiler imports this tested baseline; runtime metadata reports the observed version.
-_VERIFIED_VERSION = "2.1.288 (Claude Code)"
-_VERIFIED_VERSIONS = (
-    _VERIFIED_VERSION,
-    "2.1.289 (Claude Code)",
-    "2.1.290 (Claude Code)",
-    "2.1.291 (Claude Code)",
-    "2.1.292 (Claude Code)",
-)
 _CLEANUP_SECONDS = 1.0
 
 _ENV_ALLOWLIST = {
@@ -289,44 +279,47 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         )
         return env
 
+    def _command_options(
+        self, request: GenerateRequest, *, auth_source: str | None = None
+    ) -> dict[str, str | None]:
+        system, _ = self._request_text(request)
+        effort = self._reasoning_effort(request)
+        source = auth_source or self._resolve_auth(dict(os.environ))
+        options: dict[str, str | None] = {
+            "-p": None,
+            "--output-format": "json",
+            "--model": request.model or self._default_model,
+            "--setting-sources": "",
+            "--tools": "",
+            "--strict-mcp-config": None,
+            "--mcp-config": '{"mcpServers":{}}',
+            "--disable-slash-commands": None,
+            "--settings": '{"disableAllHooks":true,"autoMemoryEnabled":false}',
+            "--no-chrome": None,
+            "--no-session-persistence": None,
+            "--permission-mode": "dontAsk",
+            "--permission-prompts": "none",
+            "--bare" if source in ("api_key", "vertex") else "--safe-mode": None,
+        }
+        if system:
+            options["--system-prompt"] = system
+        if effort:
+            options["--effort"] = effort
+        return options
+
     def _build_command(
         self, request: GenerateRequest, *, auth_source: str | None = None
     ) -> list[str]:
         if not self._cli_path:
             raise RuntimeError("Claude Code CLI not found")
-        system, _ = self._request_text(request)
-        effort = self._reasoning_effort(request)
-        source = auth_source or self._resolve_auth(dict(os.environ))
-        cmd = [
+        return [
             self._cli_path,
-            "-p",
-            "--output-format",
-            "json",
-            "--model",
-            request.model or self._default_model,
-            "--setting-sources",
-            "",
-            "--tools",
-            "",
-            "--strict-mcp-config",
-            "--mcp-config",
-            '{"mcpServers":{}}',
-            "--disable-slash-commands",
-            "--settings",
-            '{"disableAllHooks":true,"autoMemoryEnabled":false}',
-            "--no-chrome",
-            "--no-session-persistence",
-            "--permission-mode",
-            "dontAsk",
-            "--permission-prompts",
-            "none",
-            "--bare" if source in ("api_key", "vertex") else "--safe-mode",
+            *[
+                arg
+                for flag, value in self._command_options(request, auth_source=auth_source).items()
+                for arg in ([flag] if value is None else [flag, value])
+            ],
         ]
-        if system:
-            cmd.extend(["--system-prompt", system])
-        if effort:
-            cmd.extend(["--effort", effort])
-        return cmd
 
     def _request_timeout(self, request: GenerateRequest) -> float:
         return (
@@ -489,12 +482,13 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         category = classify_error(details, code if code is not None else -1)
         return RuntimeError(f"Claude Code {reason} ({category.value}, exit {code}): {details}")
 
-    async def _verify_native_contract(
+    async def _check_cli_capabilities(
         self,
         *,
         env: dict[str, str],
         cwd: str,
         deadline: float,
+        options: dict[str, str | None],
         identity: dict[str, str | None] | None = None,
     ) -> str:
         if not self._cli_path:
@@ -508,16 +502,70 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         version = self._redact(stdout.decode("utf-8", errors="replace").strip(), env)
         if identity is not None:
             identity["cli_version"] = version
-        try:
-            check_verified_version(version, _VERIFIED_VERSIONS, path=self._cli_path, code=code)
-        except RuntimeError as exc:
+        if code != 0 or not version:
             raise self._failure(
-                self._redact(str(exc), env),
+                f"version probe failed at {self._cli_path!r}",
                 version,
                 stderr.decode("utf-8", errors="replace"),
                 code,
                 env,
-            ) from None
+            )
+        code, stdout, stderr = await self._run_cli(
+            [self._cli_path, "--help"], env=env, cwd=cwd, deadline=deadline
+        )
+        if code != 0:
+            raise self._failure(
+                f"help probe failed at {self._cli_path!r} ({version})",
+                "",
+                stderr.decode("utf-8", errors="replace"),
+                code,
+                env,
+            )
+        # Read option definitions, not mentions in wrapped prose or examples.
+        # Help advertises syntax only; terminal validation still gates results.
+        help_text = stdout.decode("utf-8", errors="replace")
+        section = re.search(r"(?m)^Options:[ \t]*\r?\n", help_text)
+        help_text = help_text[section.end() :] if section else ""
+        help_text = re.split(r"(?m)^[A-Za-z][^\n]*:[ \t]*$", help_text, maxsplit=1)[0]
+        rows = list(
+            re.finditer(
+                r"(?m)^[ \t]{0,8}((?:--[\w-]+|-[A-Za-z])"
+                r"(?:,[ \t]*(?:--[\w-]+|-[A-Za-z]))*)(?=[ \t]|$)",
+                help_text,
+            )
+        )
+        advertised = {}
+        for index, row in enumerate(rows):
+            end = rows[index + 1].start() if index + 1 < len(rows) else len(help_text)
+            for flag in re.findall(r"--[\w-]+|-[A-Za-z]", row.group(1)):
+                advertised[flag] = help_text[row.end() : end]
+        missing = sorted(options.keys() - advertised.keys())
+        if missing:
+            raise RuntimeError(
+                f"Claude Code missing required CLI capabilities at {self._cli_path!r} "
+                f"({version}): {', '.join(missing)}. Install a Claude CLI exposing these "
+                "controls; Council will not remove isolation flags to continue."
+            )
+        for flag, value in options.items():
+            argument = re.match(r"[ \t]+(<[^>\n]+>|\[[^]\n]+\])", advertised[flag])
+            if (value is not None and argument is None) or (
+                value is None and argument is not None and argument.group(1).startswith("<")
+            ):
+                raise RuntimeError(
+                    f"Claude Code unsupported argument shape for {flag} at {self._cli_path!r} "
+                    f"({version}); required invocation is not advertised"
+                )
+        for flag in ("--output-format", "--permission-mode", "--permission-prompts", "--effort"):
+            if flag not in options:
+                continue
+            choices = re.search(r"\(choices:\s*([^)]*)\)", advertised[flag])
+            if choices and options[flag] not in [
+                value.strip().strip("\"'") for value in choices.group(1).split(",")
+            ]:
+                raise RuntimeError(
+                    f"Claude Code unsupported CLI value for {flag} at {self._cli_path!r} "
+                    f"({version}); required value is not advertised"
+                )
         return version
 
     def _parse_response(
@@ -606,8 +654,12 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             cwd = str(Path(scratch) / "work")
             Path(cwd).mkdir()
             env = self._isolated_env(source, environment, scratch)
-            version = await self._verify_native_contract(
-                env=env, cwd=cwd, deadline=deadline, identity=identity
+            version = await self._check_cli_capabilities(
+                env=env,
+                cwd=cwd,
+                deadline=deadline,
+                identity=identity,
+                options=self._command_options(request, auth_source=source),
             )
             self._assert_unmanaged_environment(environment)
             self._assert_unmanaged_environment(env)
@@ -629,6 +681,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                     "auth_source": source,
                     "cli_version": version,
                     "cli_path": self._cli_path,
+                    "cli_compatibility": "required_flags_advertised",
                     "reasoning": {
                         "status": "native" if effort else "uncontrolled",
                         "effort": effort,
@@ -649,8 +702,13 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             self._assert_unmanaged_environment(environment)
             with _scratch_directory() as scratch:
                 env = self._isolated_env(source, environment, scratch)
-                version = await self._verify_native_contract(
-                    env=env, cwd=scratch, deadline=deadline
+                version = await self._check_cli_capabilities(
+                    env=env,
+                    cwd=scratch,
+                    deadline=deadline,
+                    options=self._command_options(
+                        GenerateRequest(prompt="probe"), auth_source=source
+                    ),
                 )
             return DoctorResult(
                 ok=True,
@@ -658,6 +716,8 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                 details={
                     "auth_source": source,
                     "authentication": "not_verified",
+                    "generation": "not_verified",
+                    "cli_compatibility": "required_flags_advertised",
                     "cli_version": version,
                     "cli_path": self._cli_path,
                 },

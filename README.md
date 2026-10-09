@@ -65,17 +65,21 @@ For tool-driven calls from Codex, Claude Code, Hermes or CI, use the
 [portable invocation contract](skills/council/references/invocation-contract.md).
 It covers installed-binary identity, timeouts, process completion, credential
 boundaries, complete result files and execution-status handling. The shipped
-skill and caller examples require Council 0.8.3 or later for the reporting fixes.
-The [0.8.3 release notes](docs/releases/0.8.3.md) are a candidate record with
-verification pending, not a publication or live-provider compatibility claim.
+skill and caller examples require Council 0.8.4 or later for capability-based
+Claude admission and the earlier reporting fixes. See the
+[0.8.4 release notes](docs/releases/0.8.4.md) for verification and limits.
 
-The native CLI allowlist covers Codex **0.149.1, 0.153.3 and 0.160.1**, and Claude Code
-**2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292**. Unknown versions fail
-explicitly; this is not a future auto-update compatibility guarantee. Report the
-chosen executable path and observed version from doctor failure diagnostics,
-not an assumed shell binary. Do not edit package constants to bypass the check.
-See the invocation contract and release notes for native versus synthetic coverage;
-version acceptance alone does not prove live reachability or review quality.
+Claude Code compatibility is capability-based, not an exact-build allowlist.
+Before each request, Council reads the selected binary's version for diagnostics
+and checks its help option definitions for the controls the request uses. New
+builds do not need a Council release when those controls remain available.
+Missing controls fail explicitly; Council never drops isolation flags to proceed.
+Help advertises syntax, not authentication, isolation semantics or generation
+success. Existing policy checks and strict terminal-response validation remain.
+Codex's allowlist is unchanged: **0.149.1, 0.153.3 and 0.160.1**. Unknown Codex
+versions still fail explicitly. Report the chosen path/version from diagnostics,
+not an assumed shell binary; do not edit package constants to bypass a check.
+See the invocation contract for native versus synthetic verification boundaries.
 The Codex default remains `gpt-5.4`, which is absent from the tested 0.160.1
 catalog. That version requires an explicit supported model through `--models`
 or provider configuration; contained native checks used `gpt-6.1-sol`. Exact
@@ -711,7 +715,7 @@ After publication and approval to update the installed tool, preserve any local
 package edits and the uv receipt, then replace the exact version constraint:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.3'
+uv tool install --reinstall 'the-llm-council[all]==0.8.4'
 ```
 
 This targets the uv-managed tool and its exposed executable, and updates the

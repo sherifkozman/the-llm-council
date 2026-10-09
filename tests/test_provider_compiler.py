@@ -15,18 +15,6 @@ from llm_council.providers.compiler import compile_request_for_provider
             "codex-cli 0.149.1",
             ["codex-cli 0.149.1", "codex-cli 0.153.3", "codex-cli 0.160.1"],
         ),
-        (
-            "claude",
-            "claude-opus-5",
-            "2.1.288 (Claude Code)",
-            [
-                "2.1.288 (Claude Code)",
-                "2.1.289 (Claude Code)",
-                "2.1.290 (Claude Code)",
-                "2.1.291 (Claude Code)",
-                "2.1.292 (Claude Code)",
-            ],
-        ),
     ],
 )
 @pytest.mark.parametrize("effort", ["high", "low"])
@@ -46,3 +34,21 @@ def test_native_metadata_distinguishes_baseline_from_supported_versions(
     decision = next(item for item in result.decisions if item.option == "reasoning.effort")
     assert "verified versions" in decision.detail
     assert supported[-1] in decision.detail
+
+
+@pytest.mark.parametrize("effort", ["high", "low"])
+def test_claude_reasoning_metadata_uses_capabilities_not_builds(effort):
+    reasoning = ReasoningConfig(enabled=True, effort=effort)
+    result = compile_request_for_provider(
+        "claude", GenerateRequest(prompt="test", model="claude-opus-5", reasoning=reasoning)
+    )
+    assert result.request.reasoning == reasoning
+    assert result.to_dict()["reasoning_control"] == {
+        "status": "requested",
+        "effort": effort,
+        "cli_version_requirement": "capability_based",
+        "required_cli_flags": ["--effort"],
+    }
+    decision = next(item for item in result.decisions if item.option == "reasoning.effort")
+    assert "checks required CLI flags" in decision.detail
+    assert "not behavioral verification" in decision.detail

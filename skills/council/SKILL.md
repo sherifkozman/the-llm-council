@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.8.3)
+# LLM Council Skill (v0.8.4)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -14,7 +14,7 @@ Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 ## Agent Invocation Contract
 
 For tool-driven runs, read [the portable invocation contract](references/invocation-contract.md)
-before execution. It requires Council 0.8.3 or later and applies to Codex, Claude
+before execution. It requires Council 0.8.4 or later and applies to Codex, Claude
 Code, Hermes and generic subprocess callers. Use an explicit executable/CWD,
 task-file or stdin input, ordered providers/models, a unique result file, and
 wait for completion. Inspect `execution_status` and full diagnostics; exit 0 or
@@ -42,14 +42,14 @@ schema-valid JSON draft remains degraded; valid JSON does not prove semantic tru
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.8.3'
+pip install 'the-llm-council>=0.8.4'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.3'
-pip install 'the-llm-council[vertex]>=0.8.3'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.4'
+pip install 'the-llm-council[vertex]>=0.8.4'
 ```
 
 These commands require a published release. For an existing pinned uv tool,
@@ -175,12 +175,15 @@ as `openai/gpt-5.4` and `qwen/qwen3.6-plus:free` intact. Runtime identity must
 distinguish the selected executable/version from the requested model; the latter
 is not a provider-confirmed model identity.
 
-For native CLI providers, consult the invocation contract's exact version list:
-Codex 0.149.1/0.153.3/0.160.1 and Claude Code 2.1.288/2.1.289/2.1.290/2.1.291/2.1.292.
-Unknown versions are unsupported, not automatically admitted by a patch range
-or help-flag check. Report the chosen path/version from doctor failure diagnostics;
-never edit package constants to bypass the gate. Synthetic contract checks are
-not live-provider or future auto-update compatibility proof. Fresh contained
+Claude Code admission is capability-based, not pinned to builds: each call checks
+the selected binary's help for required controls, including the chosen auth mode
+and optional effort. Report missing controls and the observed path/version; never
+drop isolation flags to continue. Base doctor proves advertised syntax only,
+not authentication, isolation semantics or generation. New builds are not rejected
+just because their version is unfamiliar. See the invocation contract.
+Codex retains the exact list 0.149.1/0.153.3/0.160.1; unknown Codex builds remain
+unsupported. Never edit package constants to bypass its gate. Synthetic checks
+are not live-provider or universal future compatibility proof. Fresh contained
 native checks cover Codex 0.149.1 and 0.160.1; 0.153.3 has synthetic coverage,
 not a fresh native run. The unchanged `gpt-5.4` default is absent from the tested
 0.160.1 catalog: explicitly select a supported model via `--models` or provider

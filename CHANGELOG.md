@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-09
+
+See [the release record](docs/releases/0.8.4.md) for scope and verification.
+
+### Fixed
+- Claude CLI no longer rejects routine updates because their exact build is
+  absent from a hardcoded list. Admission checks required option definitions
+  on every request, with auth-route and optional-effort awareness, within the
+  existing deadline. Missing controls fail before prompt dispatch; isolation,
+  managed-policy checks and terminal validation are not relaxed.
+- Claude doctor/compiler metadata distinguish capability advertisement from
+  authentication, generation and native behavioral proof. Codex's version policy
+  is unchanged. Current docs and the shipped skill explain the separate policies.
+
 ## [0.8.3] - 2026-10-06
 
 Tested candidate, not a publication or global-install claim. See

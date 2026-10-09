@@ -1,4 +1,4 @@
-"""Claude 2.1.288 contract regressions; no real Claude/auth/provider calls."""
+"""Claude capability contract regressions; no real Claude/auth/provider calls."""
 
 from __future__ import annotations
 
@@ -24,6 +24,51 @@ from llm_council.providers.base import (
     classify_error,
 )
 from llm_council.providers.cli import claude_code as claude
+
+
+def help_row(flag):
+    argument = (
+        " <value>"
+        if flag
+        in {
+            "--output-format",
+            "--model",
+            "--setting-sources",
+            "--tools",
+            "--mcp-config",
+            "--settings",
+            "--permission-mode",
+            "--permission-prompts",
+            "--system-prompt",
+            "--effort",
+        }
+        else ""
+    )
+    return f"  {flag}{argument}  Supported option".encode()
+
+
+HELP_TEXT = b"Options:\n" + b"\n".join(
+    help_row(flag)
+    for flag in (
+        "-p, --print",
+        "--bare",
+        "--safe-mode",
+        "--setting-sources",
+        "--tools",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "--disable-slash-commands",
+        "--settings",
+        "--no-chrome",
+        "--no-session-persistence",
+        "--permission-mode",
+        "--permission-prompts",
+        "--system-prompt",
+        "--effort",
+        "--output-format",
+        "--model",
+    )
+)
 
 
 def terminal(**changes):
@@ -79,20 +124,18 @@ def fake_cli(monkeypatch):
         stderr = b""
         code = 0
         version = b"2.1.288 (Claude Code)\n"
-        help_text = (
-            b"--bare --safe-mode --setting-sources --tools --strict-mcp-config --mcp-config "
-            b"--disable-slash-commands --settings --no-chrome --no-session-persistence "
-            b"--permission-mode --permission-prompts --system-prompt --effort --output-format --model"
-        )
+        version_code = 0
+        help_text = HELP_TEXT
+        help_code = 0
 
         def __init__(self):
             self.calls = []
 
         async def spawn(self, *cmd, **kwargs):
             proc = (
-                FakeProcess(self.version)
+                FakeProcess(self.version, self.stderr, self.version_code)
                 if "--version" in cmd
-                else FakeProcess(self.help_text)
+                else FakeProcess(self.help_text, self.stderr, self.help_code)
                 if "--help" in cmd
                 else FakeProcess(self.stdout, self.stderr, self.code)
             )
@@ -356,17 +399,19 @@ async def test_conflicting_or_unsupported_auth_never_spawns(provider, fake_cli, 
     assert not fake_cli.calls
 
 
-@pytest.mark.parametrize("version", [b"2.1.287 (Claude Code)", b"2.2.0 (Claude Code)", b"garbage"])
-async def test_unverified_version_never_generates(provider, fake_cli, version):
-    fake_cli.version = version
+@pytest.mark.parametrize("code,version", [(1, b"2.1.294 (Claude Code)"), (0, b" ")])
+async def test_failed_version_probe_never_generates(provider, fake_cli, code, version):
+    fake_cli.version, fake_cli.version_code = version, code
     with pytest.raises(RuntimeError, match="version"):
         await provider.generate(GenerateRequest(prompt="hi"))
     assert len(fake_cli.calls) == 1
     assert "--version" in fake_cli.calls[0][0]
 
 
-@pytest.mark.parametrize("version", ["2.1.288", "2.1.289", "2.1.290", "2.1.291", "2.1.292"])
-async def test_verified_release_reports_observed_claude_version(provider, fake_cli, version):
+@pytest.mark.parametrize(
+    "version", ["2.1.288", "2.1.294", "2.1.999", "2.2.0", "3.0.0", "3.0.0-beta.1"]
+)
+async def test_capable_release_reports_observed_claude_version(provider, fake_cli, version):
     fake_cli.version = f"{version} (Claude Code)".encode()
     response = await provider.generate(
         GenerateRequest(
@@ -379,7 +424,8 @@ async def test_verified_release_reports_observed_claude_version(provider, fake_c
     assert response.raw["cli_version"] == f"{version} (Claude Code)"
     assert response.raw["cli_path"] == "/synthetic/claude"
     assert response.raw["reasoning"] == {"status": "native", "effort": "high"}
-    assert len(fake_cli.calls) == 2
+    assert response.raw["cli_compatibility"] == "required_flags_advertised"
+    assert len(fake_cli.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -387,8 +433,10 @@ async def test_verified_release_reports_observed_claude_version(provider, fake_c
 async def test_claude_native_identity_survives_success_and_failures(
     provider, fake_cli, monkeypatch, failure
 ):
-    version = "2.999.0" if failure == "version" else "2.1.292"
+    version = "2.1.294"
     fake_cli.version = f"{version} (Claude Code)".encode()
+    if failure == "version":
+        fake_cli.version_code = 1
     if failure == "generation":
         fake_cli.stdout = b"{}"
     if failure == "auth":
@@ -443,13 +491,202 @@ async def test_claude_identity_is_per_call_not_shared_provider_state(
 @pytest.mark.parametrize(
     "version", ["2.1.287", "2.1.293", "2.1.999", "2.2.0", "3.1.288", "2.1.289-beta"]
 )
-async def test_claude_version_boundary_has_observed_diagnostics(provider, fake_cli, version):
+async def test_build_number_does_not_gate_capabilities(provider, fake_cli, version):
     fake_cli.version = f"{version} (Claude Code)".encode()
-    with pytest.raises(RuntimeError) as caught:
-        await provider.generate(GenerateRequest(prompt="test"))
-    assert version in str(caught.value)
-    assert "/synthetic/claude" in str(caught.value)
-    assert len(fake_cli.calls) == 1
+    response = await provider.generate(GenerateRequest(prompt="test"))
+    assert response.text == "FINAL"
+    assert response.raw["cli_version"] == f"{version} (Claude Code)"
+    assert "--help" in fake_cli.calls[1][0]
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "-p, --print",
+        "--output-format",
+        "--model",
+        "--setting-sources",
+        "--tools",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "--disable-slash-commands",
+        "--settings",
+        "--no-chrome",
+        "--no-session-persistence",
+        "--permission-mode",
+        "--permission-prompts",
+        "--safe-mode",
+        "--system-prompt",
+    ],
+)
+async def test_missing_required_capability_sends_no_prompt(provider, fake_cli, flag):
+    fake_cli.help_text = HELP_TEXT.replace(help_row(flag), b"")
+    with pytest.raises(
+        RuntimeError, match="missing required.*" + ("-p" if flag.startswith("-p") else flag)
+    ):
+        await provider.generate(
+            GenerateRequest(
+                messages=[
+                    Message(role="system", content="SYSTEM"),
+                    Message(role="user", content="SECRET_TASK"),
+                ]
+            )
+        )
+    assert len(fake_cli.calls) == 2
+    assert all(proc.input is None and proc.cleaned for _, _, proc in fake_cli.calls)
+
+
+@pytest.mark.parametrize(
+    "source,required,unused",
+    [
+        ("subscription", "--safe-mode", "--bare"),
+        ("oauth_token", "--safe-mode", "--bare"),
+        ("api_key", "--bare", "--safe-mode"),
+        ("vertex", "--bare", "--safe-mode"),
+    ],
+)
+async def test_capabilities_follow_selected_auth(
+    provider, fake_cli, monkeypatch, source, required, unused
+):
+    if source == "oauth_token":
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "dummy")
+    elif source == "api_key":
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    elif source == "vertex":
+        monkeypatch.setenv("CLAUDE_CODE_USE_VERTEX", "1")
+    fake_cli.help_text = HELP_TEXT.replace(help_row(unused), b"")
+    assert (await provider.doctor()).ok
+    assert (await provider.generate(GenerateRequest(prompt="hi"))).text == "FINAL"
+    fake_cli.calls.clear()
+    fake_cli.help_text = HELP_TEXT.replace(help_row(required), b"")
+    assert not (await provider.doctor()).ok
+    with pytest.raises(RuntimeError, match=required):
+        await provider.generate(GenerateRequest(prompt="hi"))
+    assert all(proc.input is None for _, _, proc in fake_cli.calls)
+
+
+async def test_effort_capability_only_required_when_requested(provider, fake_cli):
+    fake_cli.help_text = HELP_TEXT.replace(help_row("--effort"), b"")
+    assert (await provider.doctor()).ok
+    assert (await provider.generate(GenerateRequest(prompt="hi"))).text == "FINAL"
+    fake_cli.calls.clear()
+    with pytest.raises(RuntimeError, match="--effort"):
+        await provider.generate(
+            GenerateRequest(
+                prompt="hi",
+                model="claude-opus-5",
+                reasoning=ReasoningConfig(enabled=True, effort="high"),
+            )
+        )
+    assert all(proc.input is None for _, _, proc in fake_cli.calls)
+
+
+@pytest.mark.parametrize(
+    "help_text",
+    [
+        b"",
+        b"Use --tools in an example",
+        HELP_TEXT.replace(
+            help_row("--tools"),
+            b"  --tools-extra  Mentions --tools\n                                        --tools is described here",
+        ),
+    ],
+)
+async def test_help_requires_option_definitions(provider, fake_cli, help_text):
+    fake_cli.help_text = help_text
+    with pytest.raises(RuntimeError, match="missing required"):
+        await provider.generate(GenerateRequest(prompt="hi"))
+    assert all(proc.input is None for _, _, proc in fake_cli.calls)
+
+
+async def test_nonzero_help_with_complete_flags_fails_and_redacts(provider, fake_cli, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "help-probe-secret")
+    fake_cli.help_code = 1
+    fake_cli.stderr = b"failed help-probe-secret"
+    with pytest.raises(RuntimeError, match="help") as caught:
+        await provider.generate(GenerateRequest(prompt="hi"))
+    assert "help-probe-secret" not in str(caught.value)
+    assert all(proc.input is None and proc.cleaned for _, _, proc in fake_cli.calls)
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("--output-format", "json"),
+        ("--permission-mode", "dontAsk"),
+        ("--permission-prompts", "none"),
+        ("--effort", "high"),
+    ],
+)
+async def test_contradictory_advertised_choices_fail_before_prompt(provider, fake_cli, flag, value):
+    fake_cli.help_text = HELP_TEXT.replace(
+        help_row(flag),
+        f'  {flag} <value>  Option\n                                        (choices: "other")'.encode(),
+    )
+    with pytest.raises(RuntimeError, match="unsupported.*" + flag):
+        await provider.generate(
+            GenerateRequest(
+                prompt="hi",
+                model="claude-opus-5",
+                reasoning=ReasoningConfig(enabled=True, effort="high"),
+            )
+        )
+    assert all(proc.input is None for _, _, proc in fake_cli.calls)
+
+
+async def test_capability_probe_is_fresh_for_same_instance(provider, fake_cli):
+    assert (await provider.generate(GenerateRequest(prompt="first"))).text == "FINAL"
+    fake_cli.help_text = b"  --tools-extra  Not the same control"
+    fake_cli.calls.clear()
+    with pytest.raises(RuntimeError, match="missing required"):
+        await provider.generate(GenerateRequest(prompt="second"))
+    assert [cmd[1] for cmd, _, _ in fake_cli.calls] == ["--version", "--help"]
+
+
+@pytest.mark.parametrize(
+    "help_text,options,error",
+    [
+        (
+            b"Options:\n  --model <model>  Select model\nExamples:\n  --safe-mode  Former invocation example\n",
+            {"--model": "sonnet", "--safe-mode": None},
+            "missing required",
+        ),
+        (
+            b'Options:\n  --output-format <format>  Format\nCommands:\n  config  Configure (choices: "compact", "wide")\n',
+            {"--output-format": "json"},
+            None,
+        ),
+        (
+            b"Options:\n  --output-format <format>  Format (choices: text, json)\n",
+            {"--output-format": "json"},
+            None,
+        ),
+        (
+            b"Options:\n  --output-format <format>  Format (choices: text, yaml)\n",
+            {"--output-format": "json"},
+            "unsupported CLI value",
+        ),
+        (b"Options:\n  --tools  Enable tools\n", {"--tools": ""}, "argument shape"),
+        (
+            b"Options:\n  --safe-mode <profile>  Enable profile\n",
+            {"--safe-mode": None},
+            "argument shape",
+        ),
+        (b"Options:\n  --tools [tools...]  Select tools\n", {"--tools": ""}, None),
+        (b"Options:\n  --tools <tools...>  Select tools\n", {"--tools": ""}, None),
+    ],
+)
+async def test_help_definition_boundaries(provider, fake_cli, tmp_path, help_text, options, error):
+    fake_cli.help_text = help_text
+    call = provider._check_cli_capabilities(
+        env={}, cwd=str(tmp_path), deadline=asyncio.get_running_loop().time() + 1, options=options
+    )
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            await call
+    else:
+        assert await call == "2.1.288 (Claude Code)"
+    assert all(proc.input is None and proc.cleaned for _, _, proc in fake_cli.calls)
 
 
 async def test_claude_patch_doctor_reports_actual_version(provider, fake_cli):
@@ -463,6 +700,7 @@ async def test_claude_patch_doctor_reports_actual_version(provider, fake_cli):
 async def test_unknown_version_diagnostics_still_redact_auth(provider, fake_cli, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-version-secret")
     fake_cli.version = b"unknown build synthetic-version-secret"
+    fake_cli.version_code = 1
     with pytest.raises(RuntimeError) as caught:
         await provider.generate(GenerateRequest(prompt="test"))
     assert "synthetic-version-secret" not in str(caught.value)
@@ -586,12 +824,14 @@ async def test_doctor_reports_source_and_unverified_auth_without_generating(
     assert result.ok
     assert result.details["auth_source"] == "oauth_token"
     assert result.details["authentication"] == "not_verified"
-    assert len(fake_cli.calls) == 1 and "--version" in fake_cli.calls[0][0]
+    assert len(fake_cli.calls) == 2 and "--help" in fake_cli.calls[1][0]
+    assert result.details["cli_compatibility"] == "required_flags_advertised"
+    assert result.details["generation"] == "not_verified"
     assert all(proc.cleaned for _, _, proc in fake_cli.calls)
     assert not Path(fake_cli.calls[0][1]["cwd"]).exists()
 
 
-@pytest.mark.parametrize("phase", ["spawn", "version", "generation"])
+@pytest.mark.parametrize("phase", ["spawn", "version", "help", "generation"])
 async def test_deadline_covers_each_phase_and_cleans_owned_processes(
     provider, fake_cli, monkeypatch, phase
 ):
@@ -601,7 +841,7 @@ async def test_deadline_covers_each_phase_and_cleans_owned_processes(
         proc = await spawn(*cmd, **kwargs)
         if phase == "spawn":
             await asyncio.sleep(0.04)
-        if (phase == "version" and "--version" in cmd) or (phase == "generation" and "-p" in cmd):
+        if (f"--{phase}" in cmd) or (phase == "generation" and "-p" in cmd):
             communicate = proc.communicate
 
             async def delayed(input=None):
@@ -615,7 +855,7 @@ async def test_deadline_covers_each_phase_and_cleans_owned_processes(
     with pytest.raises(RuntimeError, match="timed out|deadline") as caught:
         await provider.generate(GenerateRequest(prompt="hi", timeout_seconds=0.01))
     assert caught.value.native_identity["cli_version"] == (
-        "2.1.288 (Claude Code)" if phase == "generation" else None
+        "2.1.288 (Claude Code)" if phase in ("help", "generation") else None
     )
     assert all(proc.cleaned for _, _, proc in fake_cli.calls)
     if phase != "generation":
@@ -641,7 +881,7 @@ async def test_budget_is_not_reset_after_version(provider, fake_cli, monkeypatch
         await provider.generate(GenerateRequest(prompt="hi", timeout_seconds=0.06))
 
 
-@pytest.mark.parametrize("phase", ["spawn", "version", "generation", "cleanup"])
+@pytest.mark.parametrize("phase", ["spawn", "version", "help", "generation", "cleanup"])
 async def test_external_repeated_cancellation_reaps_before_reraising(
     provider, fake_cli, monkeypatch, phase
 ):
@@ -653,7 +893,7 @@ async def test_external_repeated_cancellation_reaps_before_reraising(
         if phase == "spawn":
             entered.set()
             await asyncio.sleep(0.04)
-        if (phase == "version" and "--version" in cmd) or (phase == "generation" and "-p" in cmd):
+        if (f"--{phase}" in cmd) or (phase == "generation" and "-p" in cmd):
 
             async def stalled(input=None):
                 entered.set()
@@ -881,7 +1121,7 @@ async def test_delayed_final_beyond_45_seconds_uses_remaining_deadline(
         communicate = proc.communicate
 
         async def delayed(input=None):
-            clock[0] += 2 if "--version" in cmd else 50
+            clock[0] += 50 if "-p" in cmd else 2
             return await communicate(input)
 
         proc.communicate = delayed
@@ -897,8 +1137,8 @@ async def test_delayed_final_beyond_45_seconds_uses_remaining_deadline(
     monkeypatch.setattr(asyncio, "wait", record_wait)
     result = await provider.generate(GenerateRequest(prompt="hi", timeout_seconds=60))
     assert result.text == "FINAL"
-    assert clock[0] == 52
-    assert timeouts == [60, 60, 58, 58]
+    assert clock[0] == 54
+    assert timeouts == [60, 60, 58, 58, 56, 56]
 
 
 @pytest.fixture
@@ -907,13 +1147,16 @@ def local_process_cli(monkeypatch):
     real_spawn = asyncio.create_subprocess_exec
     processes = []
     config = {"body": "print(json.dumps(result))", "delay_spawn": False}
-    script_prefix = """
+    script_prefix = f"""
 import json, os, subprocess, sys, time
 if "--version" in sys.argv:
     print("2.1.288 (Claude Code)")
     raise SystemExit(0)
+if "--help" in sys.argv:
+    print({HELP_TEXT.decode()!r})
+    raise SystemExit(0)
 prompt = sys.stdin.buffer.read().decode("utf-8")
-result = {"type":"result", "subtype":"success", "is_error":False, "result":"FINAL"}
+result = {{"type":"result", "subtype":"success", "is_error":False, "result":"FINAL"}}
 """
 
     async def spawn(*cmd, **kwargs):

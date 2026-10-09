@@ -18,8 +18,6 @@ from llm_council.providers.anthropic import (
     STRUCTURED_OUTPUT_MODELS as ANTHROPIC_STRUCTURED_OUTPUT_MODELS,
 )
 from llm_council.providers.base import GenerateRequest, ReasoningConfig, StructuredOutputConfig
-from llm_council.providers.cli.claude_code import _VERIFIED_VERSION as CLAUDE_CLI_VERSION
-from llm_council.providers.cli.claude_code import _VERIFIED_VERSIONS as CLAUDE_CLI_VERSIONS
 from llm_council.providers.cli.codex import _VERIFIED_VERSION as CODEX_CLI_VERSION
 from llm_council.providers.cli.codex import _VERIFIED_VERSIONS as CODEX_CLI_VERSIONS
 from llm_council.providers.gemini import LEGACY_MODEL_PREFIXES, STRUCTURED_OUTPUT_MODEL_PREFIXES
@@ -470,8 +468,21 @@ def _compile_cli_reasoning(
     for option in ("budget_tokens", "thinking_level"):
         if getattr(reasoning, option) is not None:
             decide(f"reasoning.{option}", "ignored", f"{identity} uses native effort, not {option}")
-    version = CODEX_CLI_VERSION if identity == "codex" else CLAUDE_CLI_VERSION
-    versions = CODEX_CLI_VERSIONS if identity == "codex" else CLAUDE_CLI_VERSIONS
+    if identity == "claude":
+        decide(
+            "reasoning.effort",
+            "supported",
+            f"Native effort={effort}; adapter checks required CLI flags at runtime, "
+            "not an exact build list; advertised syntax is not behavioral verification",
+        )
+        return ReasoningConfig(enabled=reasoning.enabled, effort=reasoning.effort), {
+            "status": "requested",
+            "effort": str(effort),
+            "cli_version_requirement": "capability_based",
+            "required_cli_flags": ["--effort"],
+        }
+    version = CODEX_CLI_VERSION
+    versions = CODEX_CLI_VERSIONS
     decide(
         "reasoning.effort",
         "supported",

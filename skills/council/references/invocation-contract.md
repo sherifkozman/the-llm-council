@@ -1,6 +1,6 @@
 # Portable Council Invocation Contract
 
-Requires Council 0.8.3 or later for the reporting fixes. This file travels with a copied Council skill;
+Requires Council 0.8.4 or later for capability-based Claude admission and reporting fixes. This file travels with a copied Council skill;
 it does not require a repository checkout or a client-specific wrapper.
 
 ## Before Calling
@@ -86,12 +86,25 @@ Do not change credentials, endpoints or administrative controls to bypass policy
 
 ### Native CLI Versions
 
-Council uses an explicit native-version allowlist, not a patch-version range:
+Claude uses runtime capability admission; Codex retains exact-version admission:
 
-| Provider | Accepted native versions |
+| Provider | Admission policy |
 | --- | --- |
 | `codex` | 0.149.1, 0.153.3, 0.160.1 |
-| `claude` | 2.1.288, 2.1.289, 2.1.290, 2.1.291, 2.1.292 |
+| `claude` | Required CLI flags advertised by the selected binary; no build allowlist |
+
+Claude reads `--version` for diagnostics and `--help` for option definitions on
+every call, within the request deadline. It checks the controls actually used,
+including `--bare` for API-key/Vertex auth or `--safe-mode` for OAuth/subscription,
+and `--effort` only when requested. Missing flags or contradictory advertised
+choices stop execution before task text is sent. No fallback strips required
+controls. A build update alone is not a reason to reject Claude or downgrade it.
+Base doctor reports `cli_compatibility: required_flags_advertised`, not verified
+authentication or generation. Help cannot prove isolation semantics, managed
+policy discovery, settings-JSON semantics, or terminal compatibility on arbitrary
+future builds. Existing policy checks and strict terminal validation still apply.
+Capability probes are refreshed, not cached; they are not an atomic guarantee
+against executable replacement between probe and dispatch.
 
 Fresh contained native checks cover Codex 0.149.1 and 0.160.1; 0.153.3 retains
 synthetic coverage with no fresh native run. See the release notes for the
@@ -105,19 +118,22 @@ they do not establish universal model support. The 0.160.1 tool settings are
 exact-version-specific and preserve authentication, selected model and reasoning
 effort. Do not silently switch models or weaken effort to bypass a catalog error.
 
-Unknown versions remain explicitly unsupported, even if their help output lists
+Unknown Codex versions remain explicitly unsupported, even if their help output lists
 the same flags. On an unsupported-version error, report the executable path and
 observed version in doctor diagnostics from the actual caller environment. Do
 not edit package version constants or bypass the check; use a verified version
 or wait for a release that verifies the new one. This resolves the known
-versions, not generic future native-CLI compatibility.
+Codex versions, not generic future Codex compatibility. For Claude capability
+errors, report the exact missing control and selected binary instead of treating
+an unfamiliar version as unsupported. Do not report mere admission as a passed
+deep probe, successful review, or native behavioral verification.
 
 ### Updating The Installed Tool
 
 After publication, an approved exact-version uv tool reinstall is:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.3'
+uv tool install --reinstall 'the-llm-council[all]==0.8.4'
 ```
 
 First preserve local package edits and the uv receipt without copying credentials.
@@ -190,8 +206,8 @@ import tempfile
 binary = os.environ["COUNCIL_BIN"]
 version = subprocess.run([binary, "--version"], check=True, capture_output=True, text=True)
 match = re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)", version.stdout.strip())
-if not match or tuple(map(int, match.groups())) < (0, 8, 3):
-    raise SystemExit("Council 0.8.3 or later is required")
+if not match or tuple(map(int, match.groups())) < (0, 8, 4):
+    raise SystemExit("Council 0.8.4 or later is required")
 result_file = Path(tempfile.mkdtemp(prefix="council-result-")) / "result.json"
 argv = [binary, "run", "critic", "--mode", "review",
         "--providers", os.environ["COUNCIL_PROVIDERS"],
@@ -240,7 +256,7 @@ short. The temporary result directory is retained for inspection.
 ```sh
 set -eu
 version=$("$COUNCIL_BIN" --version)
-python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,3) else "Council 0.8.3 or later is required")' "$version"
+python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,4) else "Council 0.8.4 or later is required")' "$version"
 run_dir=$(mktemp -d)
 result_file="$run_dir/result.json"
 cd "$COUNCIL_WORKDIR"
