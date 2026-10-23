@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.8.4)
+# LLM Council Skill (v0.8.5)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -14,7 +14,7 @@ Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 ## Agent Invocation Contract
 
 For tool-driven runs, read [the portable invocation contract](references/invocation-contract.md)
-before execution. It requires Council 0.8.4 or later and applies to Codex, Claude
+before execution. It requires Council 0.8.5 or later and applies to Codex, Claude
 Code, Hermes and generic subprocess callers. Use an explicit executable/CWD,
 task-file or stdin input, ordered providers/models, a unique result file, and
 wait for completion. Inspect `execution_status` and full diagnostics; exit 0 or
@@ -42,14 +42,14 @@ schema-valid JSON draft remains degraded; valid JSON does not prove semantic tru
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.8.4'
+pip install 'the-llm-council>=0.8.5'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.4'
-pip install 'the-llm-council[vertex]>=0.8.4'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.5'
+pip install 'the-llm-council[vertex]>=0.8.5'
 ```
 
 These commands require a published release. For an existing pinned uv tool,

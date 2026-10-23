@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-23
+
+### Security
+- Automatic evidence searches no longer follow file or search-root symlinks to
+  content outside the selected repository. Reads validate containment and use
+  descriptor-relative, no-follow opens for every component, including replacements
+  between discovery and reading. Only regular files are read; unsupported platforms
+  skip automatic file-content searches with a warning rather than use an unsafe fallback.
+- Published requirements now enforce AnyIO >=4.14.2 and certifi >=2026.10.19;
+  Google/Gemini/Vertex extras enforce urllib3 >=2.8.0. The lock integrates the
+  corresponding dependency updates and resolves AnyIO 4.15.1, certifi 2026.10.23,
+  urllib3 2.8.0 and the required typing-extensions 4.16.0 update.
+- In-repository links and source anchors remain supported. Explicit `--files`
+  selection is unchanged. This is not a general filesystem sandbox.
+
+See [the release record](docs/releases/0.8.5.md) for evidence and limitations.
+
 ## [0.8.4] - 2026-10-09
 
 See [the release record](docs/releases/0.8.4.md) for scope and verification.

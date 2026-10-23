@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
+import os
 import re
+import stat
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +17,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from llm_council.engine.capabilities import CapabilityPlan
+
+logger = logging.getLogger(__name__)
 
 TEXT_EXTENSIONS = {
     ".py",
@@ -204,14 +210,25 @@ def _candidate_files(repo_root: Path) -> list[Path]:
     """Return bounded candidate files for evidence scanning."""
 
     files: list[Path] = []
+    try:
+        root = repo_root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return files
     for dirname in SEARCH_DIRS:
         base = repo_root / dirname
-        if not base.exists():
+        try:
+            base.resolve(strict=True).relative_to(root)
+        except (OSError, RuntimeError, ValueError):
             continue
         for path in sorted(base.rglob("*")):
-            if not path.is_file():
-                continue
             if path.suffix.lower() not in TEXT_EXTENSIONS:
+                continue
+            try:
+                target = path.resolve(strict=True)
+                target.relative_to(root)
+                if not target.is_file():
+                    continue
+            except (OSError, RuntimeError, ValueError):
                 continue
             files.append(path)
     return files
@@ -424,6 +441,28 @@ def _extract_keywords(task: str, limit: int = 6) -> list[str]:
     return keywords
 
 
+def _read_repo_text(path: Path, root: Path, root_fd: int) -> str:
+    """Read an in-root regular file without following raced-in symlinks."""
+
+    parts = path.resolve(strict=True).relative_to(root).parts
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError("Evidence target must be a file beneath the repository")
+    with ExitStack() as opened:
+        parent_fd = root_fd
+        for part in parts[:-1]:
+            parent_fd = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+            opened.callback(os.close, parent_fd)
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        opened.callback(os.close, fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("Evidence target is not a regular file")
+        # ExitStack owns the descriptor even if fdopen or decoding fails.
+        with os.fdopen(fd, encoding="utf-8", errors="ignore", closefd=False) as stream:
+            return stream.read()
+
+
 def _search_files(
     files: list[Path],
     patterns: list[str] | tuple[str, ...],
@@ -434,28 +473,43 @@ def _search_files(
 
     if not patterns:
         return []
+    if os.open not in os.supports_dir_fd or not all(
+        hasattr(os, flag) for flag in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK")
+    ):
+        logger.warning(
+            "Automatic evidence file reads unavailable: safe descriptor-relative opens "
+            "are unsupported on this platform; no file contents were searched."
+        )
+        return []
 
     regex = re.compile("|".join(re.escape(pattern) for pattern in patterns), re.IGNORECASE)
     hits: list[str] = []
-    for path in files:
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            if not regex.search(line):
-                continue
-            snippet = line.strip()
-            if len(snippet) > 120:
-                snippet = snippet[:117] + "..."
+    try:
+        root = repo_root.resolve(strict=True)
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except (OSError, RuntimeError):
+        return []
+    try:
+        for path in files:
             try:
-                display_path = str(path.relative_to(repo_root))
-            except ValueError:
-                display_path = str(path)
-            hits.append(f"{display_path}:{line_number}: {snippet}")
-            if len(hits) >= limit:
-                return hits
+                text = _read_repo_text(path, root, root_fd)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if not regex.search(line):
+                    continue
+                snippet = line.strip()
+                if len(snippet) > 120:
+                    snippet = snippet[:117] + "..."
+                try:
+                    display_path = str(path.relative_to(repo_root))
+                except ValueError:
+                    display_path = str(path)
+                hits.append(f"{display_path}:{line_number}: {snippet}")
+                if len(hits) >= limit:
+                    return hits
+    finally:
+        os.close(root_fd)
 
     return hits
 
