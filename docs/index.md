@@ -8,8 +8,22 @@ For agent and CI integrations, start with the
 [portable invocation contract](../skills/council/references/invocation-contract.md).
 Council 0.8.1 adds execution status and exact exit semantics. Wait for the process,
 read the full JSON result even after a nonzero exit, and inspect degradation.
-The shipped skill and invocation examples require 0.8.2 or later for the safety
+The shipped skill and invocation examples require 0.8.5 or later for the safety
 fixes. An installed version string does not establish live provider verification.
+
+## Automatic Evidence Boundary
+
+Automatic file-content evidence is confined to the selected repository's canonical
+root. In-root file links keep their original source anchors; external targets,
+broken links and non-regular files are not read. Descriptor-relative no-follow
+opens reject symlinks substituted after validation. The root's ancestors are
+trusted; this is not protection against hard links, mounts, hostile relocation of
+open directories or concurrent content changes.
+
+Platforms without safe descriptor-relative opens (including Windows) omit these
+automatic content searches and emit a warning. Do not interpret absent matches
+as a clean security review. Explicit `--files` remains a deliberate user selection;
+verify those paths before including sensitive material. See [0.8.5](releases/0.8.5.md).
 
 The public package supports:
 

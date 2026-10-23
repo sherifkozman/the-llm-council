@@ -1,6 +1,6 @@
 # Portable Council Invocation Contract
 
-Requires Council 0.8.4 or later for capability-based Claude admission and reporting fixes. This file travels with a copied Council skill;
+Requires Council 0.8.5 or later for automatic evidence containment, dependency security floors, capability-based Claude admission and reporting fixes. This file travels with a copied Council skill;
 it does not require a repository checkout or a client-specific wrapper.
 
 ## Before Calling
@@ -133,7 +133,7 @@ deep probe, successful review, or native behavioral verification.
 After publication, an approved exact-version uv tool reinstall is:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.4'
+uv tool install --reinstall 'the-llm-council[all]==0.8.5'
 ```
 
 First preserve local package edits and the uv receipt without copying credentials.
@@ -206,8 +206,8 @@ import tempfile
 binary = os.environ["COUNCIL_BIN"]
 version = subprocess.run([binary, "--version"], check=True, capture_output=True, text=True)
 match = re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)", version.stdout.strip())
-if not match or tuple(map(int, match.groups())) < (0, 8, 4):
-    raise SystemExit("Council 0.8.4 or later is required")
+if not match or tuple(map(int, match.groups())) < (0, 8, 5):
+    raise SystemExit("Council 0.8.5 or later is required")
 result_file = Path(tempfile.mkdtemp(prefix="council-result-")) / "result.json"
 argv = [binary, "run", "critic", "--mode", "review",
         "--providers", os.environ["COUNCIL_PROVIDERS"],
@@ -256,7 +256,7 @@ short. The temporary result directory is retained for inspection.
 ```sh
 set -eu
 version=$("$COUNCIL_BIN" --version)
-python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,4) else "Council 0.8.4 or later is required")' "$version"
+python3 -c 'import re,sys; m=re.fullmatch(r"LLM Council v(\d+)\.(\d+)\.(\d+)",sys.argv[1]); sys.exit(0 if m and tuple(map(int,m.groups())) >= (0,8,5) else "Council 0.8.5 or later is required")' "$version"
 run_dir=$(mktemp -d)
 result_file="$run_dir/result.json"
 cd "$COUNCIL_WORKDIR"

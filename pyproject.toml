@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-llm-council"
-version = "0.8.4"
+version = "0.8.5"
 description = "Multi-LLM Council Framework for adversarial debate, cross-validation, and structured decision-making"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,8 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0",
     "httpx>=0.25",
+    "anyio>=4.14.2",
+    "certifi>=2026.10.19",
     "typer>=0.9",
     "rich>=13.0",
     "pyyaml>=6.0",
@@ -56,9 +58,9 @@ dev = [
 ]
 anthropic = ["anthropic>=0.18"]
 openai = ["openai>=1.0"]
-gemini = ["google-genai>=1.0"]
-google = ["google-genai>=1.0"]
-vertex = ["google-genai>=1.0", "google-auth>=2.0", "anthropic[vertex]>=0.18"]
+gemini = ["google-genai>=1.0", "urllib3>=2.8.0"]
+google = ["google-genai>=1.0", "urllib3>=2.8.0"]
+vertex = ["google-genai>=1.0", "google-auth>=2.0", "anthropic[vertex]>=0.18", "urllib3>=2.8.0"]
 all = [
     "the-llm-council[anthropic,openai,gemini,vertex]"
 ]

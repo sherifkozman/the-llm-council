@@ -12,7 +12,7 @@ arguments:
 
 Run the LLM Council with the specified subagent and task.
 
-> **Requires:** Council 0.8.4 or later and usable credentials for each selected provider.
+> **Requires:** Council 0.8.5 or later and usable credentials for each selected provider.
 
 ## Subagents
 - `drafter --mode impl|arch|test` - Implementation, architecture, tests
