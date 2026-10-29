@@ -1262,7 +1262,7 @@ wheels = [
 
 [[package]]
 name = "the-llm-council"
-version = "0.8.5"
+version = "0.8.6"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1323,23 +1323,23 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "certifi", specifier = ">=2026.10.19" },
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0" },
-    { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0" },
-    { name = "google-genai", marker = "extra == 'google'", specifier = ">=1.0" },
-    { name = "google-genai", marker = "extra == 'vertex'", specifier = ">=1.0" },
+    { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.52.0" },
+    { name = "google-genai", marker = "extra == 'google'", specifier = ">=1.52.0" },
+    { name = "google-genai", marker = "extra == 'vertex'", specifier = ">=1.52.0" },
     { name = "httpx", specifier = ">=0.25" },
     { name = "jsonschema", specifier = ">=4.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0" },
-    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "the-llm-council", extras = ["anthropic", "openai", "gemini", "vertex"], marker = "extra == 'all'" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.4.1" },
-    { name = "typer", specifier = ">=0.9" },
+    { name = "typer", specifier = ">=0.20.1" },
     { name = "types-jsonschema", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "urllib3", marker = "extra == 'gemini'", specifier = ">=2.8.0" },

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,6 +33,7 @@ from llm_council.providers.base import (
     StructuredOutputConfig,
     classify_error,
 )
+from llm_council.providers.cli import codex as codex_module
 from llm_council.providers.cli.claude_code import ClaudeCodeCLIProvider
 from llm_council.providers.cli.codex import CodexCLIProvider
 from llm_council.providers.cli.gemini_cli import GeminiCLIProvider
@@ -61,13 +63,54 @@ from llm_council.providers.vertex import VertexAIProvider
 def isolated_codex_unit_runtime(request, tmp_path, monkeypatch):
     if "codex" not in request.node.nodeid.lower():
         return
-    # These tests mock native processes; version/channel proof lives in test_codex_contract.
+    # Command/output unit tests mock admission; real admission and snapshot
+    # behavior are covered by test_codex_record_admission and snapshot tests.
     monkeypatch.setattr(os, "environ", {"PATH": os.environ["PATH"], "HOME": str(tmp_path)})
     monkeypatch.setenv("CODEX_API_KEY", "dummy-unit-codex-key")
-    monkeypatch.setattr(CodexCLIProvider, "_verify_native_contract", AsyncMock())
+    read_config = CodexCLIProvider._read_native_config
+
+    def config_with_test_model(env):
+        config = read_config(env)
+        config.setdefault("model", "gpt-5.4")
+        return config
+
     monkeypatch.setattr(
-        CodexCLIProvider, "_generation_catalog", AsyncMock(return_value="/synthetic/models.json")
+        CodexCLIProvider, "_read_native_config", staticmethod(config_with_test_model)
     )
+
+    @asynccontextmanager
+    async def admitted(provider, runtime, request, *, deadline, identity):
+        model = provider._model_for_request(request, runtime)
+        catalog = json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": model,
+                        "apply_patch_tool_type": "freeform",
+                        "experimental_supported_tools": [],
+                        "supported_reasoning_levels": [
+                            {"effort": effort}
+                            for effort in ("none", "low", "medium", "high", "xhigh", "max", "ultra")
+                        ],
+                    }
+                ]
+            }
+        ).encode()
+        identity["cli_version"] = "codex-cli 0.149.1"
+        snapshot = codex_module._CodexSnapshot(
+            Path(provider._cli_path), codex_module._SnapshotCleanup(asyncio.get_running_loop())
+        )
+        yield codex_module._CodexAdmission(
+            snapshot,
+            "codex-cli 0.149.1",
+            catalog,
+            b"",
+            {},
+            {"profile": "generation-legacy-v1"},
+        )
+
+    monkeypatch.setattr(CodexCLIProvider, "_admit_recorded_codex", admitted)
+    monkeypatch.setattr(codex_module._CodexAdmission, "is_current", lambda self, **kwargs: True)
     monkeypatch.setattr("llm_council.providers.cli.codex.terminate_process_tree", AsyncMock())
 
 
@@ -88,6 +131,13 @@ def claude_probe_processes(tmp_path, monkeypatch):
             "Options:\n"
             + "\n".join(
                 f"  {flag}  Option"
+                + (
+                    ' (choices: "dontAsk")'
+                    if flag.startswith("--permission-mode ")
+                    else ' (choices: "none")'
+                    if flag.startswith("--permission-prompts ")
+                    else ""
+                )
                 for flag in (
                     "-p",
                     "--output-format <format>",
@@ -1911,51 +1961,55 @@ class TestGeminiCLIProviderDoctor:
             GeminiCLIProvider(cli_path="/opt/homebrew/bin/gemini", approval_mode="invalid")
 
 
+def _codex_probe_process(stdout: bytes, stderr: bytes = b"", code: int = 0):
+    process = AsyncMock(returncode=code)
+    process.stdout = asyncio.StreamReader()
+    process.stderr = asyncio.StreamReader()
+    process.stdout.feed_data(stdout)
+    process.stdout.feed_eof()
+    process.stderr.feed_data(stderr)
+    process.stderr.feed_eof()
+    return process
+
+
 class TestCodexCLIProviderDoctor:
     """Tests for Codex CLI doctor readiness checks."""
 
     @pytest.mark.asyncio
     async def test_codex_doctor_uses_login_status(self):
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
-        process = AsyncMock()
-        process.communicate.return_value = (b"Logged in using ChatGPT\n", b"")
-        process.returncode = 0
+        process = _codex_probe_process(b"Logged in using an API key\n")
 
         with patch("asyncio.create_subprocess_exec", return_value=process) as mock_exec:
             result = await provider.doctor()
 
         assert result.ok is True
-        assert "Logged in using ChatGPT" in result.message
+        assert "API key configured" in result.message
         mock_exec.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_codex_doctor_reports_not_logged_in(self):
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
-        process = AsyncMock()
-        process.communicate.return_value = (b"Not logged in\n", b"")
-        process.returncode = 0
+        process = _codex_probe_process(b"Not logged in\n")
 
         with patch("asyncio.create_subprocess_exec", return_value=process):
             result = await provider.doctor()
 
         assert result.ok is False
-        assert "Not logged in" in result.message
+        assert "not logged in" in result.message.lower()
 
     @pytest.mark.asyncio
     async def test_codex_doctor_reports_login_status_subprocess_failure(self):
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
-        process = AsyncMock()
-        process.communicate.return_value = (
-            b"",
-            b"thread 'main' panicked at Attempted to create a NULL object.\n",
+        process = _codex_probe_process(
+            b"", b"thread 'main' panicked at Attempted to create a NULL object.\n", code=101
         )
-        process.returncode = 101
 
         with patch("asyncio.create_subprocess_exec", return_value=process):
             result = await provider.doctor()
 
         assert result.ok is False
-        assert "Attempted to create a NULL object" in result.message
+        assert "exit 101" in result.message
 
 
 class TestCLIProviderTimeouts:
@@ -2019,10 +2073,8 @@ class TestCLIProviderTimeouts:
         }
         assert mock_exec.await_args.kwargs["start_new_session"] is True
 
-    def test_codex_cli_defaults_to_chatgpt_compatible_model(self):
-        """Codex CLI should default to a model that works with ChatGPT auth."""
+    def test_codex_cli_supports_structured_output(self):
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
-        assert provider._default_model == "gpt-5.4"
         assert provider.capabilities.structured_output is True
 
     @pytest.mark.asyncio
@@ -2536,17 +2588,23 @@ class TestCLIProviderTimeouts:
     @pytest.mark.asyncio
     async def test_codex_cli_cleans_up_isolated_home_when_command_build_fails(self, tmp_path):
         provider = CodexCLIProvider(cli_path="/usr/local/bin/codex")
-        cli_home = tmp_path / "codex-home"
-        cli_home.mkdir()
+        homes = []
+
+        def create_home(_runtime):
+            home = tmp_path / f"codex-home-{len(homes)}"
+            home.mkdir()
+            homes.append(home)
+            return str(home)
 
         with (
-            patch.object(provider, "_create_isolated_cli_home", return_value=str(cli_home)),
+            patch.object(provider, "_create_isolated_cli_home", side_effect=create_home),
             patch.object(provider, "_build_command", side_effect=ValueError("bad request")),
             pytest.raises(ValueError, match="bad request"),
         ):
             await provider.generate(GenerateRequest(prompt="test"))
 
-        assert not cli_home.exists()
+        assert len(homes) == 1  # Admission is mocked in this command-build test.
+        assert all(not home.exists() for home in homes)
 
 
 class TestOpenRouterProviderEnvModel:

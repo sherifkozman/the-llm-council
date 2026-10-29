@@ -68,24 +68,39 @@ boundaries, complete result files and execution-status handling. The shipped
 skill and caller examples require Council 0.8.5 or later for automatic evidence
 containment and dependency security floors, in addition to capability-based
 Claude admission and the earlier reporting fixes. See the
-[0.8.5 release notes](docs/releases/0.8.5.md) for verification and limits.
+[0.8.6 release notes](docs/releases/0.8.6.md) for the current provider changes
+and [0.8.5 release notes](docs/releases/0.8.5.md) for containment details.
 
 Claude Code compatibility is capability-based, not an exact-build allowlist.
 Before each request, Council reads the selected binary's version for diagnostics
 and checks its help option definitions for the controls the request uses. New
-builds do not need a Council release when those controls remain available.
+builds can pass this check without a Council release when those definitions
+remain available.
 Missing controls fail explicitly; Council never drops isolation flags to proceed.
-Help advertises syntax, not authentication, isolation semantics or generation
-success. Existing policy checks and strict terminal-response validation remain.
-Codex's allowlist is unchanged: **0.149.1, 0.153.3 and 0.160.1**. Unknown Codex
-versions still fail explicitly. Report the chosen path/version from diagnostics,
-not an assumed shell binary; do not edit package constants to bypass a check.
-See the invocation contract for native versus synthetic verification boundaries.
-The Codex default remains `gpt-5.4`, which is absent from the tested 0.160.1
-catalog. That version requires an explicit supported model through `--models`
-or provider configuration; contained native checks used `gpt-6.1-sol`. Exact
-0.160.1 tool controls preserve authentication, selected model and reasoning effort.
-This is not support for every model or future CLI release.
+Council captures help through a bounded terminal stream, with a bounded pipe
+fallback if a terminal is unavailable. The two permission controls must advertise
+the required values; absent choices fail closed. Help output can still be
+incomplete in ways this check cannot detect. Help advertises syntax, not
+authentication, isolation semantics or generation success. Existing policy
+checks and strict terminal-response validation remain.
+The unreleased Codex candidate uses a separately maintained compatibility record
+instead of a fixed version list. Council requires a current record for the selected
+build, platform, model, authentication route, reasoning and output mode. It copies
+and verifies the listed executable and resources, then checks the version and
+bundled catalog from that same copy before running a request. Unknown, changed or
+unrecorded combinations fail closed. A new Codex release can be supported without
+a new Council build only after its exact combination has been independently
+qualified and added to the record.
+
+The record source currently returns 404 and no production record has been
+published; this candidate therefore cannot run Codex yet. Council uses an explicit
+Council or request model first; otherwise it uses the model in the selected Codex
+configuration. If neither selects a model, Council asks the user to select one.
+The draft record covers only macOS arm64 with ChatGPT authentication and selected
+models and reasoning modes; other previously supported setups remain unqualified. Each request needs a reachable,
+current record and a temporary runtime copy (about 356 MB for Codex 0.165.0).
+Synthetic and loopback checks do not prove real provider access or cover all
+models, authentication routes or future versions.
 
 This release also includes a mode-aware execution path with runtime profiles,
 routed handoff, capability planning, and deterministic eval tooling. Those
@@ -154,6 +169,10 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 ```bash
 pip install the-llm-council
 ```
+
+The Gemini, Google and Vertex extras require Google GenAI 1.52.0 or later.
+The base package requires Pydantic 2.10.6, PyYAML 6.0.1 and Typer 0.20.1 or
+later. A dependency resolver may select newer compatible versions.
 
 With specific providers:
 
@@ -274,16 +293,20 @@ council doctor
 council doctor --deep --provider claude --provider gemini-cli --provider codex
 ```
 
-The Codex CLI adapter runs nested `codex exec` calls under an isolated temporary
-`HOME`, copying only the Codex auth files required for login. That keeps council
-subprocesses from inheriting the parent Codex agent's MCP tools, plugins, or
-skills while preserving your local Codex authentication. It also preserves the
-ambient Codex runtime environment, so `council doctor` reflects real login
-status instead of a false healthy result caused by over-stripped subprocess env.
-For Codex, a base doctor success reports login status only, not generation
-readiness. Require `probe_ok: true` from a deep probe for reachability; neither
-result proves large-review success. Do not infer path/version details absent
-from the diagnostic.
+The Codex CLI adapter runs the verified private copy with an isolated temporary
+`HOME` and only the selected authentication file. Its record-backed environment
+is restricted and does not inherit proxy, CA or loader overrides. Custom API-key
+endpoints require an explicitly qualified custom-route record; a ChatGPT custom
+route is not currently supported. If the record cannot be fetched or does not
+match, the request fails without falling back to a version string. The snapshot
+protects against ordinary concurrent upgrades; other processes under the same
+user account remain trusted.
+
+For Codex, base doctor checks the default model, default reasoning, text output
+and login status. It does not prove a credential works or that another model is
+ready. Require `probe_ok: true` from a deep probe for reachability; neither result
+proves a large review succeeded. Report only path and version details actually
+present in the diagnostic.
 
 ### Run Deterministic Evals
 
@@ -716,7 +739,7 @@ After publication and approval to update the installed tool, preserve any local
 package edits and the uv receipt, then replace the exact version constraint:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.5'
+uv tool install --reinstall 'the-llm-council[all]==0.8.6'
 ```
 
 This targets the uv-managed tool and its exposed executable, and updates the

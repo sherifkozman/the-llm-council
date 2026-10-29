@@ -13,21 +13,27 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib
 import json
 import logging
 import os
+import platform
 import re
 import shlex
 import shutil
+import stat
 import sys
 import tempfile
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, ClassVar
+from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any, ClassVar, Literal
 from urllib.parse import urlsplit
+
+import certifi
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -39,7 +45,6 @@ from llm_council.providers.base import (
     classify_error,
 )
 from llm_council.providers.cli._compatibility import (
-    check_verified_version,
     native_identity,
     selected_cli_path,
 )
@@ -47,13 +52,10 @@ from llm_council.providers.cli._subprocess import terminate_process_tree
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gpt-5.4"
 # Generation only: native tools are separately disabled and catalog-validated.
 DEFAULT_FLAGS = "--sandbox read-only --skip-git-repo-check"
-# The compiler imports this tested baseline; runtime metadata reports the observed version.
-_VERIFIED_VERSION = "codex-cli 0.149.1"
-_VERIFIED_VERSIONS = (_VERIFIED_VERSION, "codex-cli 0.153.3", "codex-cli 0.160.1")
 _CLEANUP_SECONDS = 1.0
+_MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024
 _GENERATION_CONFIG = {
     "features.shell_tool": False,
     "features.view_image": False,
@@ -90,12 +92,334 @@ _CREDENTIAL_ENV_KEY = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class _ValidatedCodexRecords:
+    records: list[dict[str, Any]]
+    issued: datetime
+    expires: datetime
+
+    def current_at(self, now: datetime) -> bool:
+        return self.issued <= now < self.expires
+
+
+def _validated_compatibility_records(
+    payload: bytes, now: datetime
+) -> _ValidatedCodexRecords | None:
+    """Validate a complete bounded document; validation does not authorize execution."""
+    if len(payload) > 256 * 1024 or now.tzinfo is None or now.utcoffset() is None:
+        return None
+
+    def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    try:
+        document = json.loads(payload, object_pairs_hook=unique_pairs)
+        if (
+            not isinstance(document, dict)
+            or set(document) != {"schema", "issued_at", "expires_at", "records"}
+            or type(document["schema"]) is not int
+            or document["schema"] not in (1, 2)
+            or not isinstance(document["records"], list)
+            or len(document["records"]) > 256
+        ):
+            return None
+        issued = datetime.strptime(document["issued_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        expires = datetime.strptime(document["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        if not (issued <= now < expires and expires - issued <= timedelta(days=90)):
+            return None
+        fields = {
+            "version",
+            "os",
+            "arch",
+            "model",
+            "auth",
+            "endpoint",
+            "reasoning",
+            "output",
+            "catalog_sha256",
+            "files",
+            "executables",
+        }
+        if document["schema"] == 2:
+            context_fields = {"model", "auth", "endpoint", "reasoning", "output"}
+            build_fields = (fields - context_fields) | {"profile", "contexts"}
+            expanded: list[dict[str, Any]] = []
+            for build in document["records"]:
+                if not isinstance(build, dict) or set(build) != build_fields:
+                    return None
+                contexts = build["contexts"]
+                if not isinstance(contexts, list) or not 1 <= len(contexts) <= 1024:
+                    return None
+                if len(expanded) + len(contexts) > 4096:
+                    return None
+                common = {key: value for key, value in build.items() if key != "contexts"}
+                for context in contexts:
+                    if not isinstance(context, dict) or set(context) != context_fields:
+                        return None
+                    expanded.append({**common, **context})
+            document["records"] = expanded
+        validated_inventories: set[tuple[int, int]] = set()
+        for record in document["records"]:
+            if not isinstance(record, dict) or set(record) != fields | {"profile"}:
+                return None
+            if record["profile"] not in ("generation-v1", "generation-legacy-v1"):
+                return None
+            if any(
+                not isinstance(record[key], str) or not record[key] or len(record[key]) > 128
+                for key in fields - {"files", "executables"}
+            ):
+                return None
+            if not re.fullmatch(r"codex-cli [0-9]+\.[0-9]+\.[0-9]+", record["version"]):
+                return None
+            if not re.fullmatch(r"[0-9a-f]{64}", record["catalog_sha256"]):
+                return None
+            if (
+                record["os"] not in ("darwin", "linux")
+                or record["arch"] not in ("arm64", "x86_64")
+                or (record["auth"], record["endpoint"])
+                not in (("apikey", "openai"), ("apikey", "custom"), ("chatgpt", "chatgpt"))
+                or record["reasoning"]
+                not in ("default", "none", "low", "medium", "high", "xhigh", "max", "ultra")
+                or record["output"] not in ("text", "json_schema")
+            ):
+                return None
+            files = record["files"]
+            executables = record["executables"]
+            inventory_key = (id(files), id(executables))
+            if inventory_key in validated_inventories:
+                continue
+            if (
+                not isinstance(files, dict)
+                or not (1 <= len(files) <= 64)
+                or "bin/codex" not in files
+            ):
+                return None
+            if (
+                not isinstance(executables, list)
+                or not all(isinstance(name, str) for name in executables)
+                or executables != sorted(set(executables))
+                or "bin/codex" not in executables
+                or not set(executables) <= set(files)
+            ):
+                return None
+            for name, digest in files.items():
+                if (
+                    not isinstance(name, str)
+                    or len(name) > 240
+                    or any(char in name for char in ("\x00", "\\", ":"))
+                ):
+                    return None
+                path = PurePosixPath(name)
+                if (
+                    path.is_absolute()
+                    or any(part in (".", "..") for part in name.split("/"))
+                    or str(path) != name
+                    or not isinstance(digest, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                ):
+                    return None
+            validated_inventories.add(inventory_key)
+        return _ValidatedCodexRecords(document["records"], issued, expires)
+    except (ValueError, TypeError, UnicodeDecodeError, OverflowError, RecursionError):
+        return None
+
+
+def _compatibility_candidates(
+    payload: bytes,
+    criteria: dict[str, str],
+    now: datetime,
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> list[dict[str, Any]]:
+    """Select possible records; copy and full identity matching must follow."""
+    fields = {"os", "arch", "model", "auth", "endpoint", "reasoning", "output"}
+    if set(criteria) != fields:
+        return []
+    records = _validated_compatibility_records(payload, now)
+    if records is None:
+        return []
+    matches = [
+        record for record in records.records if all(record[key] == criteria[key] for key in fields)
+    ]
+    if clock is not None and not records.current_at(clock()):
+        return []
+    return matches
+
+
+def _inventory_sha256(files: dict[str, str], executables: list[str]) -> str:
+    canonical = json.dumps(
+        {"files": files, "executables": executables}, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _match_snapshot_identity(
+    payload: bytes,
+    criteria: dict[str, str],
+    executable_sha256: str,
+    version: str,
+    catalog: bytes,
+    inventory_sha256: str,
+    now: datetime,
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any] | None:
+    """Match observations to one current record; snapshot ownership remains mandatory."""
+    if len(catalog) > _MAX_PROBE_OUTPUT_BYTES:
+        return None
+    fields = {"os", "arch", "model", "auth", "endpoint", "reasoning", "output"}
+    if set(criteria) != fields:
+        return None
+    validated = _validated_compatibility_records(payload, now)
+    if validated is None:
+        return None
+    catalog_sha256 = hashlib.sha256(catalog).hexdigest()
+    matches = [
+        record
+        for record in validated.records
+        if all(record[key] == criteria[key] for key in fields)
+        and record["files"]["bin/codex"] == executable_sha256
+        and record["version"] == version
+        and record["catalog_sha256"] == catalog_sha256
+        and _inventory_sha256(record["files"], record["executables"]) == inventory_sha256
+    ]
+    if clock is not None and not validated.current_at(clock()):
+        return None
+    return matches[0] if len(matches) == 1 else None
+
+
+def _native_executable_matches(path: Path, system: str, architecture: str) -> bool:
+    """Reject wrappers and executables for a different recorded platform."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return False
+            header = os.read(fd, 20)
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+    if system == "darwin" and len(header) >= 16 and header[:4] == b"\xcf\xfa\xed\xfe":
+        cpu = int.from_bytes(header[4:8], "little")
+        file_type = int.from_bytes(header[12:16], "little")
+        return file_type == 2 and cpu == {"arm64": 0x100000C, "x86_64": 0x1000007}.get(architecture)
+    if system == "linux" and len(header) >= 20 and header[:5] == b"\x7fELF\x02":
+        if header[5] == 1:
+            byte_order: Literal["little", "big"] = "little"
+        elif header[5] == 2:
+            byte_order = "big"
+        else:
+            return False
+        if header[6] != 1:
+            return False
+        file_type = int.from_bytes(header[16:18], byte_order)
+        cpu = int.from_bytes(header[18:20], byte_order)
+        return file_type in (2, 3) and cpu == {"arm64": 183, "x86_64": 62}.get(architecture)
+    return False
+
+
+class _PreSpawnRejectedError(RuntimeError):
+    """A pre-spawn guard rejected the request before a child was created."""
+
+
+@dataclass
+class _SnapshotCleanup:
+    loop: asyncio.AbstractEventLoop
+    settled: bool = True
+    closed: bool = False
+
+
+@dataclass
+class _CodexSnapshot:
+    executable: Path
+    cleanup_confirmed: _SnapshotCleanup
+    executable_sha256: str | None = None
+    inventory_sha256: str | None = None
+
+
+def _snapshot_has_current_candidate(
+    payload: bytes,
+    criteria: dict[str, str],
+    snapshot: _CodexSnapshot,
+    *,
+    allow_pending: bool = False,
+) -> bool:
+    if (
+        snapshot.executable_sha256 is None
+        or snapshot.inventory_sha256 is None
+        or snapshot.cleanup_confirmed.closed
+        or (not snapshot.cleanup_confirmed.settled and not allow_pending)
+    ):
+        return False
+    fields = {"os", "arch", "model", "auth", "endpoint", "reasoning", "output"}
+    if set(criteria) != fields:
+        return False
+    validated = _validated_compatibility_records(payload, datetime.now(timezone.utc))
+    if validated is None:
+        return False
+    matched = any(
+        all(record[key] == criteria[key] for key in fields)
+        and record["files"]["bin/codex"] == snapshot.executable_sha256
+        and _inventory_sha256(record["files"], record["executables"]) == snapshot.inventory_sha256
+        for record in validated.records
+    )
+    return matched and validated.current_at(datetime.now(timezone.utc))
+
+
+@dataclass
+class _CodexAdmission:
+    snapshot: _CodexSnapshot
+    version: str
+    catalog: bytes
+    payload: bytes
+    criteria: dict[str, str]
+    record: dict[str, Any]
+
+    def is_current(self, *, allow_pending: bool = False) -> bool:
+        if (
+            self.snapshot.executable_sha256 is None
+            or self.snapshot.inventory_sha256 is None
+            or self.snapshot.cleanup_confirmed.closed
+            or (not self.snapshot.cleanup_confirmed.settled and not allow_pending)
+        ):
+            return False
+        try:
+            if self.snapshot.cleanup_confirmed.loop is not asyncio.get_running_loop():
+                return False
+        except RuntimeError:
+            return False
+        return (
+            _match_snapshot_identity(
+                self.payload,
+                self.criteria,
+                self.snapshot.executable_sha256,
+                self.version,
+                self.catalog,
+                self.snapshot.inventory_sha256,
+                datetime.now(timezone.utc),
+                clock=lambda: datetime.now(timezone.utc),
+            )
+            == self.record
+        )
+
+
 @dataclass
 class _CodexRuntime:
     env: dict[str, str]
     auth: bytes | None
     category: str
     config: dict[str, str]
+    configured_model: Any = None
 
     def diagnostics_env(self) -> dict[str, str]:
         values = dict(self.env)
@@ -116,8 +440,7 @@ def _config_args(config: dict[str, Any]) -> list[str]:
     return [arg for key, value in config.items() for arg in ("-c", f"{key}={json.dumps(value)}")]
 
 
-def _cleanup_home(home: str | Path) -> None:
-    original = sys.exc_info()[1]
+def _cleanup_home(home: str | Path, original: BaseException | None = None) -> None:
     try:
         shutil.rmtree(home)
     except OSError as exc:
@@ -241,11 +564,15 @@ def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
     if event_type == "turn.started":
         state.saw_turn_completed = False
         state.agent_message = ""
-    elif event_type == "item.completed":
+    elif event_type in ("item.started", "item.updated", "item.completed"):
         if state.saw_turn_completed:
             state.protocol_error = "item after terminal event"
+            return
         item = payload.get("item")
-        if isinstance(item, dict) and item.get("type") == "agent_message":
+        if not isinstance(item, dict) or item.get("type") not in ("agent_message", "reasoning"):
+            state.protocol_error = "unexpected generation item"
+            return
+        if event_type == "item.completed" and item.get("type") == "agent_message":
             text = item.get("text")
             if isinstance(text, str):
                 state.agent_message = text
@@ -282,6 +609,8 @@ def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
     elif event_type == "error":
         message = payload.get("message")
         state.error_message = message if isinstance(message, str) and message else "Codex error"
+    elif event_type != "thread.started":
+        state.protocol_error = "unexpected generation event"
 
 
 async def _read_codex_stdout(stream: asyncio.StreamReader | None, state: _LiveCodexState) -> None:
@@ -296,8 +625,22 @@ async def _read_codex_stdout(stream: asyncio.StreamReader | None, state: _LiveCo
         while b"\n" in pending:
             line, pending = pending.split(b"\n", 1)
             _ingest_codex_stdout_line(line.decode("utf-8") + "\n", state)
+            if state.protocol_error:
+                raise RuntimeError(f"Codex CLI {state.protocol_error}")
     if pending:
         _ingest_codex_stdout_line(pending.decode("utf-8"), state)
+        if state.protocol_error:
+            raise RuntimeError(f"Codex CLI {state.protocol_error}")
+
+
+async def _read_probe_stream(stream: asyncio.StreamReader, parts: list[str], label: str) -> None:
+    """Read a bounded probe stream before decoding it as UTF-8."""
+    data = bytearray()
+    while chunk := await stream.read(65536):
+        if len(data) + len(chunk) > _MAX_PROBE_OUTPUT_BYTES:
+            raise RuntimeError(f"Codex CLI probe {label} exceeded output limit")
+        data.extend(chunk)
+    parts.append(data.decode("utf-8", errors="replace"))
 
 
 async def _read_codex_stderr(stream: asyncio.StreamReader | None, state: _LiveCodexState) -> None:
@@ -330,9 +673,15 @@ class CodexCLIProvider(ProviderAdapter):
         timeout: int = 120,
     ) -> None:
         self._cli_path = selected_cli_path(cli_path, "codex")
-        self._default_model = default_model or DEFAULT_MODEL
+        self._default_model = default_model
         self._default_flags = default_flags or DEFAULT_FLAGS
         self._timeout = timeout
+
+    def _model_for_request(self, request: GenerateRequest, runtime: _CodexRuntime) -> str:
+        model = request.model or self._default_model or runtime.configured_model
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("Codex: select a model in Council or in your Codex configuration")
+        return model
 
     def _build_command(
         self,
@@ -374,9 +723,8 @@ class CodexCLIProvider(ProviderAdapter):
             if not key.startswith(_ENV_DENYLIST_PREFIXES) and key not in _ENV_SESSION_KEYS
         }
 
-    def _resolve_runtime(self) -> _CodexRuntime:
-        """Snapshot one supported identity/route; never consult a fallback home."""
-        env = self._get_subprocess_env()
+    @staticmethod
+    def _read_native_config(env: dict[str, str]) -> dict[str, Any]:
         source = Path(env.get("CODEX_HOME") or (Path.home() / ".codex")).resolve()
         config: dict[str, Any] = {}
         config_path = source / "config.toml"
@@ -394,6 +742,13 @@ class CodexCLIProvider(ProviderAdapter):
                 config = parser.loads(config_path.read_text(encoding="utf-8"))
             except (ValueError, OSError) as exc:
                 raise ValueError("Codex unsupported auth/route configuration") from exc
+        return config
+
+    def _resolve_runtime(self) -> _CodexRuntime:
+        """Snapshot one supported identity/route; never consult a fallback home."""
+        env = self._get_subprocess_env()
+        source = Path(env.get("CODEX_HOME") or (Path.home() / ".codex")).resolve()
+        config = self._read_native_config(env)
         providers = config.get("model_providers", {})
         if (
             config.get("model_provider", "openai") != "openai"
@@ -504,7 +859,7 @@ class CodexCLIProvider(ProviderAdapter):
             native["openai_base_url"] = value
         for key in ("CODEX_API_KEY", "OPENAI_API_KEY"):
             env.pop(key, None)
-        return _CodexRuntime(env, auth, category, native)
+        return _CodexRuntime(env, auth, category, native, config.get("model"))
 
     def _create_isolated_cli_home(self, runtime: _CodexRuntime | None = None) -> str:
         runtime = runtime or self._resolve_runtime()
@@ -523,15 +878,24 @@ class CodexCLIProvider(ProviderAdapter):
                     ) from exc
             (cli_home / "work").mkdir()
             return str(cli_home)
-        except BaseException:
-            _cleanup_home(cli_home)
+        except BaseException as exc:
+            _cleanup_home(cli_home, exc)
             raise
 
-    def _isolated_env(self, cli_home: str, runtime: _CodexRuntime) -> dict[str, str]:
-        env = dict(runtime.env)
-        env.update(HOME=cli_home, CODEX_HOME=str(Path(cli_home) / ".codex"))
-        env["XDG_CONFIG_HOME"] = str(Path(cli_home) / ".config")
-        return env
+    @staticmethod
+    def _record_environment(home: str) -> dict[str, str]:
+        """Fixed environment shared by record-backed probes and generation."""
+        return {
+            "PATH": os.defpath,
+            "HOME": home,
+            "CODEX_HOME": str(Path(home) / ".codex"),
+            "XDG_CONFIG_HOME": str(Path(home) / ".config"),
+            "TMPDIR": home,
+            "TMP": home,
+            "TEMP": home,
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
 
     def _request_timeout(self, request: GenerateRequest) -> float:
         return (
@@ -545,6 +909,12 @@ class CodexCLIProvider(ProviderAdapter):
             raise asyncio.TimeoutError
         return remaining
 
+    def _require_remaining(self, deadline: float) -> None:
+        try:
+            self._remaining(deadline)
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError("Codex CLI timed out before subprocess spawn") from exc
+
     async def _run_cli(
         self,
         cmd: list[str],
@@ -555,8 +925,17 @@ class CodexCLIProvider(ProviderAdapter):
         stdin: Any = None,
         events: bool = False,
         diagnostics_env: dict[str, str] | None = None,
+        cleanup_confirmed: _SnapshotCleanup | None = None,
+        pre_spawn_guard: Callable[[], bool] | None = None,
     ) -> tuple[int, _LiveCodexState]:
         """Own spawn, one set of pipe readers and finite cancellation-safe cleanup."""
+        if cleanup_confirmed is not None:
+            if cleanup_confirmed.closed:
+                raise RuntimeError("Codex snapshot is closed")
+            if cleanup_confirmed.loop is not asyncio.get_running_loop():
+                raise RuntimeError("Codex snapshot is bound to a different event loop")
+            if not cleanup_confirmed.settled:
+                raise RuntimeError("Codex snapshot has an active child or incomplete cleanup")
         try:
             self._remaining(deadline)
         except asyncio.TimeoutError:
@@ -565,8 +944,28 @@ class CodexCLIProvider(ProviderAdapter):
         readers: list[asyncio.Future[Any]] = []
         state = _LiveCodexState()
         cancellation: asyncio.CancelledError | None = None
-        spawn = asyncio.create_task(
-            asyncio.create_subprocess_exec(
+        if cleanup_confirmed is not None:
+            cleanup_confirmed.settled = False
+
+        async def spawn_checked() -> asyncio.subprocess.Process:
+            def check_deadline() -> None:
+                try:
+                    self._require_remaining(deadline)
+                except RuntimeError as exc:
+                    raise _PreSpawnRejectedError(str(exc)) from exc
+
+            check_deadline()
+            try:
+                if pre_spawn_guard is not None and not pre_spawn_guard():
+                    raise _PreSpawnRejectedError(
+                        "Codex compatibility record expired before subprocess spawn"
+                    )
+            except _PreSpawnRejectedError:
+                raise
+            except Exception as exc:
+                raise _PreSpawnRejectedError("Codex pre-spawn check failed") from exc
+            check_deadline()
+            return await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=stdin,
                 stdout=asyncio.subprocess.PIPE,
@@ -575,7 +974,8 @@ class CodexCLIProvider(ProviderAdapter):
                 cwd=cwd,
                 start_new_session=True,
             )
-        )
+
+        spawn = asyncio.create_task(spawn_checked())
         try:
             # Python 3.10 wait_for() can swallow cancellation racing completion.
             done, _ = await asyncio.wait({spawn}, timeout=self._remaining(deadline))
@@ -588,16 +988,15 @@ class CodexCLIProvider(ProviderAdapter):
                 if events:
                     stdout_reader = _read_codex_stdout(proc.stdout, state)
                 else:
-                    stream = proc.stdout
-
-                    async def read_probe() -> None:
-                        data = await stream.read()
-                        state.stdout_parts.append(data.decode("utf-8", errors="replace"))
-
-                    stdout_reader = read_probe()
+                    stdout_reader = _read_probe_stream(proc.stdout, state.stdout_parts, "stdout")
+                stderr_reader = (
+                    _read_codex_stderr(proc.stderr, state)
+                    if events
+                    else _read_probe_stream(proc.stderr, state.stderr_parts, "stderr")
+                )
                 readers = [
                     asyncio.create_task(stdout_reader),
-                    asyncio.create_task(_read_codex_stderr(proc.stderr, state)),
+                    asyncio.create_task(stderr_reader),
                     asyncio.create_task(proc.wait()),
                 ]
                 joined = asyncio.gather(*readers)
@@ -607,6 +1006,8 @@ class CodexCLIProvider(ProviderAdapter):
                     raise asyncio.TimeoutError
                 joined.result()
             else:
+                if not events:
+                    raise RuntimeError("Codex CLI probe requires bounded stream readers")
                 # Test doubles and alternate asyncio process implementations.
                 communicate = asyncio.create_task(proc.communicate())
                 readers.append(communicate)
@@ -616,11 +1017,8 @@ class CodexCLIProvider(ProviderAdapter):
                 if not communicate_done:
                     raise asyncio.TimeoutError
                 stdout, stderr = communicate.result()
-                if events:
-                    for line in stdout.decode("utf-8").splitlines(keepends=True):
-                        _ingest_codex_stdout_line(line, state)
-                else:
-                    state.stdout_parts.append(stdout.decode("utf-8", errors="replace"))
+                for line in stdout.decode("utf-8").splitlines(keepends=True):
+                    _ingest_codex_stdout_line(line, state)
                 state.stderr_parts.append(stderr.decode("utf-8", errors="replace"))
             if proc.returncode is None:
                 raise RuntimeError("Codex CLI exited without a return code")
@@ -641,7 +1039,19 @@ class CodexCLIProvider(ProviderAdapter):
                 try:
                     if proc is None:
                         # A cancelled spawn can already have created an OS process.
-                        proc = await asyncio.wait_for(asyncio.shield(spawn), _CLEANUP_SECONDS)
+                        if (
+                            spawn.done()
+                            and not spawn.cancelled()
+                            and isinstance(
+                                spawn.exception(),
+                                (FileNotFoundError, PermissionError, _PreSpawnRejectedError),
+                            )
+                        ):
+                            return  # An exec failure did not create a child.
+                        try:
+                            proc = await asyncio.wait_for(asyncio.shield(spawn), _CLEANUP_SECONDS)
+                        except (FileNotFoundError, PermissionError, _PreSpawnRejectedError):
+                            return  # The pending spawn definitively created no child.
                     await terminate_process_tree(proc, _CLEANUP_SECONDS)
                 except asyncio.TimeoutError as exc:
                     spawn.cancel()
@@ -672,102 +1082,252 @@ class CodexCLIProvider(ProviderAdapter):
                 if cleanup_error:
                     logger.error("Codex cleanup incomplete during cancellation")
                     raise cancellation from cleanup_error
+                if cleanup_confirmed is not None and not cleanup_task.cancelled():
+                    cleanup_confirmed.settled = True
                 raise cancellation
             cleanup_task.result()
+            if cleanup_confirmed is not None:
+                cleanup_confirmed.settled = True
 
-    async def _verify_native_contract(
+    @contextlib.asynccontextmanager
+    async def _snapshot_verified_codex(
         self,
-        *,
-        env: dict[str, str],
-        cwd: str,
+        source: Path,
+        candidates: list[dict[str, Any]],
         deadline: float,
-        diagnostics_env: dict[str, str] | None = None,
-        identity: dict[str, str | None] | None = None,
-    ) -> str:
+        *,
+        source_entrypoint: str = "bin/codex",
+    ) -> AsyncIterator[_CodexSnapshot]:
+        """Own a hash-verified private runtime until the request finishes."""
+        self._require_remaining(deadline)
+        snapshot = Path(tempfile.mkdtemp(prefix="llm-council-codex-snapshot-"))
+        cleanup_confirmed = _SnapshotCleanup(asyncio.get_running_loop())
+        operation_error: BaseException | None = None
+        try:
+            worker = Path(__file__).with_name("_codex_snapshot_worker.py")
+            with tempfile.TemporaryFile() as request:
+                inventory: dict[str, Any] = {
+                    "candidates": candidates,
+                    "source_entrypoint": source_entrypoint,
+                }
+                # Keep the exact serialized input owned by this operation, even if the
+                # caller later mutates its original candidate dictionaries.
+                inventory = json.loads(json.dumps(inventory))
+                request.write(
+                    json.dumps(
+                        {"source": str(source), "destination": str(snapshot), **inventory}
+                    ).encode("utf-8")
+                )
+                request.seek(0)
+                code, state = await self._run_cli(
+                    [sys.executable, "-I", str(worker)],
+                    env={"HOME": str(snapshot), "TMPDIR": str(snapshot), "PATH": os.defpath},
+                    cwd=str(snapshot),
+                    deadline=deadline,
+                    stdin=request,
+                    cleanup_confirmed=cleanup_confirmed,
+                )
+            if not cleanup_confirmed.settled:
+                raise RuntimeError("Codex snapshot worker cleanup incomplete")
+            if code != 0:
+                raise RuntimeError("Codex runtime snapshot did not match the compatibility record")
+            digest = "".join(state.stdout_parts).strip()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise RuntimeError("Codex snapshot worker returned an invalid executable digest")
+            matches = [
+                candidate
+                for candidate in inventory["candidates"]
+                if candidate["files"]["bin/codex"] == digest
+            ]
+            if not matches or any(candidate != matches[0] for candidate in matches[1:]):
+                raise RuntimeError("Codex snapshot worker returned an ambiguous inventory")
+            inventory_digest = _inventory_sha256(matches[0]["files"], matches[0]["executables"])
+            self._require_remaining(deadline)
+            yield _CodexSnapshot(
+                snapshot / "bin" / "codex", cleanup_confirmed, digest, inventory_digest
+            )
+        except BaseException as exc:
+            operation_error = exc
+            raise
+        finally:
+            cleanup_confirmed.closed = True
+            if cleanup_confirmed.settled:
+                _cleanup_home(snapshot, operation_error)
+            else:
+                logger.error(
+                    "Codex snapshot retained because child cleanup was not confirmed: %s", snapshot
+                )
+                if operation_error is None:
+                    raise RuntimeError(f"Codex snapshot cleanup incomplete; retained at {snapshot}")
+
+    @contextlib.asynccontextmanager
+    async def _snapshot_compatible_codex(
+        self, candidates: list[dict[str, Any]], deadline: float
+    ) -> AsyncIterator[_CodexSnapshot]:
+        """Snapshot the selected CLI package before executing any Codex process."""
+        self._require_remaining(deadline)
         if not self._cli_path:
             raise RuntimeError("Codex CLI not found")
-        code, state = await self._run_cli(
-            [self._cli_path, "--version"],
-            env=env,
-            cwd=cwd,
-            deadline=deadline,
-        )
-        version = "".join(state.stdout_parts).strip()
-        if version not in _VERIFIED_VERSIONS:
-            # Sanitize before constructing an exception, including its cause/context.
-            version = self._redact(version, diagnostics_env if diagnostics_env is not None else env)
-        if identity is not None:
-            identity["cli_version"] = version
-        check_verified_version(version, _VERIFIED_VERSIONS, path=self._cli_path, code=code)
-        return version
-
-    async def _login_status_text(
-        self,
-        *,
-        env: dict[str, str] | None = None,
-        cwd: str | None = None,
-        deadline: float | None = None,
-        native_details: dict[str, str] | None = None,
-    ) -> str | None:
-        if not self._cli_path:
-            return None
-        cli_home = None
-        native: dict[str, str] = {}
-        diagnostics_env = env
-        if deadline is None:
-            deadline = asyncio.get_running_loop().time() + 5
         try:
-            if env is None:
-                runtime = self._resolve_runtime()
-                cli_home = self._create_isolated_cli_home(runtime)
-                env = self._isolated_env(cli_home, runtime)
-                cwd = str(Path(cli_home) / "work")
-                native = runtime.config
-                diagnostics_env = runtime.diagnostics_env()
-                version = await self._verify_native_contract(
-                    env=env, cwd=cwd, deadline=deadline, diagnostics_env=diagnostics_env
-                )
-                if native_details is not None:
-                    native_details.update(cli_path=self._cli_path, cli_version=version)
-            if cwd is None:
-                raise ValueError("Codex login status requires an isolated working directory")
-            code, state = await self._run_cli(
-                [self._cli_path, *_config_args(native), "login", "status"],
-                env=env,
-                cwd=cwd,
-                deadline=deadline,
-            )
-            text = "".join(state.stdout_parts).strip() or "".join(state.stderr_parts).strip()
-            if code != 0 and "logged in" in text.lower() and "not logged in" not in text.lower():
-                return f"CLI login status failed (exit {code})"
-            return self._redact(text, diagnostics_env or env) or f"CLI returned exit code {code}"
-        finally:
-            if cli_home:
-                _cleanup_home(cli_home)
+            selected = Path(self._cli_path).resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise RuntimeError("Codex selected executable could not be resolved") from exc
+        if selected.parent.name == "bin":
+            source, source_entrypoint = selected.parent.parent, f"bin/{selected.name}"
+        else:
+            source, source_entrypoint = selected.parent, selected.name
+        inventories = [
+            {"files": record["files"], "executables": record["executables"]}
+            for record in candidates
+        ]
+        async with self._snapshot_verified_codex(
+            source, inventories, deadline, source_entrypoint=source_entrypoint
+        ) as snapshot:
+            yield snapshot
 
-    async def _generation_catalog(
+    async def _fetch_compatibility_record(self, *, deadline: float) -> bytes | None:
+        """Fetch only the fixed public record, using a credential-free child."""
+        self._require_remaining(deadline)
+        worker = Path(__file__).with_name("_codex_record_worker.py")
+        fetch_deadline = min(deadline, asyncio.get_running_loop().time() + 5.0)
+        code, state = await self._run_cli(
+            [sys.executable, "-I", str(worker), certifi.where()],
+            env={"PATH": os.defpath},
+            cwd=tempfile.gettempdir(),
+            deadline=fetch_deadline,
+        )
+        if code != 0:
+            return None
+        data = "".join(state.stdout_parts).encode("utf-8")
+        return data if len(data) <= 256 * 1024 else None
+
+    @contextlib.asynccontextmanager
+    async def _admit_recorded_codex(
         self,
+        runtime: _CodexRuntime,
+        request: GenerateRequest,
+        *,
+        deadline: float,
+        identity: dict[str, str | None],
+    ) -> AsyncIterator[_CodexAdmission]:
+        """Inspect a record-selected snapshot with no model credentials."""
+        self._require_remaining(deadline)
+        system = {"darwin": "darwin", "linux": "linux"}.get(sys.platform)
+        architecture = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64"}.get(
+            platform.machine().lower()
+        )
+        endpoint = {"apikey": "openai", "chatgpt": "chatgpt"}.get(runtime.category)
+        if system is None or architecture is None or endpoint is None:
+            raise RuntimeError("Codex runtime context is not covered by compatibility records")
+        if "openai_base_url" in runtime.config:
+            if runtime.category != "apikey":
+                raise RuntimeError("Codex custom provider route is not qualified for this auth")
+            endpoint = "custom"
+        criteria = {
+            "os": system,
+            "arch": architecture,
+            "model": self._model_for_request(request, runtime),
+            "auth": runtime.category,
+            "endpoint": endpoint,
+            "reasoning": self._reasoning_effort(request) or "default",
+            "output": "json_schema" if request.structured_output else "text",
+        }
+        payload = await self._fetch_compatibility_record(deadline=deadline)
+        if payload is None:
+            raise RuntimeError("Codex compatibility record unavailable")
+        validated_payload: bytes = payload
+        candidates = _compatibility_candidates(
+            payload, criteria, datetime.now(timezone.utc), clock=lambda: datetime.now(timezone.utc)
+        )
+        if not candidates:
+            raise RuntimeError("Codex request has no current matching compatibility record")
+        async with self._snapshot_compatible_codex(candidates, deadline) as snapshot:
+            if not _native_executable_matches(snapshot.executable, system, architecture):
+                raise RuntimeError(
+                    "Codex snapshot executable format or architecture is unsupported"
+                )
+            probe_runtime = _CodexRuntime(runtime.env, None, runtime.category, runtime.config)
+            home = self._create_isolated_cli_home(probe_runtime)
+            operation_error: BaseException | None = None
+            try:
+                env = self._record_environment(home)
+                cwd = str(Path(home) / "work")
+                if not _snapshot_has_current_candidate(payload, criteria, snapshot):
+                    raise RuntimeError("Codex compatibility record expired before version probe")
+                code, version_state = await self._run_cli(
+                    [str(snapshot.executable), "--version"],
+                    env=env,
+                    cwd=cwd,
+                    deadline=deadline,
+                    cleanup_confirmed=snapshot.cleanup_confirmed,
+                    pre_spawn_guard=lambda: _snapshot_has_current_candidate(
+                        validated_payload, criteria, snapshot, allow_pending=True
+                    ),
+                )
+                version = "".join(version_state.stdout_parts).strip()
+                if code != 0:
+                    raise RuntimeError("Codex snapshot version probe failed")
+                if not _snapshot_has_current_candidate(payload, criteria, snapshot):
+                    raise RuntimeError("Codex compatibility record expired before catalog probe")
+                code, catalog_state = await self._run_cli(
+                    [str(snapshot.executable), "debug", "models", "--bundled"],
+                    env=env,
+                    cwd=cwd,
+                    deadline=deadline,
+                    cleanup_confirmed=snapshot.cleanup_confirmed,
+                    pre_spawn_guard=lambda: _snapshot_has_current_candidate(
+                        validated_payload, criteria, snapshot, allow_pending=True
+                    ),
+                )
+                catalog_text = "".join(catalog_state.stdout_parts)
+                if code != 0 or "\ufffd" in catalog_text:
+                    raise RuntimeError("Codex snapshot catalog probe failed")
+                catalog = catalog_text.encode("utf-8")
+                if snapshot.executable_sha256 is None or snapshot.inventory_sha256 is None:
+                    raise RuntimeError("Codex snapshot identity is unavailable")
+                record = _match_snapshot_identity(
+                    payload,
+                    criteria,
+                    snapshot.executable_sha256,
+                    version,
+                    catalog,
+                    snapshot.inventory_sha256,
+                    datetime.now(timezone.utc),
+                    clock=lambda: datetime.now(timezone.utc),
+                )
+                if record is None:
+                    raise RuntimeError(
+                        "Codex snapshot does not match a current compatibility record"
+                    )
+                identity["cli_version"] = version
+            except BaseException as exc:
+                operation_error = exc
+                raise
+            finally:
+                if snapshot.cleanup_confirmed.settled:
+                    _cleanup_home(home, operation_error)
+                else:
+                    logger.error(
+                        "Codex probe home retained because child cleanup was not confirmed: %s",
+                        home,
+                    )
+                    if operation_error is None:
+                        raise RuntimeError(f"Codex probe cleanup incomplete; retained at {home}")
+            yield _CodexAdmission(snapshot, version, catalog, payload, criteria, record)
+
+    @staticmethod
+    def _write_generation_catalog(
+        catalog_text: str,
         model: str,
         effort: str | None,
         *,
-        version: str,
-        env: dict[str, str],
-        cwd: str,
-        deadline: float,
         root: Path,
+        profile: str | None = None,
     ) -> str:
-        if not self._cli_path:
-            raise RuntimeError("Codex CLI not found")
-        code, state = await self._run_cli(
-            [self._cli_path, "debug", "models", "--bundled"],
-            env=env,
-            cwd=cwd,
-            deadline=deadline,
-        )
-        if code:
-            raise ValueError("Codex bundled model catalog discovery failed")
+        if profile not in ("generation-v1", "generation-legacy-v1"):
+            raise ValueError("Codex unsupported compatibility profile")
         try:
-            catalog = json.loads("".join(state.stdout_parts))
+            catalog = json.loads(catalog_text)
         except ValueError as exc:
             raise ValueError("Codex unsupported bundled model catalog JSON") from exc
         if (
@@ -787,7 +1347,7 @@ class CodexCLIProvider(ProviderAdapter):
         if model not in slugs:
             raise ValueError(f"Codex unsupported model in bundled catalog: {model}")
         selected = models[slugs.index(model)]
-        if version == "codex-cli 0.160.1":
+        if profile == "generation-v1":
             if (
                 selected.get("experimental_supported_tools")
                 not in ([], ["send_user_message_async", "clock"])
@@ -795,8 +1355,20 @@ class CodexCLIProvider(ProviderAdapter):
                 or selected.get("multi_agent_version") not in (None, "disabled", "v2")
             ):
                 raise ValueError("Codex unsupported model catalog tool shape")
-            # These model-level controls override feature flags in exactly 0.160.1.
+            # These model-level controls can override feature flags.
             selected["experimental_supported_tools"] = []
+            if selected.get("tool_mode") is not None:
+                selected["tool_mode"] = "direct"
+            if selected.get("multi_agent_version") is not None:
+                selected["multi_agent_version"] = "disabled"
+        elif profile == "generation-legacy-v1":
+            if selected.get("tool_mode") not in (
+                None,
+                "direct",
+                "code_mode",
+                "code_mode_only",
+            ) or selected.get("multi_agent_version") not in (None, "disabled", "v1", "v2"):
+                raise ValueError("Codex unsupported model catalog tool shape")
             if selected.get("tool_mode") is not None:
                 selected["tool_mode"] = "direct"
             if selected.get("multi_agent_version") is not None:
@@ -936,9 +1508,100 @@ class CodexCLIProvider(ProviderAdapter):
         response.raw = {**(response.raw or {}), "native_identity": dict(identity)}
         return response
 
+    async def _execute_generation(
+        self,
+        request: GenerateRequest,
+        runtime: _CodexRuntime,
+        *,
+        root: Path,
+        env: dict[str, str],
+        cwd: str,
+        deadline: float,
+        version: str,
+        model: str,
+        effort: str | None,
+        instructions: str,
+        prompt: str,
+        catalog_path: str,
+        admission: _CodexAdmission,
+    ) -> GenerateResponse:
+        output_path = root / "last-message.txt"
+        schema_path = None
+        if request.structured_output:
+            schema_path = root / "schema.json"
+            schema_path.write_text(
+                json.dumps(_prepare_schema_for_codex(dict(request.structured_output.json_schema))),
+                encoding="utf-8",
+            )
+        stdin_path = root / "prompt.txt"
+        stdin_path.write_text(prompt, encoding="utf-8")
+        cmd = self._build_command(
+            model=model,
+            output_last_message_path=str(output_path),
+            output_schema_path=str(schema_path) if schema_path else None,
+        )
+        cmd[0] = str(admission.snapshot.executable)
+        cmd.extend(["--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config"])
+        cmd.extend(_config_args(runtime.config))
+        cmd.extend(_config_args(_GENERATION_CONFIG))
+        if admission.record["profile"] == "generation-v1":
+            cmd.extend(["-c", "features.goals=false"])
+        cmd.extend(["-c", f"model_catalog_json={json.dumps(catalog_path)}"])
+        if instructions:
+            instruction_path = root / "instructions.txt"
+            instruction_path.write_text(instructions, encoding="utf-8")
+            cmd.extend(["-c", f"model_instructions_file={json.dumps(str(instruction_path))}"])
+        if effort is not None:
+            cmd.extend(["-c", f"model_reasoning_effort={json.dumps(effort)}"])
+        with stdin_path.open("rb") as stdin:
+            if not admission.is_current():
+                raise RuntimeError("Codex compatibility record expired before generation")
+            run_options: dict[str, Any] = {
+                "cleanup_confirmed": admission.snapshot.cleanup_confirmed,
+                "pre_spawn_guard": lambda: admission.is_current(allow_pending=True),
+            }
+            code, state = await self._run_cli(
+                cmd,
+                env=env,
+                cwd=cwd,
+                deadline=deadline,
+                stdin=stdin,
+                events=True,
+                diagnostics_env=runtime.diagnostics_env(),
+                **run_options,
+            )
+        if code != 0 or state.error_message:
+            self._raise_cli_error(state, code, runtime.diagnostics_env())
+        if state.protocol_error:
+            raise RuntimeError(f"Codex CLI {state.protocol_error}")
+        if not state.saw_turn_completed:
+            raise RuntimeError("Codex CLI missing terminal turn.completed")
+        output = (
+            output_path.read_text(encoding="utf-8") if output_path.exists() else state.agent_message
+        )
+        if not output.strip():
+            raise RuntimeError("Codex CLI empty final output")
+        return GenerateResponse(
+            text=output,
+            content=output,
+            usage=state.usage,
+            raw={
+                "stdout": "".join(state.stdout_parts),
+                "native_version": version,
+                "cli_path": self._cli_path,
+                "model": model,
+                "auth_category": runtime.category,
+                "reasoning": {
+                    "effort": effort,
+                    "status": "mapped" if effort else "uncontrolled",
+                },
+            },
+        )
+
     async def _generate(
         self, request: GenerateRequest, identity: dict[str, str | None]
     ) -> GenerateResponse:
+        """Generate from one record-admitted snapshot and its observed catalog."""
         if request.stream:
             raise NotImplementedError("Streaming not supported for CLI")
         deadline = asyncio.get_running_loop().time() + self._request_timeout(request)
@@ -949,106 +1612,125 @@ class CodexCLIProvider(ProviderAdapter):
         if not self._cli_path:
             raise RuntimeError("Codex CLI not found")
         runtime = self._resolve_runtime()
+        model = self._model_for_request(request, runtime)
         if runtime.category == "missing":
             raise ValueError("Codex has no supported auth in the selected root or CODEX_API_KEY")
-        cli_home = self._create_isolated_cli_home(runtime)
-        version = "not observed"
-        try:
-            env = self._isolated_env(cli_home, runtime)
-            cwd = str(Path(cli_home) / "work")
-            version = await self._verify_native_contract(
-                env=env,
-                cwd=cwd,
-                deadline=deadline,
-                diagnostics_env=runtime.diagnostics_env(),
-                identity=identity,
-            )
-            model = request.model or self._default_model
-            root = Path(cli_home)
-            catalog_path = await self._generation_catalog(
-                model,
-                effort,
-                version=version,
-                env=env,
-                cwd=cwd,
-                deadline=deadline,
-                root=root,
-            )
-            output_path = root / "last-message.txt"
-            schema_path = None
-            if request.structured_output:
-                schema_path = root / "schema.json"
-                schema_path.write_text(
-                    json.dumps(
-                        _prepare_schema_for_codex(dict(request.structured_output.json_schema))
-                    ),
-                    encoding="utf-8",
+        async with self._admit_recorded_codex(
+            runtime, request, deadline=deadline, identity=identity
+        ) as admission:
+            home = self._create_isolated_cli_home(runtime)
+            operation_error: BaseException | None = None
+            try:
+                root = Path(home)
+                catalog_path = self._write_generation_catalog(
+                    admission.catalog.decode("utf-8"),
+                    model,
+                    effort,
+                    root=root,
+                    profile=admission.record["profile"],
                 )
-            stdin_path = root / "prompt.txt"
-            stdin_path.write_text(prompt, encoding="utf-8")
-            cmd = self._build_command(
-                model=model,
-                output_last_message_path=str(output_path),
-                output_schema_path=str(schema_path) if schema_path else None,
-            )
-            cmd.extend(["--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config"])
-            cmd.extend(_config_args(runtime.config))
-            cmd.extend(_config_args(_GENERATION_CONFIG))
-            if version == "codex-cli 0.160.1":
-                cmd.extend(["-c", "features.goals=false"])
-            cmd.extend(["-c", f"model_catalog_json={json.dumps(catalog_path)}"])
-            if instructions:
-                instruction_path = root / "instructions.txt"
-                instruction_path.write_text(instructions, encoding="utf-8")
-                cmd.extend(["-c", f"model_instructions_file={json.dumps(str(instruction_path))}"])
-            if effort is not None:
-                cmd.extend(["-c", f"model_reasoning_effort={json.dumps(effort)}"])
-            with stdin_path.open("rb") as stdin:
-                code, state = await self._run_cli(
-                    cmd,
-                    env=env,
-                    cwd=cwd,
+                return await self._execute_generation(
+                    request,
+                    runtime,
+                    root=root,
+                    env=self._record_environment(home),
+                    cwd=str(root / "work"),
                     deadline=deadline,
-                    stdin=stdin,
-                    events=True,
-                    diagnostics_env=runtime.diagnostics_env(),
+                    version=admission.version,
+                    model=model,
+                    effort=effort,
+                    instructions=instructions,
+                    prompt=prompt,
+                    catalog_path=catalog_path,
+                    admission=admission,
                 )
-            if code != 0 or state.error_message:
-                self._raise_cli_error(state, code, runtime.diagnostics_env())
-            if state.protocol_error:
-                raise RuntimeError(f"Codex CLI {state.protocol_error}")
-            if not state.saw_turn_completed:
-                raise RuntimeError("Codex CLI missing terminal turn.completed")
-            output = (
-                output_path.read_text(encoding="utf-8")
-                if output_path.exists()
-                else state.agent_message
-            )
-            if not output.strip():
-                raise RuntimeError("Codex CLI empty final output")
-            return GenerateResponse(
-                text=output,
-                content=output,
-                usage=state.usage,
-                raw={
-                    "stdout": "".join(state.stdout_parts),
-                    "native_version": version,
-                    "cli_path": self._cli_path,
-                    "model": model,
-                    "auth_category": runtime.category,
-                    "reasoning": {
-                        "effort": effort,
-                        "status": "mapped" if effort else "uncontrolled",
-                    },
-                },
-            )
-        except (ValueError, RuntimeError) as exc:
-            raise type(exc)(
-                f"{self._cli_path!r} ({identity['cli_version'] or version}): "
-                f"{self._redact(str(exc), runtime.diagnostics_env())}"
-            ) from exc
-        finally:
-            _cleanup_home(cli_home)
+            except BaseException as exc:
+                operation_error = exc
+                raise
+            finally:
+                if admission.snapshot.cleanup_confirmed.settled:
+                    _cleanup_home(home, operation_error)
+                else:
+                    logger.error(
+                        "Codex request home retained because child cleanup was not confirmed: %s",
+                        home,
+                    )
+                    if operation_error is None:
+                        raise RuntimeError(f"Codex request cleanup incomplete; retained at {home}")
+
+    async def _login_status_recorded(self, native_details: dict[str, str]) -> str:
+        """Check default-model readiness with the same record and snapshot as generation."""
+        deadline = asyncio.get_running_loop().time() + min(float(self._timeout), 30.0)
+        self._check_unsafe_flags()
+        self._validate_generation_flags()
+        request = GenerateRequest(prompt="doctor")
+        runtime = self._resolve_runtime()
+        model = self._model_for_request(request, runtime)
+        if runtime.category == "missing":
+            raise ValueError("Codex has no supported auth in the selected root or CODEX_API_KEY")
+        identity: dict[str, str | None] = {"cli_version": None}
+        async with self._admit_recorded_codex(
+            runtime, request, deadline=deadline, identity=identity
+        ) as admission:
+            home = self._create_isolated_cli_home(runtime)
+            operation_error: BaseException | None = None
+            try:
+                root = Path(home)
+                self._write_generation_catalog(
+                    admission.catalog.decode("utf-8"),
+                    model,
+                    None,
+                    root=root,
+                    profile=admission.record["profile"],
+                )
+                if not admission.is_current():
+                    raise RuntimeError("Codex compatibility record expired before login check")
+                code, state = await self._run_cli(
+                    [
+                        str(admission.snapshot.executable),
+                        *_config_args(runtime.config),
+                        "login",
+                        "status",
+                    ],
+                    env=self._record_environment(home),
+                    cwd=str(root / "work"),
+                    deadline=deadline,
+                    cleanup_confirmed=admission.snapshot.cleanup_confirmed,
+                    pre_spawn_guard=lambda: admission.is_current(allow_pending=True),
+                )
+                if code != 0:
+                    return f"CLI login status failed (exit {code})"
+                text = "\n".join(("".join(state.stdout_parts), "".join(state.stderr_parts)))
+                native_details.update(cli_path=self._cli_path or "", cli_version=admission.version)
+                lowered = text.lower()
+                if "not logged in" in lowered or "logged out" in lowered:
+                    return "CLI is not logged in"
+                api = bool(
+                    re.search(
+                        r"(?im)^(?:API key configured(?:[ \t]*[-:]|[ \t]*$)|"
+                        r"Logged in using (?:an? )?API key\b)",
+                        text,
+                    )
+                )
+                chatgpt = bool(re.search(r"(?im)^Logged in using ChatGPT\b", text))
+                if runtime.category == "apikey" and api and not chatgpt:
+                    return "API key configured"
+                if runtime.category == "chatgpt" and chatgpt and not api:
+                    return "Logged in using ChatGPT"
+                return "CLI login status does not confirm the selected authentication"
+            except BaseException as exc:
+                operation_error = exc
+                raise
+            finally:
+                if admission.snapshot.cleanup_confirmed.settled:
+                    _cleanup_home(home, operation_error)
+                else:
+                    logger.error(
+                        "Codex doctor home retained because child cleanup was not confirmed: %s",
+                        home,
+                    )
+                    if operation_error is None:
+                        raise RuntimeError(f"Codex doctor cleanup incomplete; retained at {home}")
 
     async def supports(self, capability: str) -> bool:
         return self.supports_capability(capability)
@@ -1059,7 +1741,7 @@ class CodexCLIProvider(ProviderAdapter):
 
         native_details: dict[str, str] = {}
         try:
-            status_text = await self._login_status_text(native_details=native_details)
+            status_text = await self._login_status_recorded(native_details)
         except asyncio.TimeoutError:
             return DoctorResult(ok=False, message="CLI login status check timed out")
         except Exception as exc:  # pragma: no cover - defensive path
@@ -1067,6 +1749,7 @@ class CodexCLIProvider(ProviderAdapter):
 
         status_text = status_text or "CLI login status check failed"
         lowered = status_text.lower()
+        api_key_configured = lowered == "api key configured"
         if native_details:
             status_text = (
                 f"{native_details['cli_path']} ({native_details['cli_version']}): {status_text}"
@@ -1074,7 +1757,7 @@ class CodexCLIProvider(ProviderAdapter):
 
         if "not logged in" in lowered or "logged out" in lowered:
             return DoctorResult(ok=False, message=status_text, details=native_details or None)
-        if "logged in" in lowered:
+        if "logged in" in lowered or api_key_configured:
             return DoctorResult(ok=True, message=status_text, details=native_details or None)
         return DoctorResult(ok=False, message=status_text, details=native_details or None)
 

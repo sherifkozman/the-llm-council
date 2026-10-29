@@ -112,7 +112,8 @@ class TestRequestCompiler:
         assert metadata["status"] == "requested"
         assert metadata["effort"] == effort
         if provider == "codex":
-            assert metadata["requires_cli_version"]
+            assert metadata["cli_version_requirement"] == "compatibility_record"
+            assert "requires_cli_version" not in metadata
         else:
             assert metadata["cli_version_requirement"] == "capability_based"
             assert "requires_cli_version" not in metadata

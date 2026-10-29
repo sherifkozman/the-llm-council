@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Report incomplete Codex temporary-runtime cleanup when the request otherwise
+  succeeds, including when its caller is handling an unrelated exception.
+- When Council has no selected Codex model, the candidate uses the model from
+  the selected Codex configuration. If neither selects a model, it requests an
+  explicit selection; it does not substitute a hardcoded model.
+- The Codex candidate now uses separately maintained compatibility records and a
+  verified private runtime copy instead of an exact-version generation gate.
+  Each build and request context must be independently qualified. Unknown or
+  changed builds, expired records and unavailable records fail closed. The
+  public record is not yet published, so this candidate cannot run Codex until
+  that prerequisite and the remaining native qualification and review are complete.
+
+## [0.8.6] - 2026-10-28
+
+### Fixed
+- Capture Claude CLI help with a bounded terminal stream and bounded pipe
+  fallback, so help truncated by pipe buffering does not incorrectly report
+  missing controls. Required permission values must still be advertised;
+  missing or incomplete controls fail closed.
+- Raise the Google GenAI minimum to 1.52.0 for the Gemini, Google and Vertex
+  extras. Raise the Pydantic, PyYAML and Typer minimums to 2.10.6, 6.0.1 and
+  0.20.1 respectively, and update lockfile requirement metadata.
+
+### Testing and limitations
+- Exercise OpenAI, Anthropic, OpenRouter, Gemini and Vertex SDK request and
+  response paths with synthetic in-memory transports and credentials.
+- Codex CLI automatic upgrade qualification is not implemented. The existing
+  exact-version admission policy remains in force for unverified builds.
+
+See [the release record](docs/releases/0.8.6.md) for evidence and limitations.
+
 ## [0.8.5] - 2026-10-23
 
 ### Security
@@ -920,7 +952,8 @@ Tested candidate, not a publication or global-install claim. See
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.5...v0.8.6
 [0.8.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.0...v0.8.1
