@@ -34,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Testing and limitations
 - Exercise OpenAI, Anthropic, OpenRouter, Gemini and Vertex SDK request and
   response paths with synthetic in-memory transports and credentials.
-- Codex CLI automatic upgrade qualification is not implemented. The existing
-  exact-version admission policy remains in force for unverified builds.
+- Codex CLI builds require independent qualification before their contexts can be
+  admitted by the separately maintained compatibility record.
 
 See [the release record](docs/releases/0.8.6.md) for evidence and limitations.
 
