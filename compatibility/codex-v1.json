@@ -1,0 +1,333 @@
+{
+  "expires_at": "2026-11-28T20:05:54Z",
+  "issued_at": "2026-10-29T20:05:54Z",
+  "records": [
+    {
+      "arch": "arm64",
+      "catalog_sha256": "9e01cd50ec8c4ba6d782413d1154cb2dbe1da63e014d622631b0603bc19659d6",
+      "contexts": [
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "text",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "json_schema",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "text",
+          "reasoning": "high"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "json_schema",
+          "reasoning": "high"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-terra",
+          "output": "text",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-terra",
+          "output": "json_schema",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-terra",
+          "output": "text",
+          "reasoning": "high"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-terra",
+          "output": "json_schema",
+          "reasoning": "high"
+        }
+      ],
+      "executables": [
+        "bin/codex",
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-resources/voice/bin/codex-voice-host",
+        "codex-resources/voice/lib/libffi.8.dylib",
+        "codex-resources/voice/lib/libgio-2.0.0.dylib",
+        "codex-resources/voice/lib/libglib-2.0.0.dylib",
+        "codex-resources/voice/lib/libgmodule-2.0.0.dylib",
+        "codex-resources/voice/lib/libgobject-2.0.0.dylib",
+        "codex-resources/voice/lib/libgstapp-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstaudio-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstbase-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstnet-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstpbutils-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstreamer-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstrtp-1.0.0.dylib",
+        "codex-resources/voice/lib/libgsttag-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstvideo-1.0.0.dylib",
+        "codex-resources/voice/lib/libintl.8.dylib",
+        "codex-resources/voice/lib/libopus.0.dylib",
+        "codex-resources/voice/lib/libpcre2-8.0.dylib",
+        "codex-resources/voice/lib/libz.1.dylib",
+        "codex-resources/voice/plugins/libgstapp.dylib",
+        "codex-resources/voice/plugins/libgstaudioconvert.dylib",
+        "codex-resources/voice/plugins/libgstaudioresample.dylib",
+        "codex-resources/voice/plugins/libgstcoreelements.dylib",
+        "codex-resources/voice/plugins/libgstopus.dylib",
+        "codex-resources/voice/plugins/libgstrtp.dylib",
+        "codex-resources/voice/plugins/libgstrtpmanager.dylib",
+        "codex-resources/voice/runtime.json"
+      ],
+      "files": {
+        "bin/codex": "a45099154d7fb4a5ed8a56f40966a95deb938e508bab23e6985035c709e9a85a",
+        "bin/codex-code-mode-host": "e723d01c65aba4b81451d486d57318232b2738889de67c35051734be917d96ba",
+        "codex-package.json": "16dd728c56a7a2030359a65dde422b7ca5f5659bb4eea060fcf9b454439b439f",
+        "codex-path/rg": "5a933cb69f193f074413c8ed49d7de3099d22be3cc145040d237fee7828bb1e0",
+        "codex-resources/voice/NOTICE.md": "40097a1799441051aa0b6645cdc819cceb19be73cdd265eb602aa2b15e0b1f48",
+        "codex-resources/voice/bin/codex-voice-host": "7513cb74461830c90c18e89030e873f025b0e7fb58116e7231246d33c9e9a6c1",
+        "codex-resources/voice/lib/libffi.8.dylib": "5ef108a137c3b709767cf9e5deeb9f4e9c84e60072d56a5e1266d78ce94e7eaf",
+        "codex-resources/voice/lib/libgio-2.0.0.dylib": "865d7c3d0bf2a654a7dc982e70818550f7d07ccc5876dfb1933bb154643265fa",
+        "codex-resources/voice/lib/libglib-2.0.0.dylib": "6010889b93a61ab1b37e3bce9793270fa52878f37641d3344172417a443b14a5",
+        "codex-resources/voice/lib/libgmodule-2.0.0.dylib": "406a3d9b72ba8b780604b29ac4157fb5569195a2fbb951439c3ae374da13540c",
+        "codex-resources/voice/lib/libgobject-2.0.0.dylib": "de5094ef05e68ddbaace30789d429d4504c903629cdc1feb8830eb21ebc3b12b",
+        "codex-resources/voice/lib/libgstapp-1.0.0.dylib": "e79817caa337877c9e440f493a1bf0248783727d1cbf5e87babdca6ba05cdfd1",
+        "codex-resources/voice/lib/libgstaudio-1.0.0.dylib": "167e68872070a5a38020e5be38414fa7cfd623c45a1dbc552d88a695be3d2119",
+        "codex-resources/voice/lib/libgstbase-1.0.0.dylib": "572dd56cf4e44b1d1a00ab6326e2e922edaf3505d31d99c6b0675439b124d0f4",
+        "codex-resources/voice/lib/libgstnet-1.0.0.dylib": "7e97a795600cedacc6cdb2248f11954d9a08bf55bb2ac72c605a0f2cef211713",
+        "codex-resources/voice/lib/libgstpbutils-1.0.0.dylib": "23858f50fa53d60c5e81fe34d6fdcf5f17e529fa4d4d5bac5b42aaef50b1de43",
+        "codex-resources/voice/lib/libgstreamer-1.0.0.dylib": "db8b64d6970e95dec672270b0b9a3420cd9bf2ee4e2ddae9c138507ffb412a1f",
+        "codex-resources/voice/lib/libgstrtp-1.0.0.dylib": "48050ee34b3bc18e406a1a39253ccabc92ac847669fd096bfb8911bf7547ac03",
+        "codex-resources/voice/lib/libgsttag-1.0.0.dylib": "fa808edd6bd443c875017cbafb6020d20b6da07a1a4be283f3998122d75c9a69",
+        "codex-resources/voice/lib/libgstvideo-1.0.0.dylib": "e29d50e948304cb0ca9bf910503e7adf4162931d1546e9b849961453acf0298b",
+        "codex-resources/voice/lib/libintl.8.dylib": "fbdaf6402f4944d72c2089a3e5e663576708494c27bad7bf73944b8b2f31dace",
+        "codex-resources/voice/lib/libopus.0.dylib": "4a09d9ef7a5615fe14a15982cada9da9b3a2ecb2b0cda630b757af71bf9249c4",
+        "codex-resources/voice/lib/libpcre2-8.0.dylib": "10d5e035a6b57028f388212104672b469ee0869311bfdfc466d5dd60b550ba7f",
+        "codex-resources/voice/lib/libz.1.dylib": "9968e2813484043c0d6b6a1a406a9b242ad376d4627db839e52593932941dadc",
+        "codex-resources/voice/licenses/LGPL-2.1.txt": "ad2eec519ebd4b5df86ea84dff24ae3bfa2edea846a703b58902dd221ae375db",
+        "codex-resources/voice/licenses/Opus.txt": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551",
+        "codex-resources/voice/licenses/PCRE2.md": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811",
+        "codex-resources/voice/licenses/libffi.txt": "17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c",
+        "codex-resources/voice/licenses/proxy-libintl.txt": "d245807f90032872d1438d741ed21e2490e1175dc8aa3afa5ddb6c8e529b58e5",
+        "codex-resources/voice/licenses/sljit.txt": "5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb",
+        "codex-resources/voice/licenses/zlib.txt": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+        "codex-resources/voice/manifest.json": "080028da3d7d64f087af9d0ac6d3c6321689a53f7725d438ff1d9f8c8b604e26",
+        "codex-resources/voice/plugins/libgstapp.dylib": "c909f070ba3d1448c8f36ed40c6cdedb857fb0d39e093f645f0534ebc27bb8c7",
+        "codex-resources/voice/plugins/libgstaudioconvert.dylib": "1b41df12154b4efe0f20eff1c7c9ad0a8adc3a6ca42bb9c89bfb5cb5e2d9bb4d",
+        "codex-resources/voice/plugins/libgstaudioresample.dylib": "081586c12ab4a09c69467cca7203965265f1c5f5da8836bd6ce2dc4b688f67d8",
+        "codex-resources/voice/plugins/libgstcoreelements.dylib": "ba0ac5ef2203de98ef25f5241ac435e66196d91c639718ef207d3613db0511f6",
+        "codex-resources/voice/plugins/libgstopus.dylib": "92f0747c80599eaea9c6611d8d2aeaff46a3dccb701086dcdf6dd4e18b8248cb",
+        "codex-resources/voice/plugins/libgstrtp.dylib": "1fe4057dbf4a042b3aeb84f14b933944edf7fc0081270a0d738e536380c3a3df",
+        "codex-resources/voice/plugins/libgstrtpmanager.dylib": "152f7a7ef5e29d73f5aaeab427ab0998449e73ab13688b04b1cdffca6b654ae2",
+        "codex-resources/voice/runtime.json": "b70b78bc100fbf99598009e6e1d3c6796ba7992b5f3997eba5d018d1f9da16c6",
+        "codex-resources/voice/sources.json": "e2f6b124f6277e7c3c4f5c7cc8830c66190f671ad65e972bb2cc9507dbfcb937"
+      },
+      "os": "darwin",
+      "profile": "generation-v1",
+      "version": "codex-cli 0.165.0"
+    },
+    {
+      "arch": "arm64",
+      "catalog_sha256": "262dc36e0e7beb290aef8196bd59f42acf51647b8f7b68dafa533ae7742019e6",
+      "contexts": [
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "text",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "json_schema",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "text",
+          "reasoning": "high"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-6.1-sol",
+          "output": "json_schema",
+          "reasoning": "high"
+        }
+      ],
+      "executables": [
+        "bin/codex",
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-resources/voice/bin/codex-voice-host",
+        "codex-resources/voice/lib/libffi.8.dylib",
+        "codex-resources/voice/lib/libgio-2.0.0.dylib",
+        "codex-resources/voice/lib/libglib-2.0.0.dylib",
+        "codex-resources/voice/lib/libgmodule-2.0.0.dylib",
+        "codex-resources/voice/lib/libgobject-2.0.0.dylib",
+        "codex-resources/voice/lib/libgstapp-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstaudio-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstbase-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstnet-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstpbutils-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstreamer-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstrtp-1.0.0.dylib",
+        "codex-resources/voice/lib/libgsttag-1.0.0.dylib",
+        "codex-resources/voice/lib/libgstvideo-1.0.0.dylib",
+        "codex-resources/voice/lib/libintl.8.dylib",
+        "codex-resources/voice/lib/libopus.0.dylib",
+        "codex-resources/voice/lib/libpcre2-8.0.dylib",
+        "codex-resources/voice/lib/libz.1.dylib",
+        "codex-resources/voice/plugins/libgstapp.dylib",
+        "codex-resources/voice/plugins/libgstaudioconvert.dylib",
+        "codex-resources/voice/plugins/libgstaudioresample.dylib",
+        "codex-resources/voice/plugins/libgstcoreelements.dylib",
+        "codex-resources/voice/plugins/libgstopus.dylib",
+        "codex-resources/voice/plugins/libgstrtp.dylib",
+        "codex-resources/voice/plugins/libgstrtpmanager.dylib",
+        "codex-resources/voice/runtime.json",
+        "codex-resources/zsh/bin/zsh"
+      ],
+      "files": {
+        "bin/codex": "09fa44fdc37a5fc70dc1ace31235f90468a2e193d0e85f7552eab068ea2582be",
+        "bin/codex-code-mode-host": "6ac432b170e2c30f90de5af0da584def5201497a0d3d988d37dc58b951236b2f",
+        "codex-package.json": "ad2608c17f5098f66ce104c915ac56bbb5f59b034eb8bd9ff4759e2ceabf3413",
+        "codex-path/rg": "21c0dc01dea8097868918fdded08e0986a2396a2992fbadcb3091f02864d7810",
+        "codex-resources/voice/NOTICE.md": "40097a1799441051aa0b6645cdc819cceb19be73cdd265eb602aa2b15e0b1f48",
+        "codex-resources/voice/bin/codex-voice-host": "e3d7569b9b4072b2b297bf10e6df76d18393f1f9077c29a6f6c0cb190f00f00c",
+        "codex-resources/voice/lib/libffi.8.dylib": "d1cd73e16711151960c054d0728aaf2bf5ff2f87468ba8225bcd08b7b5e93c4a",
+        "codex-resources/voice/lib/libgio-2.0.0.dylib": "6b6c44e4be2141c7dad16bd1d6ff914cc81fa02cc0894fcdd9fef97dbd0d0ed5",
+        "codex-resources/voice/lib/libglib-2.0.0.dylib": "ac352e21b67d5917be3f1f02823afc9000c99a0db0afb41b33c25835130783cb",
+        "codex-resources/voice/lib/libgmodule-2.0.0.dylib": "30dcb8c1f94e348b5500ebbd10a5ad289886dcdb665ea70496a3ca85a886d308",
+        "codex-resources/voice/lib/libgobject-2.0.0.dylib": "4623649f0091521f5f5585b3a38763f30bfdd96abae50a6935b7601c97be9ae2",
+        "codex-resources/voice/lib/libgstapp-1.0.0.dylib": "e3d3c1035ad64f7d3438ba0cafc979ee9bae4021cdcd3fae7580954823a1dabb",
+        "codex-resources/voice/lib/libgstaudio-1.0.0.dylib": "d63456e5328532986643e762337dd4de1920ab4cce3e6cc8811c68da94913e9d",
+        "codex-resources/voice/lib/libgstbase-1.0.0.dylib": "fe9fcb4477b5ef61cbb391b0fc35f5746bfef1157033a7ec70244401f4cca311",
+        "codex-resources/voice/lib/libgstnet-1.0.0.dylib": "ce787799e2c446e76b2a1ad51dfe4eaee5cbca98dcb2339c5a8eee9bd3976eee",
+        "codex-resources/voice/lib/libgstpbutils-1.0.0.dylib": "f16ff6a4cbe2fd9ade54dac15a01ad44112dd7803e16a738b8a30d4fa130a609",
+        "codex-resources/voice/lib/libgstreamer-1.0.0.dylib": "20717b2167aa26a402f68e46bac17735d97f4f76e1d9ffdc50675553f395a14c",
+        "codex-resources/voice/lib/libgstrtp-1.0.0.dylib": "63b42f98d24eafeedc237a2f319ba0dce9652f8b45c3ced2370c973ca56c5dc0",
+        "codex-resources/voice/lib/libgsttag-1.0.0.dylib": "7537168f14723da523b80b98306668ac0d8aa1d10a7e99a28d2f423970b5b39a",
+        "codex-resources/voice/lib/libgstvideo-1.0.0.dylib": "cac9c0a7b931c77d3537b37ee47f38c1614aa938c090d4f43ebb689f283c547e",
+        "codex-resources/voice/lib/libintl.8.dylib": "d895a295cbc702555465505965ce59019c9cc6376351cee626ce9b9d13fa75f0",
+        "codex-resources/voice/lib/libopus.0.dylib": "b4fc8b1f741aa0ecc042231eeeeb9d01bbef5ed26a1031f8f2ce2cb724f5532a",
+        "codex-resources/voice/lib/libpcre2-8.0.dylib": "dc912aa13ef18c3f03f2595df2d8484f84136d05380e9c2225db91f8abff9fee",
+        "codex-resources/voice/lib/libz.1.dylib": "ef3415ed52e111573b84e422830469f42c5a4948985838841bf58638d0448a0e",
+        "codex-resources/voice/licenses/LGPL-2.1.txt": "ad2eec519ebd4b5df86ea84dff24ae3bfa2edea846a703b58902dd221ae375db",
+        "codex-resources/voice/licenses/Opus.txt": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551",
+        "codex-resources/voice/licenses/PCRE2.md": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811",
+        "codex-resources/voice/licenses/libffi.txt": "17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c",
+        "codex-resources/voice/licenses/proxy-libintl.txt": "d245807f90032872d1438d741ed21e2490e1175dc8aa3afa5ddb6c8e529b58e5",
+        "codex-resources/voice/licenses/sljit.txt": "5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb",
+        "codex-resources/voice/licenses/zlib.txt": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+        "codex-resources/voice/manifest.json": "eed5b95ee90bab2269d83d691c4e6a7813ee097928269ca44f0b208bf4513faf",
+        "codex-resources/voice/plugins/libgstapp.dylib": "bac84316717b36f63e0d765390311123a965cad27f001b5eb8a66d417cfca94d",
+        "codex-resources/voice/plugins/libgstaudioconvert.dylib": "376303f12b63c1e51a5687ba3a981facd3888725ce55728a1724940d8ec3b17f",
+        "codex-resources/voice/plugins/libgstaudioresample.dylib": "01fed09b76cf9cff10e9cf97588d06d5470ed406af80de66e182e64bb9bc9e85",
+        "codex-resources/voice/plugins/libgstcoreelements.dylib": "9251149870658a49c1d39d600d7d6fecb0e5a1ce56b7500a9d2ec33658d4f544",
+        "codex-resources/voice/plugins/libgstopus.dylib": "53473164999f20b5a3f3a114ff00b5b36ca28c338c38a155f50a8feb8795bf02",
+        "codex-resources/voice/plugins/libgstrtp.dylib": "a191d01bd49fe2a25f5b1e31c40044f1926f9db43c06c0e4e1e7e1d2013d0e6a",
+        "codex-resources/voice/plugins/libgstrtpmanager.dylib": "5a0fe1904800aec435c8e13a6b08a88b943bccb2d61172daa6ff293d5ec1331b",
+        "codex-resources/voice/runtime.json": "04e457013a73f9e9eb230c0e2a992c39c35252b76f93b481aa1fa07270105e45",
+        "codex-resources/voice/sources.json": "e2f6b124f6277e7c3c4f5c7cc8830c66190f671ad65e972bb2cc9507dbfcb937",
+        "codex-resources/zsh/bin/zsh": "0eea87aedef0ac13b140a41fc4e6c489bfc1ffee021b1e654a0c3b05b3c6525a"
+      },
+      "os": "darwin",
+      "profile": "generation-v1",
+      "version": "codex-cli 0.160.1"
+    },
+    {
+      "arch": "arm64",
+      "catalog_sha256": "8aafe33104f3d423769bdfc1df737e126bc230cb994650e07f237f74eba0a1c4",
+      "contexts": [
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-5.6-sol",
+          "output": "text",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-5.6-sol",
+          "output": "json_schema",
+          "reasoning": "default"
+        }
+      ],
+      "executables": [
+        "bin/codex",
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-resources/zsh/bin/zsh"
+      ],
+      "files": {
+        "bin/codex": "f0d8762236594359b60cfbe17f4c7e945a3ce8d1c91e74778838c968d250fb6c",
+        "bin/codex-code-mode-host": "c9340c2cc50c86193cc670aa9130980d6982059a0965aeae41bf4e85952fc43e",
+        "codex-package.json": "4876c111223202bc63cd5f0a9d1009b931e06c70a51e3f738204cd66a4d52937",
+        "codex-path/rg": "4298efd414836892c913b2e87401d62fdd7c6ec4026d9bad8e3fab10557e411f",
+        "codex-resources/zsh/bin/zsh": "2d6d9389383520a79caa22469e48419cc1265cc030eaa22a4bedbf80ce94b42a"
+      },
+      "os": "darwin",
+      "profile": "generation-legacy-v1",
+      "version": "codex-cli 0.149.1"
+    },
+    {
+      "arch": "arm64",
+      "catalog_sha256": "5cd9470c75971da5a479b69101f078558d9c7fc47cdc6706db76fe2ea582009a",
+      "contexts": [
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-5.6-sol",
+          "output": "text",
+          "reasoning": "default"
+        },
+        {
+          "auth": "chatgpt",
+          "endpoint": "chatgpt",
+          "model": "gpt-5.6-sol",
+          "output": "json_schema",
+          "reasoning": "default"
+        }
+      ],
+      "executables": [
+        "bin/codex",
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-resources/zsh/bin/zsh"
+      ],
+      "files": {
+        "bin/codex": "0e1f892695844ad0798dab8895955846450a9e7663476ebf24615814dd377216",
+        "bin/codex-code-mode-host": "de891e6757312f6b2d7eeba2ffadf9ad61415a537eb14ebb68e185462995fc71",
+        "codex-package.json": "989eff68d84bb4469a1b139dbdaf8bfabe93f135e07650ad108fed7e11ff9691",
+        "codex-path/rg": "a474c32890769b1678b183a5462fa9e256b92fe9940f1c7d67b1fcdb7c7ce097",
+        "codex-resources/zsh/bin/zsh": "571292395e33883e9cb805391c82d9480f1ce09598e0a64d2be06161fa5e6468"
+      },
+      "os": "darwin",
+      "profile": "generation-legacy-v1",
+      "version": "codex-cli 0.153.3"
+    }
+  ],
+  "schema": 2
+}
