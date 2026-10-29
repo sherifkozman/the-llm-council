@@ -209,9 +209,9 @@ def stub_cli(
     monkeypatch.setattr(
         codex_module,
         "selected_cli_path",
-        lambda path, command: str(executable)
-        if path == "synthetic"
-        else original_selector(path, command),
+        lambda path, command: (
+            str(executable) if path == "synthetic" else original_selector(path, command)
+        ),
     )
     monkeypatch.setattr(codex_module, "_native_executable_matches", lambda *args: True)
     now = datetime.now(timezone.utc)
