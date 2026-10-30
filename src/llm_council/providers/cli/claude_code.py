@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import logging
 import os
@@ -36,6 +37,7 @@ from llm_council.providers.cli._subprocess import terminate_process_tree
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "sonnet"
 _CLEANUP_SECONDS = 1.0
+_MAX_HELP_BYTES = 1024 * 1024
 
 _ENV_ALLOWLIST = {
     "PATH",
@@ -95,6 +97,39 @@ def _normalize_usage(raw_usage: Any) -> dict[str, int] | None:
         "completion_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
     }
+
+
+async def _read_help_terminal(fd: int) -> bytes:
+    """Drain help without unbounded disk or memory use; wait for every writer."""
+    loop = asyncio.get_running_loop()
+    output = bytearray()
+    while True:
+        try:
+            chunk = os.read(fd, min(65536, _MAX_HELP_BYTES + 1 - len(output)))
+        except BlockingIOError:
+            ready = loop.create_future()
+
+            def wake(future: asyncio.Future[None] = ready) -> None:
+                if not future.done():
+                    future.set_result(None)
+
+            loop.add_reader(fd, wake)
+            try:
+                await ready
+            finally:
+                loop.remove_reader(fd)
+            continue
+        except OSError as exc:
+            # A PTY master reports EIO after the last slave closes on Linux/macOS.
+            if exc.errno == errno.EIO:
+                break
+            raise
+        if not chunk:
+            break
+        output.extend(chunk)
+        if len(output) > _MAX_HELP_BYTES:
+            raise RuntimeError("Claude Code help output exceeds capture limit")
+    return bytes(output)
 
 
 class ClaudeCodeCLIProvider(ProviderAdapter):
@@ -341,18 +376,34 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
         cwd: str,
         deadline: float,
         input_bytes: bytes | None = None,
+        capture_help: bool = False,
     ) -> tuple[int | None, bytes, bytes]:
         self._remaining(deadline)
         proc = None
         reader = None
         feeder = None
-        completion = None
+        completion: asyncio.Future[Any] | None = None
+        help_reader = None
+        terminal_master = terminal_slave = None
+        if capture_help:
+            try:
+                try:
+                    terminal_master, terminal_slave = os.openpty()
+                except (AttributeError, OSError):
+                    terminal_master, terminal_slave = os.pipe()
+                os.set_blocking(terminal_master, False)
+            except (AttributeError, OSError) as exc:
+                if terminal_master is not None:
+                    os.close(terminal_master)
+                if terminal_slave is not None:
+                    os.close(terminal_slave)
+                raise RuntimeError("Claude Code bounded help capture unavailable") from exc
         cancellation: asyncio.CancelledError | None = None
         spawn = asyncio.create_task(
             asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
+                stdout=terminal_slave if capture_help else asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
                 cwd=cwd,
@@ -364,6 +415,9 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             if spawn not in spawn_done:
                 raise asyncio.TimeoutError
             proc = spawn.result()
+            if terminal_slave is not None:
+                os.close(terminal_slave)
+                terminal_slave = None
             remaining = self._remaining(deadline)
             owned_proc = proc
 
@@ -388,11 +442,21 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
 
             reader = asyncio.create_task(communicate_before_deadline())
             feeder = asyncio.create_task(feed_stdin_before_deadline())
-            completion = asyncio.gather(reader, feeder)
+            if terminal_master is not None:
+                help_reader = asyncio.create_task(_read_help_terminal(terminal_master))
+                completion = asyncio.gather(reader, feeder, help_reader)
+            else:
+                completion = asyncio.gather(reader, feeder)
             completion_done, _ = await asyncio.wait({completion}, timeout=remaining)
             if completion not in completion_done:
                 raise asyncio.TimeoutError
-            (stdout, stderr), _ = completion.result()
+            results = completion.result()
+            stdout, stderr = results[0]
+            if help_reader is not None:
+                captured = help_reader.result()
+                stdout = captured if stdout is None else stdout
+                if len(stdout) > _MAX_HELP_BYTES:
+                    raise RuntimeError("Claude Code help output exceeds capture limit")
             return proc.returncode, stdout, stderr
         except asyncio.TimeoutError as exc:
             raise RuntimeError("Claude Code timed out within the request deadline") from exc
@@ -425,7 +489,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                     raise RuntimeError("Claude cleanup incomplete: process did not settle") from exc
                 finally:
                     communication_tasks: set[asyncio.Future[Any]] = {
-                        task for task in (reader, feeder) if task is not None
+                        task for task in (reader, feeder, help_reader) if task is not None
                     }
                     if communication_tasks:
                         for task in communication_tasks:
@@ -445,22 +509,27 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                             )
 
             # Repeated outer cancellation cannot abandon the finite cleanup owner.
-            cleanup_task = asyncio.create_task(cleanup())
-            while not cleanup_task.done():
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError as exc:
-                    if cancellation is None:
-                        cancellation = exc
-                except Exception:
-                    break
-            if cancellation is not None:
-                error = None if cleanup_task.cancelled() else cleanup_task.exception()
-                if error:
-                    logger.error("Claude cleanup incomplete during cancellation")
-                    raise cancellation from error
-                raise cancellation
-            cleanup_task.result()
+            try:
+                cleanup_task = asyncio.create_task(cleanup())
+                while not cleanup_task.done():
+                    try:
+                        await asyncio.shield(cleanup_task)
+                    except asyncio.CancelledError as exc:
+                        if cancellation is None:
+                            cancellation = exc
+                    except Exception:
+                        break
+                if cancellation is not None:
+                    error = None if cleanup_task.cancelled() else cleanup_task.exception()
+                    if error:
+                        logger.error("Claude cleanup incomplete during cancellation")
+                        raise cancellation from error
+                    raise cancellation
+                cleanup_task.result()
+            finally:
+                for fd in (terminal_slave, terminal_master):
+                    if fd is not None:
+                        os.close(fd)
 
     @staticmethod
     def _redact(text: str, env: dict[str, str]) -> str:
@@ -510,8 +579,10 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
                 code,
                 env,
             )
+        # Some builds exit successfully before flushing piped help. Prefer a
+        # bounded terminal stream; use a bounded pipe if terminals are unavailable.
         code, stdout, stderr = await self._run_cli(
-            [self._cli_path, "--help"], env=env, cwd=cwd, deadline=deadline
+            [self._cli_path, "--help"], env=env, cwd=cwd, deadline=deadline, capture_help=True
         )
         if code != 0:
             raise self._failure(
@@ -523,7 +594,7 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             )
         # Read option definitions, not mentions in wrapped prose or examples.
         # Help advertises syntax only; terminal validation still gates results.
-        help_text = stdout.decode("utf-8", errors="replace")
+        help_text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", stdout.decode("utf-8", errors="replace"))
         section = re.search(r"(?m)^Options:[ \t]*\r?\n", help_text)
         help_text = help_text[section.end() :] if section else ""
         help_text = re.split(r"(?m)^[A-Za-z][^\n]*:[ \t]*$", help_text, maxsplit=1)[0]
@@ -559,6 +630,11 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             if flag not in options:
                 continue
             choices = re.search(r"\(choices:\s*([^)]*)\)", advertised[flag])
+            if choices is None and flag in ("--permission-mode", "--permission-prompts"):
+                raise RuntimeError(
+                    f"Claude Code missing advertised CLI values for {flag} at "
+                    f"{self._cli_path!r} ({version}); required value cannot be verified"
+                )
             if choices and options[flag] not in [
                 value.strip().strip("\"'") for value in choices.group(1).split(",")
             ]:

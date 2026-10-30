@@ -101,7 +101,9 @@ def test_parser_error_remains_stderr_exit_two():
     invoked = CliRunner().invoke(app, ["run", "planner", "task", "--json", "--unknown"])
     assert invoked.exit_code == 2
     assert invoked.stdout == ""
-    assert "No such option: --unknown" in Text.from_ansi(invoked.stderr).plain
+    error = Text.from_ansi(invoked.stderr).plain
+    assert "No such option" in error
+    assert "--unknown" in error
 
 
 def test_json_dry_run_never_loads_credentials_or_models():

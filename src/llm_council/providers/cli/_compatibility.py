@@ -1,4 +1,4 @@
-"""Admit only native releases covered by the synthetic contract matrix."""
+"""Shared native CLI path and identity helpers."""
 
 from __future__ import annotations
 
@@ -21,15 +21,3 @@ def native_identity(path: str | None) -> dict[str, str | None]:
         "cli_realpath": os.path.realpath(path) if path else None,
         "cli_version": None,
     }
-
-
-def check_verified_version(
-    observed: str, verified: tuple[str, ...], *, path: str, code: int | None
-) -> None:
-    """Version/help compatibility cannot prove tool or instruction isolation."""
-    if code != 0 or observed not in verified:
-        raise RuntimeError(
-            f"unsupported or unverified CLI version at {path!r}: observed {observed!r} "
-            f"(exit {code}); native-tested versions: {', '.join(verified)}. "
-            "Untested updates remain unsupported and require native contract verification."
-        )

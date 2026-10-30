@@ -23,7 +23,7 @@ open directories or concurrent content changes.
 Platforms without safe descriptor-relative opens (including Windows) omit these
 automatic content searches and emit a warning. Do not interpret absent matches
 as a clean security review. Explicit `--files` remains a deliberate user selection;
-verify those paths before including sensitive material. See [0.8.5](releases/0.8.5.md).
+verify those paths before including sensitive material. See the [0.8.5 containment record](releases/0.8.5.md) and [0.8.6 provider notes](releases/0.8.6.md).
 
 The public package supports:
 
@@ -105,28 +105,36 @@ trivial non-interactive prompt right now.” This is useful for diagnosing local
 CLI providers and flaky auth or SDK setup.
 It proves reachability only, not successful large reviews or complete evidence
 coverage. Those claims require the actual run result and retained-input checks.
-For Codex, base doctor `ok: true` reports login status only. It does not prove
-generation readiness or supply path/version evidence unless those details are
-actually present in the diagnostic.
+For Codex, base doctor checks record admission and login status for the default
+request context. It does not prove generation readiness or supply path/version
+evidence unless those details are actually present in the diagnostic.
 
 Claude CLI admission checks required option definitions in the selected binary's
 help on every call; its version is diagnostic, not an allowlist gate. Required
-controls depend on the selected auth route and request. Missing controls stop
-execution before task text is sent, rather than weakening isolation.
+controls depend on the selected auth route and request. Help is captured through
+a bounded terminal stream, or a bounded pipe if a terminal is unavailable. The
+permission controls must advertise their required values. Missing or incomplete
+controls stop execution before task text is sent, rather than weakening isolation.
 Base doctor reports `cli_compatibility: required_flags_advertised` and leaves
 authentication and generation unverified. This is syntax advertisement, not proof
 of future isolation semantics or successful generation; use deep probes and
 inspect actual results. Managed-policy checks and terminal validation remain.
-Codex still uses the exact-version allowlist (0.149.1, 0.153.3, 0.160.1).
-Report selected path/version and missing capabilities from diagnostics. Do not
-edit package constants or remove required controls to bypass an error.
+When no model is selected in Council, Codex uses the model in the
+selected Codex configuration; if neither selects one, the user must choose one.
+The Codex provider requires a current compatibility record matching
+the selected executable, resources, platform and request context. It runs version
+and catalog checks from a verified private copy and rejects unknown or changed
+builds. The published record currently covers macOS arm64 with ChatGPT
+authentication and selected request contexts; other previously usable contexts
+fail closed. Record updates can add qualified builds without changing Council;
+they do not certify arbitrary future versions or provider behavior.
 
-For the Codex CLI provider, council runs nested Codex subprocesses under an
-isolated temporary `HOME` that only carries forward the local Codex auth files.
-That prevents parent-agent MCP tools, plugins, or skills from leaking into
-child council runs. The Codex adapter also preserves the ambient runtime env, so
-doctor checks report real login state instead of a false positive from an
-over-sanitized subprocess environment.
+Codex runs with an isolated temporary `HOME`, the selected authentication file,
+and a restricted environment that does not inherit proxy, CA or loader overrides.
+An explicitly qualified API-key custom endpoint can use the user's selected URL;
+ChatGPT custom routing is not currently qualified. Base doctor checks only the
+default model, default reasoning, text output and login status. It does not prove
+credential validity or generation readiness.
 
 ### Evaluation Tooling
 `council eval`, `council eval-compare`, and `council eval-import-pr` provide a

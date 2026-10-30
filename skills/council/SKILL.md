@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.8.5)
+# LLM Council Skill (v0.8.6)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -150,7 +150,8 @@ review. Context warnings remain visible with graceful degradation disabled.
 The caller's outer deadline must cover the whole workflow, not just one attempt.
 The `bounded` profile retains shorter phase caps regardless of a larger timeout.
 Successful deep doctor probes prove reachability, not large-review completion or
-quality. Codex base doctor success reports login status only, not generation readiness.
+quality. Codex base doctor checks default-context record admission and login
+status, not generation readiness.
 
 ## Provider Names
 
@@ -181,14 +182,14 @@ and optional effort. Report missing controls and the observed path/version; neve
 drop isolation flags to continue. Base doctor proves advertised syntax only,
 not authentication, isolation semantics or generation. New builds are not rejected
 just because their version is unfamiliar. See the invocation contract.
-Codex retains the exact list 0.149.1/0.153.3/0.160.1; unknown Codex builds remain
-unsupported. Never edit package constants to bypass its gate. Synthetic checks
-are not live-provider or universal future compatibility proof. Fresh contained
-native checks cover Codex 0.149.1 and 0.160.1; 0.153.3 has synthetic coverage,
-not a fresh native run. The unchanged `gpt-5.4` default is absent from the tested
-0.160.1 catalog: explicitly select a supported model via `--models` or provider
-configuration. The 0.160.1 native checks used `gpt-6.1-sol`, not every model. Exact-version
-tool controls preserve authentication, selected model and reasoning effort.
+The Codex provider requires a current compatibility record for the
+selected build and request context. It verifies a private copy before execution;
+unknown or changed builds fail closed. The public record is not yet available, so
+Codex requests currently fail in this candidate. A future qualified record update
+can admit a new build without a Council release. Do not bypass the check or treat
+synthetic tests as proof of live-provider readiness. Base doctor covers the default
+model, default reasoning, text output and login status only; it does not prove a
+credential works or every model is ready.
 
 ## When To Use It
 

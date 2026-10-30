@@ -73,8 +73,9 @@ files to make a retry look like the first attempt; choose a new output directory
 An empty or whitespace-only generation is a failed probe with an `empty_response`
 diagnostic. Doctor requests a non-streaming response; an unexpected stream is
 rejected, not converted to a success message.
-For Codex, base doctor `ok: true` reports login status only, not generation
-readiness. Require a successful deep probe for reachability. Do not infer an
+For Codex, base doctor `ok: true` checks default-context record admission and
+login status, not generation readiness. Require a successful deep probe for
+reachability. Do not infer an
 executable path or version from a healthy row that does not report those fields.
 
 Claude managed-policy environments are not certified for generation-only use.
@@ -86,11 +87,11 @@ Do not change credentials, endpoints or administrative controls to bypass policy
 
 ### Native CLI Versions
 
-Claude uses runtime capability admission; Codex retains exact-version admission:
+Claude uses runtime capability admission; Codex uses record-based admission:
 
 | Provider | Admission policy |
 | --- | --- |
-| `codex` | 0.149.1, 0.153.3, 0.160.1 |
+| `codex` | Current matching compatibility record and verified private runtime copy |
 | `claude` | Required CLI flags advertised by the selected binary; no build allowlist |
 
 Claude reads `--version` for diagnostics and `--help` for option definitions on
@@ -106,34 +107,64 @@ future builds. Existing policy checks and strict terminal validation still apply
 Capability probes are refreshed, not cached; they are not an atomic guarantee
 against executable replacement between probe and dispatch.
 
-Fresh contained native checks cover Codex 0.149.1 and 0.160.1; 0.153.3 retains
-synthetic coverage with no fresh native run. See the release notes for the
-recorded Codex and Claude checks and final verification scope. These checks do
-not prove live provider access, review quality or future auto-update compatibility.
+When no model is selected in Council, Codex uses the model in the
+selected Codex configuration; if neither selects one, the user must choose one.
+The Codex provider fetches a public compatibility record for each
+request. A current record must match the selected executable and resource hashes,
+platform, catalog, model, authentication route, reasoning and output mode.
+Council verifies a private copy and uses it for probes and generation. Unknown,
+changed, expired or unavailable records fail closed before an unverified CLI is
+run. Record updates can cover independently qualified builds without a Council
+release; a version string or help output alone does not qualify a build.
 
-The Codex default remains `gpt-5.4`; it is absent from the tested 0.160.1 catalog.
-Use `--models` or provider configuration to explicitly select a model supported
-by the selected CLI and account. The 0.160.1 native checks used `gpt-6.1-sol`;
-they do not establish universal model support. The 0.160.1 tool settings are
-exact-version-specific and preserve authentication, selected model and reasoning
-effort. Do not silently switch models or weaken effort to bypass a catalog error.
+The current public record covers macOS arm64 with ChatGPT authentication and
+selected request contexts. Other previously usable contexts fail closed until
+qualified records are added. The output monitor stops the child after an
+unexpected tool event, but it does not
+prevent an action that started before the event. A pre-existing limitation was
+observed with enterprise-managed MCP servers; the same synthetic configuration
+also affected Council 0.8.6 with Codex 0.160.1.
 
-Unknown Codex versions remain explicitly unsupported, even if their help output lists
-the same flags. On an unsupported-version error, report the executable path and
-observed version in doctor diagnostics from the actual caller environment. Do
-not edit package version constants or bypass the check; use a verified version
-or wait for a release that verifies the new one. This resolves the known
-Codex versions, not generic future Codex compatibility. For Claude capability
-errors, report the exact missing control and selected binary instead of treating
-an unfamiliar version as unsupported. Do not report mere admission as a passed
-deep probe, successful review, or native behavioral verification.
+A base
+Codex doctor checks the default model, default reasoning, text output and login
+status only; it does not prove credential validity or live generation. The fixed
+child environment excludes inherited proxy, CA and loader overrides. API-key
+custom endpoints need a separately qualified custom-route record; ChatGPT custom
+routing is not currently qualified. The private copy protects against ordinary
+concurrent upgrades, while other processes under the same user remain trusted.
+
+The default model remains `gpt-5.4`; select a model covered by the installed
+catalog and the record. Do not change models, reasoning or isolation controls to
+bypass a failure. Synthetic tests and base doctor do not establish live-provider
+readiness, complete review quality or compatibility with all future builds.
+
+### Codex Compatibility Record Maintenance
+
+A record entry is a security decision. Before proposing one, verify the upstream
+artifact's public integrity and signing identity, then test the exact platform,
+model, authentication route, reasoning and output combination with the selected
+no-tools profile. Include checks for unsolicited tool calls, effective native
+configuration and external runtime dependencies. Retain the evidence and obtain
+an independent review; do not promote a synthetic loopback result into a claim
+about untested real routes or managed-policy environments. Keep credentials,
+private prompts and private code out of the record and review material.
+
+The record is fetched from the Council repository's public default branch over
+verified TLS. TLS authenticates the source, not the correctness of the record.
+Repository maintainers who can change that branch, including any actors allowed
+to bypass its rules, are part of the trust boundary. Verify the current branch
+rules and review evidence before publishing. An unavailable or expired record
+fails closed; there is no offline version-only fallback. Record expiry must be
+refreshed only after the qualification remains valid. Publishing a record is a
+separate action from building or installing Council.
+
 
 ### Updating The Installed Tool
 
 After publication, an approved exact-version uv tool reinstall is:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.5'
+uv tool install --reinstall 'the-llm-council[all]==0.8.6'
 ```
 
 First preserve local package edits and the uv receipt without copying credentials.

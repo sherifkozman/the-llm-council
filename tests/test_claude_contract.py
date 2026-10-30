@@ -44,7 +44,11 @@ def help_row(flag):
         }
         else ""
     )
-    return f"  {flag}{argument}  Supported option".encode()
+    choices = {
+        "--permission-mode": ' (choices: "dontAsk")',
+        "--permission-prompts": ' (choices: "none")',
+    }.get(flag, "")
+    return f"  {flag}{argument}  Supported option{choices}".encode()
 
 
 HELP_TEXT = b"Options:\n" + b"\n".join(
@@ -1435,3 +1439,186 @@ async def test_real_process_cancellation_is_finite_and_reaps(
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_help_probe_captures_complete_output_when_pipe_truncates(monkeypatch, tmp_path):
+    """A native-style CLI can exit zero after losing piped help output."""
+    real_spawn = asyncio.create_subprocess_exec
+    script = """
+import os, stat, sys
+if "--version" in sys.argv:
+    print("synthetic Claude 2.1.999")
+elif "--help" in sys.argv:
+    data = b"Options:\\n" + b"  --example  value\\n" * 30 + b"  --model <value>  Model\\n"
+    if stat.S_ISFIFO(os.fstat(sys.stdout.fileno()).st_mode):
+        data = data[:512]
+    os.write(sys.stdout.fileno(), data)
+"""
+
+    async def spawn(*cmd, **kwargs):
+        assert cmd[0] == "/synthetic/claude"
+        return await real_spawn(sys.executable, "-c", script, *cmd[1:], **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    instance = claude.ClaudeCodeCLIProvider(cli_path="/synthetic/claude")
+    version = await instance._check_cli_capabilities(
+        env={"PATH": "/usr/bin:/bin"},
+        cwd=str(tmp_path),
+        deadline=asyncio.get_running_loop().time() + 5,
+        options={"--model": "sonnet"},
+    )
+    assert version == "synthetic Claude 2.1.999"
+
+
+async def test_oversized_help_fails_before_generation(provider, fake_cli, monkeypatch):
+    monkeypatch.setattr(claude, "_MAX_HELP_BYTES", 256)
+    fake_cli.help_text = HELP_TEXT + b"x" * 257
+    with pytest.raises(RuntimeError, match="help output exceeds capture limit"):
+        await provider.generate(GenerateRequest(prompt="should not be sent"))
+    assert all("-p" not in cmd for cmd, _, _ in fake_cli.calls)
+
+
+async def test_help_capture_stops_runaway_writer_before_output_finishes(monkeypatch, tmp_path):
+    real_spawn = asyncio.create_subprocess_exec
+    marker = tmp_path / "writer-finished"
+    script = """
+import os, sys
+from pathlib import Path
+if "--version" in sys.argv:
+    print("synthetic Claude")
+else:
+    os.write(1, b"x" * (2 * 1024 * 1024))
+    Path(sys.argv[-1]).write_text("finished")
+"""
+
+    async def spawn(*cmd, **kwargs):
+        return await real_spawn(sys.executable, "-c", script, *cmd[1:], str(marker), **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    instance = claude.ClaudeCodeCLIProvider(cli_path="/synthetic/claude")
+    with pytest.raises(RuntimeError, match="help output exceeds capture limit"):
+        await instance._check_cli_capabilities(
+            env={"PATH": "/usr/bin:/bin"},
+            cwd=str(tmp_path),
+            deadline=asyncio.get_running_loop().time() + 5,
+            options={"--model": "sonnet"},
+        )
+    assert not marker.exists()
+
+
+async def test_help_capture_waits_for_descendant_writer(monkeypatch, tmp_path):
+    real_spawn = asyncio.create_subprocess_exec
+    script = """
+import os, subprocess, sys
+if "--version" in sys.argv:
+    print("synthetic Claude")
+else:
+    os.write(1, b"Options:\\n")
+    child = "import os,time; time.sleep(0.2); os.write(1,b'  --model <value>  Model\\\\n')"
+    subprocess.Popen([sys.executable, "-c", child], stderr=subprocess.DEVNULL)
+"""
+
+    async def spawn(*cmd, **kwargs):
+        return await real_spawn(sys.executable, "-c", script, *cmd[1:], **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    instance = claude.ClaudeCodeCLIProvider(cli_path="/synthetic/claude")
+    version = await instance._check_cli_capabilities(
+        env={"PATH": "/usr/bin:/bin"},
+        cwd=str(tmp_path),
+        deadline=asyncio.get_running_loop().time() + 5,
+        options={"--model": "sonnet"},
+    )
+    assert version == "synthetic Claude"
+
+
+async def test_help_capture_falls_back_to_bounded_pipe_without_terminal(
+    provider, fake_cli, monkeypatch
+):
+    def no_terminal():
+        raise OSError("synthetic terminal unavailable")
+
+    monkeypatch.setattr(os, "openpty", no_terminal)
+    response = await provider.generate(GenerateRequest(prompt="fallback"))
+    assert response.text == "FINAL"
+    assert len(fake_cli.calls) == 3
+
+
+async def test_real_help_capture_uses_pipe_when_terminal_unavailable(
+    provider, local_process_cli, monkeypatch
+):
+    def no_terminal():
+        raise OSError("synthetic terminal unavailable")
+
+    monkeypatch.setattr(os, "openpty", no_terminal)
+    response = await provider.generate(GenerateRequest(prompt="pipe fallback"))
+    assert response.text == "FINAL"
+
+
+async def test_help_capture_cancellation_closes_terminal_descriptors(
+    provider, monkeypatch, tmp_path
+):
+    original_openpty = getattr(os, "openpty", None)
+    if original_openpty is None:
+        pytest.skip("PTYs are unavailable on this platform")
+    descriptors = []
+    terminal_unavailable = False
+
+    def track_terminal():
+        nonlocal terminal_unavailable
+        try:
+            pair = original_openpty()
+        except OSError:
+            terminal_unavailable = True
+            raise
+        descriptors.extend(pair)
+        return pair
+
+    monkeypatch.setattr(os, "openpty", track_terminal)
+    task = asyncio.create_task(
+        provider._run_cli(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            env={"PATH": "/usr/bin:/bin"},
+            cwd=str(tmp_path),
+            deadline=asyncio.get_running_loop().time() + 5,
+            capture_help=True,
+        )
+    )
+    deadline = asyncio.get_running_loop().time() + 1
+    while not descriptors and not terminal_unavailable and not task.done():
+        if asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0)
+    if not descriptors:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
+        if terminal_unavailable:
+            pytest.skip("PTY allocation is unavailable")
+        pytest.fail("PTY capture did not start")
+    task.cancel("original cancellation")
+    task.cancel("later cancellation")
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await task
+    # Python 3.10 drops cancellation messages across the Task boundary.
+    if sys.version_info >= (3, 11):
+        assert str(cancelled.value) == "original cancellation"
+    for fd in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+async def test_partial_help_cannot_admit_unadvertised_permission_value(
+    provider, fake_cli, tmp_path
+):
+    fake_cli.help_text = b"Options:\n  --permission-mode <mode>  Permission mode\n"
+    with pytest.raises(RuntimeError, match="permission-mode"):
+        await provider._check_cli_capabilities(
+            env={"PATH": "/usr/bin:/bin"},
+            cwd=str(tmp_path),
+            deadline=asyncio.get_running_loop().time() + 5,
+            options={"--permission-mode": "dontAsk"},
+        )

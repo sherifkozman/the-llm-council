@@ -5,7 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.6] - 2026-10-29
+
+### Changed
+- Report incomplete Codex temporary-runtime cleanup when the request otherwise
+  succeeds, including when its caller is handling an unrelated exception.
+- When Council has no selected Codex model, Council uses the model from
+  the selected Codex configuration. If neither selects a model, it requests an
+  explicit selection; it does not substitute a hardcoded model.
+- Codex now uses a separately maintained compatibility record and a
+  verified private runtime copy instead of an exact-version generation gate.
+  Each build and request context must be independently qualified. Unknown or
+  changed builds, expired records and unavailable records fail closed. The
+  initial record covers macOS arm64 with ChatGPT authentication and selected
+  models and reasoning modes; other previously usable contexts fail closed.
+
+### Fixed
+- Capture Claude CLI help with a bounded terminal stream and bounded pipe
+  fallback, so help truncated by pipe buffering does not incorrectly report
+  missing controls. Required permission values must still be advertised;
+  missing or incomplete controls fail closed.
+- Raise the Google GenAI minimum to 1.52.0 for the Gemini, Google and Vertex
+  extras. Raise the Pydantic, PyYAML and Typer minimums to 2.10.6, 6.0.1 and
+  0.20.1 respectively, and update lockfile requirement metadata.
+
+### Testing and limitations
+- Exercise OpenAI, Anthropic, OpenRouter, Gemini and Vertex SDK request and
+  response paths with synthetic in-memory transports and credentials.
+- Codex CLI builds require independent qualification before their contexts can be
+  admitted by the separately maintained compatibility record.
+
+See [the release record](docs/releases/0.8.6.md) for evidence and limitations.
 
 ## [0.8.5] - 2026-10-23
 
@@ -920,7 +950,8 @@ Tested candidate, not a publication or global-install claim. See
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.5...v0.8.6
 [0.8.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.0...v0.8.1
