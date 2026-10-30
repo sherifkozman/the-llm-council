@@ -1,0 +1,58 @@
+name: Codex native platforms
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/llm_council/providers/cli/**"
+      - "tests/*codex*"
+      - "compatibility/**"
+      - ".github/workflows/codex-platforms.yml"
+  workflow_dispatch:
+    inputs:
+      codex-version:
+        description: Official stable Codex version to qualify
+        required: true
+        default: "0.165.0"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+      - name: Install candidate and official native runtime
+        env:
+          CODEX_VERSION: ${{ inputs.codex-version || '0.165.0' }}
+        run: |
+          [[ "$CODEX_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          python -m pip install -e '.[dev]'
+          npm install --ignore-scripts --no-audit --no-fund --prefix "$RUNNER_TEMP/codex" "@openai/codex@$CODEX_VERSION"
+      - name: Test portable validation and native generation isolation
+        run: |
+          python -m pytest -q tests/test_codex_platforms.py
+          python tests/codex_native_platform_probe.py "$RUNNER_TEMP/codex/node_modules/@openai/codex/bin/codex.js" qualification.json
+      - name: Retain successful qualification record
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-record-${{ matrix.os }}
+          path: qualification.json
+          if-no-files-found: error

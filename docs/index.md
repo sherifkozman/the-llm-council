@@ -124,9 +124,10 @@ selected Codex configuration; if neither selects one, the user must choose one.
 The Codex provider requires a current compatibility record matching
 the selected executable, resources, platform and request context. It runs version
 and catalog checks from a verified private copy and rejects unknown or changed
-builds. The published record currently covers macOS arm64 with ChatGPT
-authentication and selected request contexts; other previously usable contexts
-fail closed. Record updates can add qualified builds without changing Council;
+builds. Native binaries and standard npm/pnpm installations are supported on
+macOS, Linux and Windows for ARM64 and x86-64. The
+[release verification matrix](releases/0.8.7.md) identifies tested contexts;
+unrecorded combinations still fail closed. Record updates can add qualified builds without changing Council;
 they do not certify arbitrary future versions or provider behavior.
 
 Codex runs with an isolated temporary `HOME`, the selected authentication file,

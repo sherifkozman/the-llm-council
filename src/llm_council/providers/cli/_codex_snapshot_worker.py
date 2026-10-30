@@ -12,6 +12,110 @@ _MAX_FILE_BYTES = 512 * 1024 * 1024
 _MAX_TOTAL_BYTES = 768 * 1024 * 1024
 
 
+def _windows_source(source: Path, relative: PurePosixPath) -> Path:
+    """Reject links/junctions and Windows path aliases in the selected tree."""
+    path = source
+    for part in ("", *relative.parts):
+        if part:
+            stem = part.split(".")[0].upper()
+            if (
+                part.rstrip(" .") != part
+                or any(c in part for c in '<>"|?*')
+                or stem
+                in {
+                    "CON",
+                    "PRN",
+                    "AUX",
+                    "NUL",
+                    *(f"COM{i}" for i in range(1, 10)),
+                    *(f"LPT{i}" for i in range(1, 10)),
+                }
+            ):
+                raise ValueError("unsupported Windows path")
+            path = path / part
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise ValueError("runtime source contains a reparse point")
+    return path
+
+
+def copy_windows_runtime(
+    source: Path,
+    destination: Path,
+    expected: dict[str, str],
+    executables: list[str],
+    *,
+    source_entrypoint: str = "bin/codex.exe",
+) -> None:
+    """Copy verified bytes under the existing same-user trust boundary on Windows."""
+    entrypoint = _source_entrypoint(source_entrypoint)
+    if (
+        not isinstance(expected, dict)
+        or not 1 <= len(expected) <= 64
+        or "bin/codex" not in expected
+        or "bin/codex.exe" in expected
+        or not isinstance(executables, list)
+        or not all(isinstance(n, str) for n in executables)
+        or executables != sorted(set(executables))
+        or "bin/codex" not in executables
+        or not set(executables) <= set(expected)
+    ):
+        raise ValueError("invalid Windows file inventory")
+    total = 0
+    seen: set[str] = set()
+    for name, digest in sorted(expected.items()):
+        if (
+            not isinstance(name, str)
+            or len(name) > 240
+            or any(c in name for c in ("\0", "\\", ":"))
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+        ):
+            raise ValueError("invalid file record")
+        relative = PurePosixPath(name)
+        if (
+            relative.is_absolute()
+            or str(relative) != name
+            or any(p in (".", "..") for p in name.split("/"))
+            or name.casefold() in seen
+        ):
+            raise ValueError("invalid file path")
+        seen.add(name.casefold())
+        source_relative = entrypoint if name == "bin/codex" else relative
+        path = _windows_source(source, source_relative)
+        before = path.lstat()
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        try:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_size > _MAX_FILE_BYTES
+                or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise ValueError("unsupported or changed source file")
+            target = destination / ("bin/codex.exe" if name == "bin/codex" else name)
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            checksum = hashlib.sha256()
+            size = 0
+            with target.open("xb") as output:
+                while chunk := os.read(fd, 1024 * 1024):
+                    size += len(chunk)
+                    total += len(chunk)
+                    if size > _MAX_FILE_BYTES or total > _MAX_TOTAL_BYTES:
+                        raise ValueError("runtime exceeds size limit")
+                    checksum.update(chunk)
+                    output.write(chunk)
+            after = _windows_source(source, source_relative).lstat()
+            if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino):
+                raise ValueError("source file changed while copying")
+            if checksum.hexdigest() != digest:
+                raise ValueError("file digest mismatch")
+            os.chmod(target, 0o400)
+        finally:
+            os.close(fd)
+
+
 def _executable_is_accessible(parent_fd: int, name: str, info: os.stat_result) -> bool:
     current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     if (current.st_dev, current.st_ino, current.st_mode) != (
@@ -161,6 +265,32 @@ def copy_candidate_runtime(
             or not isinstance(candidate["executables"], list)
         ):
             raise ValueError("invalid candidate inventory")
+    if sys.platform == "win32":
+        path = _windows_source(source, entrypoint)
+        checksum = hashlib.sha256()
+        size = 0
+        with path.open("rb") as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                raise ValueError("unsupported candidate executable")
+            while chunk := file.read(1024 * 1024):
+                size += len(chunk)
+                if size > _MAX_FILE_BYTES:
+                    raise ValueError("candidate executable exceeds size limit")
+                checksum.update(chunk)
+        digest = checksum.hexdigest()
+        matches = [
+            candidate for candidate in candidates if candidate["files"]["bin/codex"] == digest
+        ]
+        if not matches or any(candidate != matches[0] for candidate in matches[1:]):
+            raise ValueError("unknown or ambiguous candidate executable")
+        copy_windows_runtime(
+            source,
+            destination,
+            matches[0]["files"],
+            matches[0]["executables"],
+            source_entrypoint=source_entrypoint,
+        )
+        return digest
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_fd = os.open(source, flags)
     try:

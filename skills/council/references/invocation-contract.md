@@ -164,7 +164,7 @@ separate action from building or installing Council.
 After publication, an approved exact-version uv tool reinstall is:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.6'
+uv tool install --reinstall 'the-llm-council[all]==0.8.7'
 ```
 
 First preserve local package edits and the uv receipt without copying credentials.
