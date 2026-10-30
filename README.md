@@ -83,7 +83,7 @@ the required values; absent choices fail closed. Help output can still be
 incomplete in ways this check cannot detect. Help advertises syntax, not
 authentication, isolation semantics or generation success. Existing policy
 checks and strict terminal-response validation remain.
-The unreleased Codex candidate uses a separately maintained compatibility record
+The Codex provider uses a separately maintained compatibility record
 instead of a fixed version list. Council requires a current record for the selected
 build, platform, model, authentication route, reasoning and output mode. It copies
 and verifies the listed executable and resources, then checks the version and
@@ -92,13 +92,15 @@ unrecorded combinations fail closed. A new Codex release can be supported withou
 a new Council build only after its exact combination has been independently
 qualified and added to the record.
 
-The record source currently returns 404 and no production record has been
-published; this candidate therefore cannot run Codex yet. Council uses an explicit
-Council or request model first; otherwise it uses the model in the selected Codex
-configuration. If neither selects a model, Council asks the user to select one.
-The draft record covers only macOS arm64 with ChatGPT authentication and selected
-models and reasoning modes; other previously supported setups remain unqualified. Each request needs a reachable,
-current record and a temporary runtime copy (about 356 MB for Codex 0.165.0).
+Council uses an explicit Council or request model first; otherwise it uses the
+model in the selected Codex configuration. If neither selects a model, Council
+asks the user to select one.
+
+**Compatibility change:** the published record currently covers macOS arm64 with
+ChatGPT authentication and selected models and reasoning modes. Other previously
+usable platforms, authentication routes and model combinations are not yet
+qualified and fail closed. Each request needs a reachable, current record and a
+temporary runtime copy (about 356 MB for Codex 0.165.0).
 Synthetic and loopback checks do not prove real provider access or cover all
 models, authentication routes or future versions.
 

@@ -5,22 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.6] - 2026-10-29
 
 ### Changed
 - Report incomplete Codex temporary-runtime cleanup when the request otherwise
   succeeds, including when its caller is handling an unrelated exception.
-- When Council has no selected Codex model, the candidate uses the model from
+- When Council has no selected Codex model, Council uses the model from
   the selected Codex configuration. If neither selects a model, it requests an
   explicit selection; it does not substitute a hardcoded model.
-- The Codex candidate now uses separately maintained compatibility records and a
+- Codex now uses a separately maintained compatibility record and a
   verified private runtime copy instead of an exact-version generation gate.
   Each build and request context must be independently qualified. Unknown or
   changed builds, expired records and unavailable records fail closed. The
-  public record is not yet published, so this candidate cannot run Codex until
-  that prerequisite and the remaining native qualification and review are complete.
-
-## [0.8.6] - 2026-10-28
+  initial record covers macOS arm64 with ChatGPT authentication and selected
+  models and reasoning modes; other previously usable contexts fail closed.
 
 ### Fixed
 - Capture Claude CLI help with a bounded terminal stream and bounded pipe

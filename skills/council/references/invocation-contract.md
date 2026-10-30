@@ -87,7 +87,7 @@ Do not change credentials, endpoints or administrative controls to bypass policy
 
 ### Native CLI Versions
 
-Claude uses runtime capability admission; the unreleased Codex candidate uses record-based admission:
+Claude uses runtime capability admission; Codex uses record-based admission:
 
 | Provider | Admission policy |
 | --- | --- |
@@ -107,9 +107,9 @@ future builds. Existing policy checks and strict terminal validation still apply
 Capability probes are refreshed, not cached; they are not an atomic guarantee
 against executable replacement between probe and dispatch.
 
-When no model is selected in Council, the Codex candidate uses the model in the
+When no model is selected in Council, Codex uses the model in the
 selected Codex configuration; if neither selects one, the user must choose one.
-The unreleased Codex candidate fetches a public compatibility record for each
+The Codex provider fetches a public compatibility record for each
 request. A current record must match the selected executable and resource hashes,
 platform, catalog, model, authentication route, reasoning and output mode.
 Council verifies a private copy and uses it for probes and generation. Unknown,
@@ -117,9 +117,10 @@ changed, expired or unavailable records fail closed before an unverified CLI is
 run. Record updates can cover independently qualified builds without a Council
 release; a version string or help output alone does not qualify a build.
 
-The public record source currently returns 404 and has no production record, so
-this candidate cannot run Codex until a qualified record is available. The
-output monitor stops the child after an unexpected tool event, but it does not
+The current public record covers macOS arm64 with ChatGPT authentication and
+selected request contexts. Other previously usable contexts fail closed until
+qualified records are added. The output monitor stops the child after an
+unexpected tool event, but it does not
 prevent an action that started before the event. A pre-existing limitation was
 observed with enterprise-managed MCP servers; the same synthetic configuration
 also affected Council 0.8.6 with Codex 0.160.1.

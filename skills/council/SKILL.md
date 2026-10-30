@@ -182,7 +182,7 @@ and optional effort. Report missing controls and the observed path/version; neve
 drop isolation flags to continue. Base doctor proves advertised syntax only,
 not authentication, isolation semantics or generation. New builds are not rejected
 just because their version is unfamiliar. See the invocation contract.
-The unreleased Codex candidate requires a current compatibility record for the
+The Codex provider requires a current compatibility record for the
 selected build and request context. It verifies a private copy before execution;
 unknown or changed builds fail closed. The public record is not yet available, so
 Codex requests currently fail in this candidate. A future qualified record update
