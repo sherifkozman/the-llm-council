@@ -131,6 +131,37 @@ def test_windows_readonly_snapshot_cleanup(tmp_path, monkeypatch):
     assert not root.exists()
 
 
+@pytest.mark.parametrize("releases", [True, False])
+def test_windows_cleanup_bounds_sharing_violation_retry(tmp_path, monkeypatch, releases):
+    monkeypatch.setattr(codex.sys, "platform", "win32")
+    clock = [0.0]
+    calls = []
+    error = PermissionError("file is still in use")
+    error.winerror = 32
+
+    def unlink(path):
+        calls.append(path)
+        if not releases or len(calls) == 1:
+            raise error
+
+    def rmtree(path, *, onerror):
+        onerror(unlink, str(path), (PermissionError, error, None))
+
+    monkeypatch.setattr(codex.shutil, "rmtree", rmtree)
+    monkeypatch.setattr(codex.os, "chmod", lambda *args: None)
+    import time
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    if releases:
+        codex._cleanup_home(tmp_path)
+        assert len(calls) == 2
+    else:
+        with pytest.raises(RuntimeError, match="cleanup incomplete"):
+            codex._cleanup_home(tmp_path)
+        assert 0 < clock[0] <= codex._CLEANUP_SECONDS
+
+
 def test_windows_snapshot_uses_exe_and_rejects_changed_files(tmp_path):
     source = tmp_path / "source"
     source.mkdir()

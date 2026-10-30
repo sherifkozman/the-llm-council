@@ -25,6 +25,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 import warnings
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -549,11 +550,21 @@ def _config_args(config: dict[str, Any]) -> list[str]:
 
 
 def _cleanup_home(home: str | Path, original: BaseException | None = None) -> None:
+    deadline = time.monotonic() + _CLEANUP_SECONDS
+
     def remove_readonly(function: Callable[..., Any], path: str, error: Any) -> None:
         if sys.platform != "win32" or not isinstance(error[1], PermissionError):
             raise error[1]
-        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
-        function(path)
+        while True:
+            try:
+                os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+                function(path)
+                return
+            except PermissionError as exc:
+                remaining = deadline - time.monotonic()
+                if getattr(exc, "winerror", None) not in (32, 33) or remaining <= 0:
+                    raise
+                time.sleep(min(0.05, remaining))
 
     try:
         if sys.platform == "win32":

@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolve official npm and pnpm Codex launchers to their native platform binary
   before record verification, without executing JavaScript or shell launchers.
 - Restore native Windows admission, PE executable validation, private runtime
-  copying, isolated user paths and read-only snapshot cleanup. Existing Windows
+  copying, isolated user paths and read-only snapshot cleanup, including a
+  one-second bound for transient sharing locks. Existing Windows
   direct-child termination and the same-user trust boundary are unchanged.
 - Explain that an admission failure can be a missing build, model, authentication,
   reasoning or output context instead of reporting every failure as changed files.
