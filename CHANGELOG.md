@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Native CI qualification on macOS, Linux and Windows for ARM64 and x86-64,
   using synthetic credentials, loopback responses and unsolicited tool-call tests.
-- A verified Linux x86-64 Codex 0.162.1 record for ChatGPT, `gpt-6.1-sol`,
-  default/high reasoning and text/JSON schema output.
+- Qualified Codex 0.165.0 records for all six platform/architecture combinations,
+  plus Linux x86-64 Codex 0.162.1. They cover `gpt-6.1-sol`, default/high
+  reasoning, text/JSON schema, ChatGPT and the supported API-key routes.
 
 No runtime dependencies or authentication configuration changed. See the
 [release verification matrix](docs/releases/0.8.7.md) for evidence and limits.
