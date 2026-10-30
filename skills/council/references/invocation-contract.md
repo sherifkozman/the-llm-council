@@ -117,9 +117,10 @@ changed, expired or unavailable records fail closed before an unverified CLI is
 run. Record updates can cover independently qualified builds without a Council
 release; a version string or help output alone does not qualify a build.
 
-The current public record covers macOS arm64 with ChatGPT authentication and
-selected request contexts. Other previously usable contexts fail closed until
-qualified records are added. The output monitor stops the child after an
+Native binaries and standard npm/pnpm installations are supported on macOS,
+Linux and Windows for ARM64 and x86-64. The current public record determines
+which exact builds and request contexts are admitted; unrecorded combinations
+fail closed. See the release verification matrix for tested contexts. The output monitor stops the child after an
 unexpected tool event, but it does not
 prevent an action that started before the event. A pre-existing limitation was
 observed with enterprise-managed MCP servers; the same synthetic configuration
@@ -133,8 +134,9 @@ custom endpoints need a separately qualified custom-route record; ChatGPT custom
 routing is not currently qualified. The private copy protects against ordinary
 concurrent upgrades, while other processes under the same user remain trusted.
 
-The default model remains `gpt-5.4`; select a model covered by the installed
-catalog and the record. Do not change models, reasoning or isolation controls to
+An explicit Council model takes precedence; otherwise Council uses the model
+from the selected Codex configuration. If neither selects one, the user must
+choose a model covered by the catalog and record. Do not change models, reasoning or isolation controls to
 bypass a failure. Synthetic tests and base doctor do not establish live-provider
 readiness, complete review quality or compatibility with all future builds.
 
@@ -164,7 +166,7 @@ separate action from building or installing Council.
 After publication, an approved exact-version uv tool reinstall is:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.6'
+uv tool install --reinstall 'the-llm-council[all]==0.8.7'
 ```
 
 First preserve local package edits and the uv receipt without copying credentials.

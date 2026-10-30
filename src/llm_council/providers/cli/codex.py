@@ -25,6 +25,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 import warnings
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -183,7 +184,7 @@ def _validated_compatibility_records(
             if not re.fullmatch(r"[0-9a-f]{64}", record["catalog_sha256"]):
                 return None
             if (
-                record["os"] not in ("darwin", "linux")
+                record["os"] not in ("darwin", "linux", "win32")
                 or record["arch"] not in ("arm64", "x86_64")
                 or (record["auth"], record["endpoint"])
                 not in (("apikey", "openai"), ("apikey", "custom"), ("chatgpt", "chatgpt"))
@@ -201,6 +202,7 @@ def _validated_compatibility_records(
                 not isinstance(files, dict)
                 or not (1 <= len(files) <= 64)
                 or "bin/codex" not in files
+                or (record["os"] == "win32" and "bin/codex.exe" in files)
             ):
                 return None
             if (
@@ -300,11 +302,37 @@ def _match_snapshot_identity(
 def _native_executable_matches(path: Path, system: str, architecture: str) -> bool:
     """Reject wrappers and executables for a different recorded platform."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if path.is_symlink():
+            return False
+        fd = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_BINARY", 0),
+        )
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 return False
-            header = os.read(fd, 20)
+            header = os.read(fd, 64)
+            if system == "win32":
+                if len(header) != 64 or header[:2] != b"MZ":
+                    return False
+                offset = int.from_bytes(header[60:64], "little")
+                if not 64 <= offset <= 1024 * 1024:
+                    return False
+                os.lseek(fd, offset, os.SEEK_SET)
+                pe = os.read(fd, 26)
+                machine = {"x86_64": 0x8664, "arm64": 0xAA64}.get(architecture)
+                flags = int.from_bytes(pe[22:24], "little")
+                return (
+                    len(pe) == 26
+                    and pe[:4] == b"PE\0\0"
+                    and int.from_bytes(pe[4:6], "little") == machine
+                    and pe[24:26] == b"\x0b\x02"
+                    and bool(flags & 2)
+                    and not bool(flags & 0x2000)
+                )
         finally:
             os.close(fd)
     except OSError:
@@ -326,6 +354,87 @@ def _native_executable_matches(path: Path, system: str, architecture: str) -> bo
         cpu = int.from_bytes(header[18:20], byte_order)
         return file_type in (2, 3) and cpu == {"arm64": 183, "x86_64": 62}.get(architecture)
     return False
+
+
+def _resolve_codex_executable(selected: Path, system: str, architecture: str) -> Path:
+    """Resolve standard npm/pnpm entrypoints without running JavaScript or a shell.
+
+    Package metadata only locates the binary. The record-selected snapshot still
+    verifies every runtime file before any native process can run.
+    """
+    selected = selected.resolve(strict=True)
+    if not selected.is_file():
+        raise RuntimeError("Codex selected launcher is not a regular file")
+    package: Path | None = None
+    if selected.name == "codex.js" and selected.parent.name == "bin":
+        package = selected.parent.parent
+    elif (
+        selected.name in ("codex", "codex.cmd", "codex.ps1")
+        and selected.stat().st_size <= 64 * 1024
+    ):
+        text = selected.read_text(encoding="utf-8", errors="replace").replace("\\", "/")
+        for relative in (
+            "../@openai/codex/bin/codex.js",
+            "node_modules/@openai/codex/bin/codex.js",
+        ):
+            if relative in text:
+                entry = (selected.parent / relative).resolve(strict=True)
+                package = entry.parent.parent
+                break
+    if package is None:
+        return selected
+
+    def package_metadata(path: Path) -> Any:
+        if not path.is_file():
+            raise RuntimeError("Codex package metadata is not a regular file")
+        with path.open("rb") as file:
+            data = file.read(64 * 1024 + 1)
+        if len(data) > 64 * 1024:
+            raise RuntimeError("Codex package metadata exceeds size limit")
+        return json.loads(data)
+
+    metadata = package_metadata(package / "package.json")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("name") != "@openai/codex"
+        or not isinstance(metadata.get("bin"), dict)
+        or metadata["bin"].get("codex")
+        not in (
+            "bin/codex.js",
+            "./bin/codex.js",
+        )
+    ):
+        raise RuntimeError("Codex launcher does not identify the expected package")
+    targets = {
+        ("darwin", "arm64"): ("darwin-arm64", "aarch64-apple-darwin"),
+        ("darwin", "x86_64"): ("darwin-x64", "x86_64-apple-darwin"),
+        ("linux", "arm64"): ("linux-arm64", "aarch64-unknown-linux-musl"),
+        ("linux", "x86_64"): ("linux-x64", "x86_64-unknown-linux-musl"),
+        ("win32", "arm64"): ("win32-arm64", "aarch64-pc-windows-msvc"),
+        ("win32", "x86_64"): ("win32-x64", "x86_64-pc-windows-msvc"),
+    }
+    suffix, target = targets[(system, architecture)]
+    name = f"@openai/codex-{suffix}"
+    executable = "codex.exe" if system == "win32" else "codex"
+    for modules in (
+        package / "node_modules",
+        *(parent for parent in package.parents if parent.name == "node_modules"),
+    ):
+        platform_package = modules / name
+        if (platform_package / "package.json").is_file():
+            info = package_metadata(platform_package / "package.json")
+            dependencies = metadata.get("optionalDependencies", {})
+            alias_matches = (
+                isinstance(info, dict)
+                and info.get("name") == "@openai/codex"
+                and isinstance(info.get("version"), str)
+                and isinstance(dependencies, dict)
+                and dependencies.get(name) == f"npm:@openai/codex@{info['version']}"
+            )
+            if not isinstance(info, dict) or (info.get("name") != name and not alias_matches):
+                raise RuntimeError("Codex platform package has an unexpected identity")
+            return (platform_package / "vendor" / target / "bin" / executable).resolve(strict=True)
+    return (package / "vendor" / target / "bin" / executable).resolve(strict=True)
 
 
 class _PreSpawnRejectedError(RuntimeError):
@@ -441,8 +550,27 @@ def _config_args(config: dict[str, Any]) -> list[str]:
 
 
 def _cleanup_home(home: str | Path, original: BaseException | None = None) -> None:
+    deadline = time.monotonic() + _CLEANUP_SECONDS
+
+    def remove_readonly(function: Callable[..., Any], path: str, error: Any) -> None:
+        if sys.platform != "win32" or not isinstance(error[1], PermissionError):
+            raise error[1]
+        while True:
+            try:
+                os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+                function(path)
+                return
+            except PermissionError as exc:
+                remaining = deadline - time.monotonic()
+                if getattr(exc, "winerror", None) not in (32, 33) or remaining <= 0:
+                    raise
+                time.sleep(min(0.05, remaining))
+
     try:
-        shutil.rmtree(home)
+        if sys.platform == "win32":
+            shutil.rmtree(home, onerror=remove_readonly)
+        else:
+            shutil.rmtree(home)
     except OSError as exc:
         logger.error("Codex cleanup incomplete: temporary home remains at %s", home)
         if original is not None:
@@ -885,7 +1013,7 @@ class CodexCLIProvider(ProviderAdapter):
     @staticmethod
     def _record_environment(home: str) -> dict[str, str]:
         """Fixed environment shared by record-backed probes and generation."""
-        return {
+        env = {
             "PATH": os.defpath,
             "HOME": home,
             "CODEX_HOME": str(Path(home) / ".codex"),
@@ -896,6 +1024,18 @@ class CodexCLIProvider(ProviderAdapter):
             "LANG": "C",
             "LC_ALL": "C",
         }
+        if sys.platform == "win32":
+            # Windows needs its OS loader path; user configuration remains isolated.
+            if os.environ.get("SYSTEMROOT"):
+                env["SystemRoot"] = os.environ["SYSTEMROOT"]
+            env.update(
+                {
+                    "USERPROFILE": home,
+                    "APPDATA": str(Path(home) / "AppData" / "Roaming"),
+                    "LOCALAPPDATA": str(Path(home) / "AppData" / "Local"),
+                }
+            )
+        return env
 
     def _request_timeout(self, request: GenerateRequest) -> float:
         return (
@@ -1121,7 +1261,11 @@ class CodexCLIProvider(ProviderAdapter):
                 request.seek(0)
                 code, state = await self._run_cli(
                     [sys.executable, "-I", str(worker)],
-                    env={"HOME": str(snapshot), "TMPDIR": str(snapshot), "PATH": os.defpath},
+                    env={
+                        key: value
+                        for key, value in self._record_environment(str(snapshot)).items()
+                        if key in ("HOME", "TMPDIR", "PATH", "SystemRoot")
+                    },
                     cwd=str(snapshot),
                     deadline=deadline,
                     stdin=request,
@@ -1130,7 +1274,10 @@ class CodexCLIProvider(ProviderAdapter):
             if not cleanup_confirmed.settled:
                 raise RuntimeError("Codex snapshot worker cleanup incomplete")
             if code != 0:
-                raise RuntimeError("Codex runtime snapshot did not match the compatibility record")
+                raise RuntimeError(
+                    "Codex runtime snapshot did not match a compatibility record for this "
+                    "build, model, authentication, reasoning and output context"
+                )
             digest = "".join(state.stdout_parts).strip()
             if not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise RuntimeError("Codex snapshot worker returned an invalid executable digest")
@@ -1144,7 +1291,10 @@ class CodexCLIProvider(ProviderAdapter):
             inventory_digest = _inventory_sha256(matches[0]["files"], matches[0]["executables"])
             self._require_remaining(deadline)
             yield _CodexSnapshot(
-                snapshot / "bin" / "codex", cleanup_confirmed, digest, inventory_digest
+                snapshot / "bin" / ("codex.exe" if sys.platform == "win32" else "codex"),
+                cleanup_confirmed,
+                digest,
+                inventory_digest,
             )
         except BaseException as exc:
             operation_error = exc
@@ -1169,8 +1319,14 @@ class CodexCLIProvider(ProviderAdapter):
         if not self._cli_path:
             raise RuntimeError("Codex CLI not found")
         try:
-            selected = Path(self._cli_path).resolve(strict=True)
-        except (OSError, RuntimeError) as exc:
+            architecture = {
+                "arm64": "arm64",
+                "aarch64": "arm64",
+                "x86_64": "x86_64",
+                "amd64": "x86_64",
+            }.get(platform.machine().lower(), "")
+            selected = _resolve_codex_executable(Path(self._cli_path), sys.platform, architecture)
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
             raise RuntimeError("Codex selected executable could not be resolved") from exc
         if selected.parent.name == "bin":
             source, source_entrypoint = selected.parent.parent, f"bin/{selected.name}"
@@ -1192,7 +1348,11 @@ class CodexCLIProvider(ProviderAdapter):
         fetch_deadline = min(deadline, asyncio.get_running_loop().time() + 5.0)
         code, state = await self._run_cli(
             [sys.executable, "-I", str(worker), certifi.where()],
-            env={"PATH": os.defpath},
+            env={
+                key: value
+                for key, value in self._record_environment(tempfile.gettempdir()).items()
+                if key in ("PATH", "SystemRoot")
+            },
             cwd=tempfile.gettempdir(),
             deadline=fetch_deadline,
         )
@@ -1212,10 +1372,13 @@ class CodexCLIProvider(ProviderAdapter):
     ) -> AsyncIterator[_CodexAdmission]:
         """Inspect a record-selected snapshot with no model credentials."""
         self._require_remaining(deadline)
-        system = {"darwin": "darwin", "linux": "linux"}.get(sys.platform)
-        architecture = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64"}.get(
-            platform.machine().lower()
-        )
+        system = {"darwin": "darwin", "linux": "linux", "win32": "win32"}.get(sys.platform)
+        architecture = {
+            "arm64": "arm64",
+            "aarch64": "arm64",
+            "x86_64": "x86_64",
+            "amd64": "x86_64",
+        }.get(platform.machine().lower())
         endpoint = {"apikey": "openai", "chatgpt": "chatgpt"}.get(runtime.category)
         if system is None or architecture is None or endpoint is None:
             raise RuntimeError("Codex runtime context is not covered by compatibility records")

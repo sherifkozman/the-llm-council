@@ -68,7 +68,7 @@ boundaries, complete result files and execution-status handling. The shipped
 skill and caller examples require Council 0.8.5 or later for automatic evidence
 containment and dependency security floors, in addition to capability-based
 Claude admission and the earlier reporting fixes. See the
-[0.8.6 release notes](docs/releases/0.8.6.md) for the current provider changes
+[0.8.7 release notes](docs/releases/0.8.7.md) for the current provider changes
 and [0.8.5 release notes](docs/releases/0.8.5.md) for containment details.
 
 Claude Code compatibility is capability-based, not an exact-build allowlist.
@@ -96,11 +96,13 @@ Council uses an explicit Council or request model first; otherwise it uses the
 model in the selected Codex configuration. If neither selects a model, Council
 asks the user to select one.
 
-**Compatibility change:** the published record currently covers macOS arm64 with
-ChatGPT authentication and selected models and reasoning modes. Other previously
-usable platforms, authentication routes and model combinations are not yet
-qualified and fail closed. Each request needs a reachable, current record and a
-temporary runtime copy (about 356 MB for Codex 0.165.0).
+Council supports official native Codex binaries and standard npm/pnpm installations
+on macOS, Linux and native Windows, including ARM64 and x86-64. Each exact build
+and request context still needs a current entry in the
+[compatibility record](compatibility/codex-v1.json). See the
+[0.8.7 verification matrix](docs/releases/0.8.7.md) for tested contexts and limits.
+Unknown builds or contexts fail closed. Each request needs a reachable, current
+record and a temporary runtime copy (about 356 MB for Codex 0.165.0 on macOS).
 Synthetic and loopback checks do not prove real provider access or cover all
 models, authentication routes or future versions.
 
@@ -741,7 +743,7 @@ After publication and approval to update the installed tool, preserve any local
 package edits and the uv receipt, then replace the exact version constraint:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.6'
+uv tool install --reinstall 'the-llm-council[all]==0.8.7'
 ```
 
 This targets the uv-managed tool and its exposed executable, and updates the

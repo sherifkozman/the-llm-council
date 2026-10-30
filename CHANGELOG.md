@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] - 2026-10-29
+
+### Fixed
+- Resolve official npm and pnpm Codex launchers to their native platform binary
+  before record verification, without executing JavaScript or shell launchers.
+- Restore native Windows admission, PE executable validation, private runtime
+  copying, isolated user paths and read-only snapshot cleanup, including a
+  one-second bound for transient sharing locks. Existing Windows
+  direct-child termination and the same-user trust boundary are unchanged.
+- Explain that an admission failure can be a missing build, model, authentication,
+  reasoning or output context instead of reporting every failure as changed files.
+
+### Added
+- Native CI qualification on macOS, Linux and Windows for ARM64 and x86-64,
+  using synthetic credentials, loopback responses and unsolicited tool-call tests.
+- Qualified Codex 0.165.0 records for all six platform/architecture combinations,
+  plus Linux x86-64 Codex 0.162.1. They cover `gpt-6.1-sol`, default/high
+  reasoning, text/JSON schema, ChatGPT and the supported API-key routes.
+
+No runtime dependencies or authentication configuration changed. See the
+[release verification matrix](docs/releases/0.8.7.md) for evidence and limits.
+
 ## [0.8.6] - 2026-10-29
 
 ### Changed
@@ -950,7 +972,8 @@ Tested candidate, not a publication or global-install claim. See
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.6...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.7...HEAD
+[0.8.7]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.5...v0.8.6
 [0.8.3]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.1...v0.8.2
