@@ -4,7 +4,7 @@
 
 This document outlines the development direction for The LLM Council. We welcome community input on priorities and feature design.
 
-## Current Release: v0.7.0
+## Current Release: v0.8.8
 
 The current release foundation includes:
 
@@ -18,6 +18,11 @@ The current release foundation includes:
 - **Extended reasoning** - Support for thinking/reasoning modes (Anthropic, Google, OpenAI)
 - **Runtime controls** - `runtime_profile`, `reasoning_profile`, routed handoff, and deeper provider readiness checks
 - **Artifact store** - Content-addressed storage with tiered summarization
+- **Markdown output** - `council run --format markdown` renders human-readable results for stdout and `--output` files
+- **Provider-specific prompt caching** - Anthropic cache controls, OpenRouter route-gated passthrough, OpenAI cache telemetry, and Gemini/Vertex cached-content lifecycle
+- **Execution status** - Results report `execution_status` (`completed`, `degraded`, `failed`, `cancelled`) alongside a portable invocation contract for agent and CI callers
+- **Native CLI compatibility admission** - Claude Code is admitted by checking advertised options on every call; Codex is admitted through a separately maintained, fetched compatibility record qualified for macOS, Linux, and Windows on ARM64 and x86-64. Unknown builds fail closed
+- **Evidence-read containment** - Automatic evidence searches no longer follow symlinks to content outside the selected repository
 
 ---
 
@@ -208,4 +213,4 @@ Have an idea not listed here? [Open an issue](https://github.com/sherifkozman/th
 
 ---
 
-*Last updated: 2026-03-27*
+*Last updated: 2026-11-02*
