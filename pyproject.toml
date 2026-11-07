@@ -56,11 +56,11 @@ dev = [
     "types-PyYAML>=6.0",
     "types-jsonschema>=4.0",
 ]
-anthropic = ["anthropic>=0.18"]
+anthropic = ["anthropic>=0.87.0"]
 openai = ["openai>=1.0"]
 gemini = ["google-genai>=1.52.0", "urllib3>=2.8.0"]
 google = ["google-genai>=1.52.0", "urllib3>=2.8.0"]
-vertex = ["google-genai>=1.52.0", "google-auth>=2.0", "anthropic[vertex]>=0.18", "urllib3>=2.8.0"]
+vertex = ["google-genai>=1.52.0", "google-auth>=2.0", "anthropic[vertex]>=0.87.0", "urllib3>=2.8.0"]
 all = [
     "the-llm-council[anthropic,openai,gemini,vertex]"
 ]
