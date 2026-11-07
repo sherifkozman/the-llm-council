@@ -9,6 +9,103 @@ permissions:
   contents: read
 
 jobs:
+  anthropic-floor-probe:
+    name: Anthropic 0.87.0 provider wire floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.16'
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.13.5'
+          enable-cache: false
+      - name: Install floor, record dependencies, and verify synthetic wire tests
+        env:
+          SAFE_HOME: ${{ runner.temp }}/anthropic-floor-home
+          SAFE_UV_CACHE: ${{ runner.temp }}/anthropic-floor-cache
+          ANTHROPIC_FLOOR_JUNIT: ${{ runner.temp }}/anthropic-floor-junit.xml
+        run: |
+          run_clean() {
+            env -i \
+              PATH="$PATH" \
+              SYSTEMROOT="${SYSTEMROOT:-}" \
+              WINDIR="${WINDIR:-}" \
+              COMSPEC="${COMSPEC:-}" \
+              TMP="${TMP:-}" \
+              TEMP="${TEMP:-}" \
+              HOME="$SAFE_HOME" \
+              USERPROFILE="$SAFE_HOME" \
+              UV_CACHE_DIR="$SAFE_UV_CACHE" \
+              PYTHONDONTWRITEBYTECODE=1 \
+              ANTHROPIC_API_KEY='' \
+              ANTHROPIC_VERTEX_PROJECT_ID='' \
+              ANTHROPIC_FLOOR_JUNIT="$ANTHROPIC_FLOOR_JUNIT" \
+              "$@"
+          }
+
+          run_clean mkdir -p "$SAFE_HOME" "$SAFE_UV_CACHE"
+          run_clean uv venv --python 3.12.16 .venv
+          run_clean uv pip install --python .venv/bin/python --default-index https://pypi.org/simple -e '.[vertex,dev]' 'anthropic==0.87.0'
+          run_clean .venv/bin/python -c 'from importlib.metadata import version; actual = version("anthropic"); print(f"anthropic=={actual}"); assert actual == "0.87.0", actual'
+          run_clean uv pip show --python .venv/bin/python anthropic
+          run_clean uv pip check --python .venv/bin/python
+
+          set +e
+          run_clean .venv/bin/python -m pytest -p no:cacheprovider -q \
+            --junitxml="$ANTHROPIC_FLOOR_JUNIT" \
+            'tests/test_provider_sdk_wire.py::test_sdk_serializes_basic_request_and_parses_response[anthropic]' \
+            tests/test_provider_sdk_wire.py::test_anthropic_serializes_council_temperature_and_reasoning_together \
+            tests/test_provider_sdk_wire.py::test_anthropic_doctor_probes_the_configured_model \
+            tests/test_provider_sdk_wire.py::test_anthropic_sdk_maps_structured_output_to_supported_beta_parameter \
+            tests/test_provider_sdk_wire.py::test_vertex_anthropic_sdk_serializes_basic_request \
+            tests/test_provider_sdk_wire.py::test_vertex_anthropic_sdk_serializes_structured_manual_thinking
+          test_status=$?
+          set -e
+
+          run_clean .venv/bin/python - "$ANTHROPIC_FLOOR_JUNIT" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path(sys.argv[1])
+          expected = {
+              "test_sdk_serializes_basic_request_and_parses_response[anthropic]",
+              "test_anthropic_serializes_council_temperature_and_reasoning_together",
+              "test_anthropic_doctor_probes_the_configured_model",
+              "test_anthropic_sdk_maps_structured_output_to_supported_beta_parameter",
+              "test_vertex_anthropic_sdk_serializes_basic_request",
+              "test_vertex_anthropic_sdk_serializes_structured_manual_thinking",
+          }
+          if not report.is_file():
+              raise SystemExit(f"JUnit report missing: {report}")
+
+          cases = [case for case in ET.parse(report).iter("testcase")]
+          passed = {
+              case.get("name")
+              for case in cases
+              if case.get("classname", "").endswith("test_provider_sdk_wire")
+              and not any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
+          }
+          skipped = {
+              case.get("name")
+              for case in cases
+              if case.find("skipped") is not None
+          }
+          missing = expected - passed
+          print(
+              f"required={len(expected)} passed={len(expected & passed)} "
+              f"skipped={sorted(expected & skipped)} missing={sorted(missing)}"
+          )
+          if missing or expected & skipped:
+              sys.exit(1)
+          PY
+          exit "$test_status"
+
   sdk:
     strategy:
       fail-fast: false
