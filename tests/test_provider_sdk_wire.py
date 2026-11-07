@@ -91,6 +91,62 @@ async def test_sdk_serializes_basic_request_and_parses_response(provider_name):
     ]
 
 
+async def test_anthropic_serializes_council_temperature_and_reasoning_together():
+    """Council reasoning forces temperature=1 in the actual Anthropic SDK request."""
+    sdk = import_optional("anthropic", "anthropic")
+    transport_module = httpx
+    if int(version("anthropic").split(".")[0]) >= 2:
+        transport_module = importlib.import_module("httpx2")
+    from llm_council.providers.base import ReasoningConfig
+
+    captured = []
+
+    def respond(request):
+        captured.append((request.url.path, json.loads(request.content)))
+        return transport_module.Response(
+            200,
+            json={
+                "id": "synthetic",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "OK"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 2, "output_tokens": 1},
+            },
+        )
+
+    async with transport_module.AsyncClient(
+        transport=transport_module.MockTransport(respond), trust_env=False
+    ) as http:
+        adapter = AnthropicProvider(api_key="synthetic")
+        adapter._client = sdk.AsyncAnthropic(api_key="synthetic", http_client=http, max_retries=0)
+        response = await adapter.generate(
+            GenerateRequest(
+                model="claude-sonnet-4-5",
+                prompt="hello",
+                max_tokens=30,
+                temperature=0.2,
+                reasoning=ReasoningConfig(enabled=True, effort="high"),
+            )
+        )
+
+    assert response.text == "OK"
+    assert len(captured) == 1
+    path, body = captured[0]
+    assert path == "/v1/messages"
+    assert body["model"] == "claude-sonnet-4-5"
+    assert body["messages"] == [{"role": "user", "content": "hello"}]
+    assert body["max_tokens"] == 30
+    assert body["thinking"] == {"type": "adaptive"}
+    if "temperature" in body:
+        assert body["temperature"] == 1
+    else:
+        # Anthropic SDK 2.x may omit this unsupported field at serialization.
+        assert int(version("anthropic").split(".")[0]) >= 2
+
+
 def test_google_sdk_constructs_gemini_and_vertex_clients_with_retry_options():
     import_optional("google.genai", "google-genai")
     credentials = import_optional("google.auth.credentials", "google-auth").AnonymousCredentials()
