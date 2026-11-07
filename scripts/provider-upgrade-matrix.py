@@ -16,6 +16,7 @@ EXPECTED = {
         "test_openrouter_serializes_basic_request",
         "test_sdk_serializes_basic_request_and_parses_response[anthropic]",
         "test_vertex_anthropic_sdk_serializes_basic_request",
+        "test_vertex_anthropic_sdk_serializes_structured_manual_thinking",
         "test_anthropic_serializes_council_temperature_and_reasoning_together",
     },
     "openai": {
@@ -45,6 +46,7 @@ EXPECTED = {
         "test_google_sdk_serializes_requested_thinking_without_provider_traffic[gemini]",
         "test_google_sdk_serializes_requested_thinking_without_provider_traffic[vertex]",
         "test_vertex_anthropic_sdk_serializes_basic_request",
+        "test_vertex_anthropic_sdk_serializes_structured_manual_thinking",
     },
     "all": {
         "test_openrouter_serializes_basic_request",
@@ -56,6 +58,7 @@ EXPECTED = {
         "test_google_sdk_serializes_requested_thinking_without_provider_traffic[gemini]",
         "test_google_sdk_serializes_requested_thinking_without_provider_traffic[vertex]",
         "test_vertex_anthropic_sdk_serializes_basic_request",
+        "test_vertex_anthropic_sdk_serializes_structured_manual_thinking",
     },
 }
 

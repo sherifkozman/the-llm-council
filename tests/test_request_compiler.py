@@ -214,7 +214,7 @@ class TestRequestCompiler:
             "coerced incompatible response_format to json_object"
         )
 
-    def test_anthropic_forces_temperature_for_reasoning_and_drops_unsupported_fields(self):
+    def test_anthropic_drops_temperature_for_reasoning_and_drops_unsupported_fields(self):
         compiled = compile_request_for_provider(
             "anthropic",
             GenerateRequest(
@@ -227,11 +227,11 @@ class TestRequestCompiler:
             ),
         )
 
-        assert compiled.request.temperature == 1.0
+        assert compiled.request.temperature is None
         assert compiled.request.top_p is None
         assert compiled.request.tool_choice is None
         actions = {(decision.option, decision.action) for decision in compiled.decisions}
-        assert ("temperature", "transformed") in actions
+        assert ("temperature", "dropped") in actions
         assert ("top_p", "dropped") in actions
         assert ("tool_choice", "dropped") in actions
 
@@ -249,6 +249,41 @@ class TestRequestCompiler:
         assert compiled.request.prompt_cache.ttl == "1h"
         actions = {(decision.option, decision.action) for decision in compiled.decisions}
         assert ("prompt_cache", "supported") in actions
+
+    def test_vertex_claude_drops_temperature_when_reasoning_is_enabled(self):
+        compiled = compile_request_for_provider(
+            "vertex-ai",
+            GenerateRequest(
+                prompt="test",
+                model="claude-opus-4-6@20260301",
+                temperature=0.3,
+                reasoning=ReasoningConfig(enabled=True, budget_tokens=2048),
+            ),
+        )
+
+        assert compiled.request.temperature is None
+        assert any(
+            decision.option == "temperature"
+            and decision.action == "dropped"
+            and "thinking" in decision.detail.lower()
+            for decision in compiled.decisions
+        )
+
+    def test_vertex_claude_drops_temperature_for_publisher_qualified_modern_model(self):
+        compiled = compile_request_for_provider(
+            "vertex-ai",
+            GenerateRequest(
+                prompt="test",
+                model="publishers/anthropic/models/claude-opus-4-7@20260301",
+                temperature=0.3,
+            ),
+        )
+
+        assert compiled.request.temperature is None
+        assert any(
+            decision.option == "temperature" and decision.action == "dropped"
+            for decision in compiled.decisions
+        )
 
     def test_non_cache_control_providers_drop_prompt_cache_config(self):
         for provider, model in (
