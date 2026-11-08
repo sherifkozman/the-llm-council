@@ -1201,9 +1201,19 @@ class TestProviderTransportDefaults:
         assert kwargs["timeout"] == 60.0
         assert kwargs["max_retries"] == 0
 
-    def test_gemini_client_uses_bounded_http_options(self, monkeypatch):
-        """Gemini provider should clamp SDK timeout and retry attempts."""
+    @pytest.mark.parametrize(
+        ("configured_api_version", "expected_api_version"),
+        [(None, "v1beta"), ("v1", "v1"), ("v1alpha", "v1alpha"), ("beta", "v1beta")],
+    )
+    def test_gemini_client_uses_bounded_http_options_and_api_version(
+        self, monkeypatch, configured_api_version, expected_api_version
+    ):
+        """Gemini should keep the beta default and honor configured API versions."""
         monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+        if configured_api_version is None:
+            monkeypatch.delenv("GOOGLE_GENAI_API_VERSION", raising=False)
+        else:
+            monkeypatch.setenv("GOOGLE_GENAI_API_VERSION", configured_api_version)
 
         google_module = ModuleType("google")
         genai_module = ModuleType("google.genai")
@@ -1222,6 +1232,7 @@ class TestProviderTransportDefaults:
         http_options = mock_client.call_args.kwargs["http_options"]
         assert http_options.timeout == 15000
         assert http_options.retry_options.attempts == 1
+        assert http_options.api_version == expected_api_version
 
     def test_vertex_gemini_client_uses_bounded_http_options(self, monkeypatch):
         """Vertex Gemini client should use the same bounded HTTP settings."""

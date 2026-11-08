@@ -421,7 +421,9 @@ def test_google_sdk_preserves_requested_high_thinking_level():
 
 
 @pytest.mark.parametrize("provider_name", ["gemini", "vertex"])
-async def test_google_sdk_serializes_requested_thinking_without_provider_traffic(provider_name):
+async def test_google_sdk_serializes_requested_thinking_without_provider_traffic(
+    provider_name, monkeypatch
+):
     genai = import_optional("google.genai", "google-genai")
     credentials_module = import_optional("google.auth.credentials", "google-auth")
     from llm_council.providers.base import ReasoningConfig
@@ -458,12 +460,22 @@ async def test_google_sdk_serializes_requested_thinking_without_provider_traffic
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False) as http:
-        options = genai.types.HttpOptions(httpx_async_client=http)
         if provider_name == "gemini":
+            monkeypatch.delenv("GOOGLE_GENAI_API_VERSION", raising=False)
             adapter = GeminiProvider(api_key="synthetic")
-            adapter._client = genai.Client(api_key="synthetic", http_options=options)
+            client_factory = genai.Client
+
+            def client_with_mock_transport(*, http_options, **kwargs):
+                options_with_transport = http_options.model_copy(
+                    update={"httpx_async_client": http}
+                )
+                return client_factory(http_options=options_with_transport, **kwargs)
+
+            monkeypatch.setattr(genai, "Client", client_with_mock_transport)
+            adapter._client = adapter._build_client(timeout_ms=1000)
             path = "/v1beta/models/gemini-3-pro:generateContent"
         else:
+            options = genai.types.HttpOptions(httpx_async_client=http)
             credentials = SyntheticCredentials()
             adapter = VertexAIProvider(
                 project="synthetic", location="us-central1", credentials=credentials
