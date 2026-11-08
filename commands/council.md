@@ -73,10 +73,14 @@ Do not delete native installations or change PATH to hide selection mismatches.
 Claude CLI admission checks required capabilities on every call, not exact build
 numbers. Report missing controls from doctor; never strip isolation flags to
 proceed. Help advertises syntax, not authentication or behavioral compatibility.
-Codex still uses the exact version allowlist in the invocation contract.
-Codex 0.160.1 requires an explicit supported model: the unchanged `gpt-5.4`
-default is absent from its tested catalog. Its tool settings are version-specific,
-not universal model support or permission to change authentication/model/effort.
-Unknown Codex versions remain unsupported. Report doctor failure diagnostics with the
-chosen executable path and version; do not edit package constants or assume
-future builds are behaviorally verified merely because help flags still exist.
+
+Codex uses a separately maintained compatibility record. It admits only exact
+executable/resource snapshots and request contexts in a current, unexpired record;
+unknown or changed builds and unrecorded model, authentication, reasoning or
+output combinations fail closed. Independently qualified builds can be added to
+the record without a Council package release. The 0.8.9 record includes Codex
+0.167.0 across six official npm platform builds; see the
+[0.8.9 qualification notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.9/docs/releases/0.8.9.md). Qualification does not
+establish support for other builds or contexts. Report doctor diagnostics with
+the selected executable and observed version; do not infer behavioral support
+from version strings or advertised flags.
