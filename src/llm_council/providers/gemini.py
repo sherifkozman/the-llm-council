@@ -257,9 +257,14 @@ class GeminiProvider(ProviderAdapter):
                 "Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable or pass api_key."
             )
 
+        api_version = os.environ.get("GOOGLE_GENAI_API_VERSION") or "v1beta"
+        if api_version == "beta":
+            api_version = "v1beta"
+
         return genai.Client(
             api_key=self._api_key,
             http_options=genai.types.HttpOptions(
+                api_version=api_version,
                 timeout=timeout_ms,
                 retry_options=genai.types.HttpRetryOptions(
                     attempts=self._retry_attempts,

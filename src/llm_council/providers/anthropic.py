@@ -7,10 +7,11 @@ Direct integration with the Anthropic API for Claude models.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, ClassVar, cast
 
 from llm_council.providers.base import (
@@ -52,6 +53,16 @@ STRUCTURED_OUTPUT_MODELS = frozenset(
         # Claude Haiku 4.x
         "claude-haiku-4-5",
     }
+)
+
+_NONDEFAULT_TEMPERATURE_UNSUPPORTED_PREFIXES = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+    "claude-haiku-5",
+    "claude-opus-5",
+    "claude-fable-",
+    "claude-mythos-",
 )
 
 _SCHEMA_META_FIELDS = frozenset({"$schema", "$id", "$ref", "$comment"})
@@ -118,6 +129,35 @@ def _prepare_schema_for_anthropic(schema: dict[str, Any]) -> dict[str, Any]:
     return cast("dict[str, Any]", _normalize(schema))
 
 
+def _anthropic_temperature_unsupported_reason(
+    model: str | None,
+    temperature: float | None,
+    *,
+    thinking_enabled: bool,
+) -> str | None:
+    """Explain known model and thinking restrictions on sampling temperature."""
+    if temperature is None:
+        return None
+    if thinking_enabled:
+        return "Anthropic thinking does not accept temperature"
+    try:
+        import anthropic._constants as anthropic_constants
+
+        sdk_api_version = anthropic_constants.ANTHROPIC_API_VERSION
+    except (ImportError, AttributeError):
+        # SDKs before 2.x use the original API version by default.
+        sdk_api_version = "2023-06-01"
+    if sdk_api_version >= "2026-10-21":
+        return f"Anthropic API {sdk_api_version} does not accept sampling parameters"
+    if (
+        temperature != 1
+        and model
+        and model.startswith(_NONDEFAULT_TEMPERATURE_UNSUPPORTED_PREFIXES)
+    ):
+        return f"{model} does not accept non-default temperature"
+    return None
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,11 +166,46 @@ def _is_structured_output_schema_error(error: Exception | str) -> bool:
     text = str(error).lower()
     return (
         "output_format.schema" in text
+        or "output_config.format.schema" in text
         or "too many optional parameters" in text
         or "grammar compilation" in text
         or "compiled grammar" in text
         or ("not supported" in text and "schema" in text)
     )
+
+
+def _adapt_sdk_kwargs(method: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Adapt message arguments to the installed Anthropic SDK signature."""
+    parameters: Mapping[str, inspect.Parameter]
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    adapted = dict(kwargs)
+    if "output_format" in adapted and "output_config" in parameters:
+        output_format = adapted.pop("output_format")
+        adapted["output_config"] = {"format": output_format}
+
+    if "temperature" in adapted and "temperature" not in parameters:
+        if "extra_body" in parameters:
+            extra_body = dict(adapted.get("extra_body") or {})
+            extra_body["temperature"] = adapted.pop("temperature")
+            adapted["extra_body"] = extra_body
+
+    return adapted
+
+
+def _beta_messages(client: Any) -> Any:
+    """Return beta messages or explain when the installed SDK is too old."""
+    beta = getattr(client, "beta", None)
+    messages = getattr(beta, "messages", None) if beta is not None else None
+    if messages is None:
+        raise RuntimeError(
+            "This Anthropic request requires beta messages, which are unavailable in the "
+            "installed SDK. Upgrade the Anthropic SDK to a version with beta messages."
+        )
+    return messages
 
 
 class AnthropicProvider(ProviderAdapter):
@@ -195,6 +270,16 @@ class AnthropicProvider(ProviderAdapter):
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate a response using Anthropic API."""
         client = self._get_client()
+        unsupported_temperature = _anthropic_temperature_unsupported_reason(
+            request.model or self._default_model,
+            request.temperature,
+            thinking_enabled=bool(request.reasoning and request.reasoning.enabled),
+        )
+        if unsupported_temperature:
+            if request.reasoning and request.reasoning.enabled:
+                logger.warning("Dropping Anthropic temperature: %s", unsupported_temperature)
+            else:
+                raise ValueError(unsupported_temperature)
 
         # Build messages
         messages = []
@@ -218,7 +303,9 @@ class AnthropicProvider(ProviderAdapter):
 
         if system:
             kwargs["system"] = system
-        if request.temperature is not None:
+        if request.temperature is not None and not (
+            request.reasoning and request.reasoning.enabled
+        ):
             kwargs["temperature"] = request.temperature
         if request.stop:
             kwargs["stop_sequences"] = list(request.stop)
@@ -226,7 +313,7 @@ class AnthropicProvider(ProviderAdapter):
             kwargs["tools"] = list(request.tools)
         cache_control = self._cache_control_for_request(request)
         if cache_control is not None:
-            # anthropic 0.75.0 does not expose cache_control as a typed keyword yet.
+            # Keep SDK compatibility for cache_control, which may not be typed.
             kwargs["extra_body"] = {"cache_control": cache_control}
 
         # Handle structured output - requires beta header and output_format
@@ -275,22 +362,16 @@ class AnthropicProvider(ProviderAdapter):
             # Adaptive thinking: the model decides when and how much to think.
             # budget_tokens is not permitted with adaptive type.
             kwargs["thinking"] = {"type": "adaptive"}
-            # Anthropic requires temperature=1 when thinking is enabled
-            if "temperature" in kwargs and kwargs["temperature"] != 1:
-                logger.debug(
-                    "Forcing temperature=1 for Anthropic extended thinking (was %.2f)",
-                    kwargs["temperature"],
-                )
-                kwargs["temperature"] = 1
-
         if request.stream:
             return self._generate_stream(client, kwargs, use_beta=use_beta)
 
         structured_output_requested = "output_format" in kwargs
 
         if use_beta:
+            beta_messages = _beta_messages(client)
+            kwargs = _adapt_sdk_kwargs(beta_messages.create, kwargs)
             try:
-                response = await client.beta.messages.create(
+                response = await beta_messages.create(
                     betas=[STRUCTURED_OUTPUTS_BETA],
                     **kwargs,
                 )
@@ -305,15 +386,19 @@ class AnthropicProvider(ProviderAdapter):
                 )
                 retry_kwargs = dict(kwargs)
                 retry_kwargs.pop("output_format", None)
+                retry_kwargs.pop("output_config", None)
 
                 if "thinking" in retry_kwargs:
-                    response = await client.beta.messages.create(
+                    retry_kwargs = _adapt_sdk_kwargs(beta_messages.create, retry_kwargs)
+                    response = await beta_messages.create(
                         betas=[STRUCTURED_OUTPUTS_BETA],
                         **retry_kwargs,
                     )
                 else:
+                    retry_kwargs = _adapt_sdk_kwargs(client.messages.create, retry_kwargs)
                     response = await client.messages.create(**retry_kwargs)
         else:
+            kwargs = _adapt_sdk_kwargs(client.messages.create, kwargs)
             response = await client.messages.create(**kwargs)
         return self._parse_response(response)
 
@@ -322,12 +407,13 @@ class AnthropicProvider(ProviderAdapter):
     ) -> AsyncIterator[GenerateResponse]:
         """Stream responses from Anthropic API."""
         if use_beta:
-            async with client.beta.messages.stream(
-                betas=[STRUCTURED_OUTPUTS_BETA], **kwargs
-            ) as stream:
+            beta_messages = _beta_messages(client)
+            kwargs = _adapt_sdk_kwargs(beta_messages.stream, kwargs)
+            async with beta_messages.stream(betas=[STRUCTURED_OUTPUTS_BETA], **kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
         else:
+            kwargs = _adapt_sdk_kwargs(client.messages.stream, kwargs)
             async with client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
@@ -467,7 +553,7 @@ class AnthropicProvider(ProviderAdapter):
             client = self._get_client()
             # Minimal API call
             await client.messages.create(
-                model="claude-3-haiku-20240307",
+                model=self._default_model,
                 max_tokens=1,
                 messages=[{"role": "user", "content": "Hi"}],
             )

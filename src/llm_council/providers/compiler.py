@@ -17,6 +17,7 @@ from llm_council.providers.anthropic import (
 from llm_council.providers.anthropic import (
     STRUCTURED_OUTPUT_MODELS as ANTHROPIC_STRUCTURED_OUTPUT_MODELS,
 )
+from llm_council.providers.anthropic import _anthropic_temperature_unsupported_reason
 from llm_council.providers.base import GenerateRequest, ReasoningConfig, StructuredOutputConfig
 from llm_council.providers.gemini import LEGACY_MODEL_PREFIXES, STRUCTURED_OUTPUT_MODEL_PREFIXES
 from llm_council.providers.openai import (
@@ -239,20 +240,17 @@ def compile_request_for_provider(
         if compiled.tool_choice is not None:
             update(tool_choice=None)
             decide("tool_choice", "dropped", "Anthropic adapter does not support tool_choice")
-        if (
-            compiled.reasoning
-            and compiled.reasoning.enabled
-            and compiled.temperature
-            not in (
-                None,
-                1,
-            )
-        ):
-            update(temperature=1.0)
+        temperature_reason = _anthropic_temperature_unsupported_reason(
+            model,
+            compiled.temperature,
+            thinking_enabled=bool(compiled.reasoning and compiled.reasoning.enabled),
+        )
+        if temperature_reason:
+            update(temperature=None)
             decide(
                 "temperature",
-                "transformed",
-                "Anthropic thinking requires temperature=1",
+                "dropped",
+                temperature_reason,
             )
         if compiled.structured_output and not _anthropic_supports_structured_output(model):
             update(structured_output=None)
@@ -305,6 +303,14 @@ def compile_request_for_provider(
                     "dropped",
                     "Vertex Claude path does not support tool_choice",
                 )
+            temperature_reason = _anthropic_temperature_unsupported_reason(
+                _normalize_model_name(model),
+                compiled.temperature,
+                thinking_enabled=bool(compiled.reasoning and compiled.reasoning.enabled),
+            )
+            if temperature_reason:
+                update(temperature=None)
+                decide("temperature", "dropped", temperature_reason)
             if compiled.structured_output and not _anthropic_supports_structured_output(
                 _strip_vertex_revision(model)
             ):

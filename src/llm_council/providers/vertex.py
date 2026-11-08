@@ -30,6 +30,9 @@ from llm_council.providers.anthropic import (
 # Import shared schema normalization from anthropic provider
 from llm_council.providers.anthropic import (
     STRUCTURED_OUTPUTS_BETA,
+    _adapt_sdk_kwargs,
+    _anthropic_temperature_unsupported_reason,
+    _beta_messages,
     _prepare_schema_for_anthropic,
 )
 from llm_council.providers.base import (
@@ -681,6 +684,16 @@ class VertexAIProvider(ProviderAdapter):
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate response using Claude via anthropic[vertex] SDK."""
         client = self._get_claude_client()
+        thinking_enabled = bool(request.reasoning and request.reasoning.enabled)
+        unsupported_temperature = _anthropic_temperature_unsupported_reason(
+            _normalize_vertex_model(model),
+            request.temperature,
+            thinking_enabled=thinking_enabled,
+        )
+        if unsupported_temperature and not thinking_enabled:
+            raise ValueError(unsupported_temperature)
+        if unsupported_temperature:
+            logger.warning("Dropping Vertex Claude temperature: %s", unsupported_temperature)
 
         # Build messages
         messages = []
@@ -704,7 +717,7 @@ class VertexAIProvider(ProviderAdapter):
 
         if system:
             kwargs["system"] = system
-        if request.temperature is not None:
+        if request.temperature is not None and not thinking_enabled:
             kwargs["temperature"] = request.temperature
         if request.stop:
             kwargs["stop_sequences"] = list(request.stop)
@@ -746,11 +759,14 @@ class VertexAIProvider(ProviderAdapter):
             return self._generate_claude_stream(client, kwargs, use_beta=use_beta)
 
         if use_beta:
-            response = await client.beta.messages.create(
+            beta_messages = _beta_messages(client)
+            kwargs = _adapt_sdk_kwargs(beta_messages.create, kwargs)
+            response = await beta_messages.create(
                 betas=[STRUCTURED_OUTPUTS_BETA],
                 **kwargs,
             )
         else:
+            kwargs = _adapt_sdk_kwargs(client.messages.create, kwargs)
             response = await client.messages.create(**kwargs)
         return self._parse_claude_response(response)
 
@@ -759,12 +775,13 @@ class VertexAIProvider(ProviderAdapter):
     ) -> AsyncIterator[GenerateResponse]:
         """Stream responses from Claude on Vertex AI."""
         if use_beta:
-            async with client.beta.messages.stream(
-                betas=[STRUCTURED_OUTPUTS_BETA], **kwargs
-            ) as stream:
+            beta_messages = _beta_messages(client)
+            kwargs = _adapt_sdk_kwargs(beta_messages.stream, kwargs)
+            async with beta_messages.stream(betas=[STRUCTURED_OUTPUTS_BETA], **kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
         else:
+            kwargs = _adapt_sdk_kwargs(client.messages.stream, kwargs)
             async with client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
