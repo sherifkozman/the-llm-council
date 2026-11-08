@@ -133,6 +133,9 @@ documents earlier coverage. Unrecorded combinations still fail closed. Record
 updates can add qualified builds without changing Council; they do not certify
 arbitrary future versions or provider behavior.
 
+See the [0.8.10 release notes](releases/0.8.10.md) for current documentation
+and plugin metadata changes.
+
 Codex runs with an isolated temporary `HOME`, the selected authentication file,
 and a restricted environment that does not inherit proxy, CA or loader overrides.
 An explicitly qualified API-key custom endpoint can use the user's selected URL;
