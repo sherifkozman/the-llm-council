@@ -99,8 +99,10 @@ asks the user to select one.
 Council supports official native Codex binaries and standard npm/pnpm installations
 on macOS, Linux and native Windows, including ARM64 and x86-64. Each exact build
 and request context still needs a current entry in the
-[compatibility record](compatibility/codex-v1.json). See the
-[0.8.7 verification matrix](docs/releases/0.8.7.md) for tested contexts and limits.
+[compatibility record](compatibility/codex-v1.json). The current
+[0.8.9 qualification notes](docs/releases/0.8.9.md) cover Codex 0.167.0 on
+six official npm platform builds and the recorded request contexts. The
+[0.8.7 verification matrix](docs/releases/0.8.7.md) documents earlier coverage.
 Unknown builds or contexts fail closed. Each request needs a reachable, current
 record and a temporary runtime copy (about 356 MB for Codex 0.165.0 on macOS).
 Synthetic and loopback checks do not prove real provider access or cover all

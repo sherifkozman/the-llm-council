@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.8.6)
+# LLM Council Skill (v0.8.9)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -184,12 +184,14 @@ not authentication, isolation semantics or generation. New builds are not reject
 just because their version is unfamiliar. See the invocation contract.
 The Codex provider requires a current compatibility record for the
 selected build and request context. It verifies a private copy before execution;
-unknown or changed builds fail closed. The public record is not yet available, so
-Codex requests currently fail in this candidate. A future qualified record update
-can admit a new build without a Council release. Do not bypass the check or treat
-synthetic tests as proof of live-provider readiness. Base doctor covers the default
-model, default reasoning, text output and login status only; it does not prove a
-credential works or every model is ready.
+unknown or changed builds fail closed. Requests proceed only when the fetched
+record is current and matches the selected build and context; unavailable,
+expired or unrecorded combinations fail closed. The 0.8.9 record includes Codex
+0.167.0 on six official npm platform builds; see the
+[0.8.9 release notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.9/docs/releases/0.8.9.md) for evidence and limits.
+Do not bypass the check or treat synthetic tests as proof of live-provider
+readiness. Base doctor covers the default model, default reasoning, text output
+and login status only; it does not prove a credential works or every model is ready.
 
 ## When To Use It
 

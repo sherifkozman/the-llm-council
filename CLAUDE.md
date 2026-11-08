@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Multi-LLM Council Framework (v0.8.3 release target) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Package name: `the-llm-council` on PyPI. See [0.8.3 release notes](docs/releases/0.8.3.md) for pending verification and publication status.
+Multi-LLM Council Framework (released v0.8.9) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Package name: `the-llm-council` on PyPI. See [0.8.9 release notes](docs/releases/0.8.9.md) for provider compatibility, dependency updates, qualification evidence and limits.
 
 - **Python**: >=3.10 (tested 3.10, 3.11, 3.12)
 - **Build**: hatchling
@@ -29,10 +29,14 @@ Use an explicit installed executable and CWD, wait for the existing process,
 then read its full result file even on nonzero exit. Inspect `execution_status`,
 provider errors, degradation and actual request-compilation metadata. Native
 CLI compatibility and effort support are versioned; see the release notes.
-Exact Codex 0.160.1 is admitted, not future versions or every model. Its tested
-catalog omits the unchanged `gpt-5.4` default; explicitly select a supported model
-through `--models` or provider configuration. Version-specific tool controls
-preserve authentication, selected model and reasoning effort.
+Codex admission uses the separately maintained
+[`compatibility/codex-v1.json`](compatibility/codex-v1.json) record. It matches
+exact executable and resource snapshots, platform and request context. Missing,
+expired, changed or unrecorded combinations fail closed. New builds need
+independent qualification before they are added to the record. Release 0.8.9
+records Codex 0.167.0 on six official npm platform builds; see the
+[release notes](docs/releases/0.8.9.md) for evidence and limits. This does not
+qualify other builds or request contexts.
 No caller should source host secrets to bypass its credential policy.
 
 `success: true` and exit 0 can describe a degraded result, not a complete review.
