@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.9] - 2026-11-07
 
+### Added
+- Qualify Codex CLI 0.167.0 npm builds for the six macOS, Linux and Windows
+  ARM64/x86-64 platforms and add the tested request contexts to the record.
+
 ### Fixed
 - Adapt direct Anthropic and Vertex Anthropic requests to supported SDK
   signatures and model/API constraints. The Anthropic SDK minimum is 0.87.0.
