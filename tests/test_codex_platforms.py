@@ -211,3 +211,40 @@ def test_windows_environment_keeps_only_os_bootstrap_and_isolated_user_paths(tmp
     assert env["USERPROFILE"] == str(tmp_path)
     assert env["APPDATA"].startswith(str(tmp_path))
     assert "SECRET_TOKEN" not in env
+
+
+def test_common_homebrew_inventory_excludes_changed_manifest_and_extra_file(tmp_path):
+    from codex_homebrew_qualification import common_inventory
+
+    npm, brew = tmp_path / "npm", tmp_path / "brew"
+    npm.mkdir()
+    brew.mkdir()
+    for index in range(39):
+        relative = f"codex-resources/file-{index:02d}"
+        for root in (npm, brew):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(f"shared-{index}".encode())
+    for root in (npm, brew):
+        binary = root / "bin/codex"
+        binary.parent.mkdir()
+        binary.write_bytes(b"same binary")
+        binary.chmod(0o755)
+    (npm / "codex-package.json").write_text('{"name":"npm"}')
+    (brew / "codex-package.json").write_text('{"name":"homebrew"}')
+    (brew / "bin/codex-exec-server").write_bytes(b"homebrew extra")
+
+    record = common_inventory(npm, brew)
+
+    assert len(record["files"]) == 40
+    assert "bin/codex" in record["executables"]
+    assert "codex-package.json" not in record["files"]
+    assert "bin/codex-exec-server" not in record["files"]
+
+
+def test_homebrew_wrapper_requires_codex_cli_version_without_running_binary():
+    from codex_homebrew_qualification import require_version
+
+    require_version("npm", {"version": "codex-cli 0.167.0"})
+    with pytest.raises(ValueError, match="codex-cli 0.167.0"):
+        require_version("homebrew", {"version": "0.167.0"})

@@ -31,6 +31,7 @@ from llm_council.providers.cli.codex import (
 
 launcher = Path(sys.argv[1]).resolve(strict=True)
 record_output = Path(sys.argv[2]).resolve()
+shared_inventory = Path(sys.argv[3]).resolve(strict=True) if len(sys.argv) > 3 else None
 architecture = {"arm64": "arm64", "aarch64": "arm64", "amd64": "x86_64", "x86_64": "x86_64"}[
     platform.machine().lower()
 ]
@@ -48,24 +49,29 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
     if system_root:
         os.environ["SYSTEMROOT"] = system_root
     tempfile.tempdir = str(root)
-    files, executable_files = {}, []
-    for directory, dirs, names in os.walk(source, followlinks=False):
-        assert all(not Path(directory, name).is_symlink() for name in dirs)
-        for name in names:
-            path = Path(directory, name)
-            assert stat.S_ISREG(path.lstat().st_mode)
-            relative = path.relative_to(source).as_posix()
-            if path == selected:
-                relative = "bin/codex"
-            files[relative] = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
-            is_executable = (
-                path.suffix.lower() == ".exe"
-                if sys.platform == "win32"
-                else bool(path.stat().st_mode & 0o111)
-            )
-            if is_executable:
-                executable_files.append(relative)
-    executable_files.sort()
+    if shared_inventory is None:
+        files, executable_files = {}, []
+        for directory, dirs, names in os.walk(source, followlinks=False):
+            assert all(not Path(directory, name).is_symlink() for name in dirs)
+            for name in names:
+                path = Path(directory, name)
+                assert stat.S_ISREG(path.lstat().st_mode)
+                relative = path.relative_to(source).as_posix()
+                if path == selected:
+                    relative = "bin/codex"
+                files[relative] = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
+                is_executable = (
+                    path.suffix.lower() == ".exe"
+                    if sys.platform == "win32"
+                    else bool(path.stat().st_mode & 0o111)
+                )
+                if is_executable:
+                    executable_files.append(relative)
+        executable_files.sort()
+    else:
+        shared = json.loads(shared_inventory.read_text())
+        files = shared["files"]
+        executable_files = shared["executables"]
     assert "bin/codex" in executable_files
     captured = []
     scenario = {"attack": None, "count": 0, "text": "SYNTHETIC_FINAL"}

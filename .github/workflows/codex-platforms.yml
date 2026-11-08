@@ -1,31 +1,22 @@
-name: Codex native platforms
+name: Codex Homebrew qualification (manual)
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "src/llm_council/providers/cli/**"
-      - "tests/*codex*"
-      - "compatibility/**"
-      - ".github/workflows/codex-platforms.yml"
   workflow_dispatch:
     inputs:
-      codex-version:
-        description: Official stable Codex version to qualify
+      approve-native-execution:
+        description: Approve running the pinned Codex 0.167.0 npm and Homebrew binaries on this disposable macOS runner
         required: true
-        default: "0.165.0"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  native:
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025, windows-11-arm]
-    runs-on: ${{ matrix.os }}
+  qualify-darwin-arm64:
+    if: ${{ inputs['approve-native-execution'] }}
+    runs-on: macos-15
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -39,20 +30,54 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "26"
-      - name: Install candidate and official native runtime
-        env:
-          CODEX_VERSION: ${{ inputs.codex-version || '0.165.0' }}
+      - name: Verify runner architecture and install test dependencies
         run: |
-          [[ "$CODEX_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(uname -m)" = arm64
           python -m pip install -e '.[dev]'
-          npm install --ignore-scripts --no-audit --no-fund --prefix "$RUNNER_TEMP/codex" "@openai/codex@$CODEX_VERSION"
-      - name: Test portable validation and native generation isolation
-        run: |
           python -m pytest -q tests/test_codex_platforms.py
-          python tests/codex_native_platform_probe.py "$RUNNER_TEMP/codex/node_modules/@openai/codex/bin/codex.js" qualification.json
-      - name: Retain successful qualification record
+      - name: Download and verify pinned Codex 0.167.0 archives
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-homebrew/npm" "$RUNNER_TEMP/codex-homebrew/homebrew" "$RUNNER_TEMP/codex-homebrew/unpacked/npm" "$RUNNER_TEMP/codex-homebrew/unpacked/homebrew"
+          curl --fail --location --silent --show-error 'https://registry.npmjs.org/@openai/codex/-/codex-0.167.0.tgz' --output "$RUNNER_TEMP/codex-homebrew/npm/codex.tgz"
+          curl --fail --location --silent --show-error 'https://registry.npmjs.org/@openai/codex/-/codex-0.167.0-darwin-arm64.tgz' --output "$RUNNER_TEMP/codex-homebrew/npm/codex-darwin-arm64.tgz"
+          curl --fail --location --silent --show-error 'https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-package-aarch64-apple-darwin.tar.gz' --output "$RUNNER_TEMP/codex-homebrew/homebrew/codex-package.tar.gz"
+          verify_sri() {
+            local file="$1" expected="$2" actual
+            actual="sha512-$(openssl dgst -sha512 -binary "$file" | openssl base64 -A)"
+            test "$actual" = "$expected"
+          }
+          verify_sri "$RUNNER_TEMP/codex-homebrew/npm/codex.tgz" 'sha512-1FSQgbTIKAdTub5Ln6z36NT4eXDmBRkinfigzycbgn9yLZdJ3UdkQZqr0N7jnl8/D1xxT/Pz3Fl2l7S2dmRaFA=='
+          verify_sri "$RUNNER_TEMP/codex-homebrew/npm/codex-darwin-arm64.tgz" 'sha512-7YtMDZX/jbWH9+fCVQg7BVsov8WvBzu4iuedXJEDlUdZxaTrYX2bEQwHIn3p0gxgSMfm30HGK9+bZm1aGSZaHw=='
+          echo 'af45ed45d940d7998809622c1c0296d3098ed7d7fad695284422c228bd454517  '"$RUNNER_TEMP/codex-homebrew/homebrew/codex-package.tar.gz" | shasum -a 256 --check
+          tar -xzf "$RUNNER_TEMP/codex-homebrew/npm/codex.tgz" --strip-components=1 -C "$RUNNER_TEMP/codex-homebrew/unpacked/npm"
+          mkdir -p "$RUNNER_TEMP/codex-homebrew/unpacked/npm/node_modules/@openai/codex-darwin-arm64"
+          tar -xzf "$RUNNER_TEMP/codex-homebrew/npm/codex-darwin-arm64.tgz" --strip-components=1 -C "$RUNNER_TEMP/codex-homebrew/unpacked/npm/node_modules/@openai/codex-darwin-arm64"
+          tar -xzf "$RUNNER_TEMP/codex-homebrew/homebrew/codex-package.tar.gz" -C "$RUNNER_TEMP/codex-homebrew/unpacked/homebrew"
+      - name: Qualify both runtimes against one common inventory and loopback fixture
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          npm_root="$RUNNER_TEMP/codex-homebrew/unpacked/npm/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin"
+          npm_launcher="$RUNNER_TEMP/codex-homebrew/unpacked/npm/bin/codex.js"
+          homebrew_launcher=""
+          while IFS= read -r candidate; do
+            if [[ -n "$homebrew_launcher" ]]; then
+              echo "More than one Homebrew bin/codex was found" >&2
+              exit 1
+            fi
+            homebrew_launcher="$candidate"
+          done < <(find "$RUNNER_TEMP/codex-homebrew/unpacked/homebrew" -type f -path '*/bin/codex' -print)
+          test -n "$homebrew_launcher"
+          homebrew_root="$(dirname "$(dirname "$homebrew_launcher")")"
+          python tests/codex_homebrew_qualification.py \
+            "$npm_launcher" "$npm_root" "$homebrew_launcher" "$homebrew_root" \
+            "$RUNNER_TEMP/codex-homebrew/results"
+      - name: Retain sanitized qualification evidence
         uses: actions/upload-artifact@v7
         with:
-          name: codex-record-${{ matrix.os }}
-          path: qualification.json
+          name: codex-0.167.0-homebrew-darwin-arm64-qualification
+          path: ${{ runner.temp }}/codex-homebrew/results/qualification.json
           if-no-files-found: error
+          retention-days: 14
