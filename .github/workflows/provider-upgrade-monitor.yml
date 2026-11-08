@@ -133,3 +133,109 @@ jobs:
       - name: State runner boundary
         if: always()
         run: echo "Intended checks are synthetic SDK MockTransport wire tests and one parser unit test; no native CLI invocation or provider endpoint is part of the test command. The seven environments in this job share a temporary HOME and uv cache, and the hosted runner is shared. This does not prove isolation from runner state or package install/build behavior. The branch push trigger can run again on later pushes; freeze the branch or remove this workflow after its one-time reviewed run. No recurring schedule is configured."
+
+  pydantic-performance:
+    name: Pydantic synthetic request model timings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.16'
+      - name: Compare isolated Pydantic versions on synthetic requests
+        env:
+          SAFE_HOME: ${{ runner.temp }}/pydantic-bench-home
+          SAFE_TMP: ${{ runner.temp }}/pydantic-bench
+        run: |
+          set -euo pipefail
+          run_clean() {
+            env -i \
+              PATH="$PATH" \
+              HOME="$SAFE_HOME" \
+              TMPDIR="$SAFE_TMP" \
+              PIP_INDEX_URL=https://pypi.org/simple \
+              PYTHONDONTWRITEBYTECODE=1 \
+              "$@"
+          }
+          run_clean mkdir -p "$SAFE_HOME" "$SAFE_TMP"
+          for v in 2.12.5 2.14.3; do
+            run_clean python -m venv "$SAFE_TMP/$v"
+            run_clean "$SAFE_TMP/$v/bin/python" -m pip install --no-cache-dir \
+              --disable-pip-version-check 'pydantic=='"$v"
+            run_clean "$SAFE_TMP/$v/bin/python" -m pip check
+          done
+          cat > "$SAFE_TMP/bench.py" <<'PY'
+          import importlib.util
+          import json
+          import hashlib
+          import sys
+          import time
+          from importlib.metadata import version
+
+          base_path, expected, trial, output_path = sys.argv[1:]
+          spec = importlib.util.spec_from_file_location("provider_base", base_path)
+          if spec is None or spec.loader is None:
+              raise RuntimeError(base_path)
+          base = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = base
+          spec.loader.exec_module(base)
+          Request = base.GenerateRequest
+          if version("pydantic") != expected:
+              raise RuntimeError(f"expected {expected}, got {version('pydantic')}")
+          payload = {"model": "synthetic", "prompt": "synthetic prompt",
+                     "reasoning": {"enabled": True, "thinking_level": "high"},
+                     "metadata": {"synthetic": True}}
+          input_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+          request = Request.model_validate(payload)
+          digest = hashlib.sha256(json.dumps(request.model_dump(), sort_keys=True).encode()).hexdigest()
+          shared = {name: version(name) for name in
+                    ("annotated-types", "typing-extensions", "typing-inspection")}
+
+          def measure(fn):
+              for _ in range(100): fn()
+              start = time.perf_counter_ns()
+              for _ in range(3000): fn()
+              return (time.perf_counter_ns() - start) / 3000
+
+          timings = [measure(lambda: Request.model_validate(payload)),
+                     measure(request.model_dump),
+                     measure(lambda: Request.model_validate(payload).model_dump())]
+          with open(output_path, "a", encoding="utf-8") as f:
+              f.write(json.dumps([version("pydantic"), version("pydantic-core"), int(trial), input_hash, digest, *timings, shared]) + "\n")
+          print(f"pydantic={expected} pydantic-core={version('pydantic-core')} trial={trial} "
+                f"validate={timings[0]:.1f} dump={timings[1]:.1f} combined={timings[2]:.1f} ns/op")
+          PY
+          RESULTS="$SAFE_TMP/results.jsonl"
+          BASE_FILE="$GITHUB_WORKSPACE/src/llm_council/providers/base.py"
+          for trial in 1 2 3 4 5; do
+            if (( trial % 2 == 1 )); then
+              versions=(2.12.5 2.14.3)
+            else
+              versions=(2.14.3 2.12.5)
+            fi
+            for v in "${versions[@]}"; do
+              run_clean "$SAFE_TMP/$v/bin/python" "$SAFE_TMP/bench.py" "$BASE_FILE" "$v" "$trial" "$RESULTS"
+            done
+          done
+          run_clean python - "$RESULTS" <<'PY'
+          import json
+          import statistics
+          import sys
+          rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+          if len(rows) != 10 or len({(row[3], row[4]) for row in rows}) != 1:
+              raise SystemExit("wrong sample count or model_dump outputs differ")
+          deps = {json.dumps(row[8], sort_keys=True) for row in rows}
+          print("comparison=inconclusive: shared dependency versions differ" if len(deps) != 1
+                else f"shared dependencies={next(iter(deps))}")
+          for row in rows: print(f"sample pydantic={row[0]} core={row[1]} trial={row[2]} validate={row[5]:.1f} dump={row[6]:.1f} combined={row[7]:.1f} ns/op")
+          for v in ("2.12.5", "2.14.3"):
+              samples = [row for row in rows if row[0] == v]
+              if len(samples) != 5: raise SystemExit(f"wrong sample count for {v}")
+              print(f"median pydantic={v} pydantic-core={samples[0][1]}")
+              for column, name in ((5, "validate"), (6, "dump"), (7, "combined")):
+                  print(f"  {name}={statistics.median(row[column] for row in samples):.1f} ns/op")
+          print(f"identical input sha256={rows[0][3]} model_dump sha256={rows[0][4]}")
+          PY
