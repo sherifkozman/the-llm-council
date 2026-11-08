@@ -1,0 +1,176 @@
+name: Published release artifact check
+
+on:
+  push:
+    branches:
+      - codex/provider-matrix-investigation
+
+permissions:
+  contents: read
+
+jobs:
+  published-artifacts:
+    name: Verify and install PyPI wheel and sdist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.16'
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.13.5'
+          enable-cache: false
+      - name: Download, verify, install, and validate published artifacts
+        env:
+          SAFE_HOME: ${{ runner.temp }}/council-published-home
+          SAFE_UV_CACHE: ${{ runner.temp }}/council-published-cache
+          ARTIFACT_DIR: ${{ runner.temp }}/council-published-artifacts
+          TEST_ROOT: ${{ runner.temp }}/council-published-tests
+          EXPECTED_VERSION: '0.8.9'
+          EXPECTED_WHEEL_SHA256: '197a25820f2df5602c4494090f5ee7339d9d58bf4878eec4e4c5bcd55561772f'
+          EXPECTED_SDIST_SHA256: '0b2e9229562eff1111dfe4185174666f8f87c6838a52cf678d9a7375de0d8f51'
+        run: |
+          set -euo pipefail
+          run_clean() {
+            env -i \
+              PATH="$PATH" \
+              HOME="$SAFE_HOME" \
+              USERPROFILE="$SAFE_HOME" \
+              TMPDIR="${RUNNER_TEMP:-/tmp}" \
+              UV_CACHE_DIR="$SAFE_UV_CACHE" \
+              PYTHONDONTWRITEBYTECODE=1 \
+              "$@"
+          }
+
+          run_clean mkdir -p "$SAFE_HOME" "$SAFE_UV_CACHE" "$ARTIFACT_DIR" "$TEST_ROOT"
+          run_clean python - "$ARTIFACT_DIR" "$EXPECTED_VERSION" \
+            "$EXPECTED_WHEEL_SHA256" "$EXPECTED_SDIST_SHA256" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+          from urllib.parse import urlparse
+          from urllib.request import urlopen
+
+          output_dir = Path(sys.argv[1])
+          version, wheel_hash, sdist_hash = sys.argv[2:]
+          metadata_url = f"https://pypi.org/pypi/the-llm-council/{version}/json"
+          with urlopen(metadata_url, timeout=30) as response:
+              metadata = json.load(response)
+          if metadata.get("info", {}).get("version") != version:
+              raise SystemExit("PyPI release version does not match the requested version")
+
+          expected = {
+              f"the_llm_council-{version}-py3-none-any.whl": wheel_hash,
+              f"the_llm_council-{version}.tar.gz": sdist_hash,
+          }
+          files = {item["filename"]: item for item in metadata.get("urls", [])}
+          for filename, expected_hash in expected.items():
+              item = files.get(filename)
+              if item is None:
+                  raise SystemExit(f"PyPI release is missing {filename}")
+              parsed = urlparse(item.get("url", ""))
+              if parsed.scheme != "https" or parsed.hostname != "files.pythonhosted.org":
+                  raise SystemExit(f"unexpected artifact host for {filename}")
+              if item.get("digests", {}).get("sha256") != expected_hash:
+                  raise SystemExit(f"PyPI metadata SHA256 mismatch for {filename}")
+              destination = output_dir / filename
+              digest = hashlib.sha256()
+              with urlopen(item["url"], timeout=60) as response, destination.open("wb") as out:
+                  while chunk := response.read(1024 * 1024):
+                      digest.update(chunk)
+                      out.write(chunk)
+              actual_hash = digest.hexdigest()
+              if actual_hash != expected_hash:
+                  raise SystemExit(f"download SHA256 mismatch for {filename}")
+              print(f"verified {filename} sha256={actual_hash}")
+          PY
+
+          wheel="$ARTIFACT_DIR/the_llm_council-${EXPECTED_VERSION}-py3-none-any.whl"
+          sdist="$ARTIFACT_DIR/the_llm_council-${EXPECTED_VERSION}.tar.gz"
+
+          verify_artifact() {
+            artifact="$1"
+            label="$2"
+            venv="$RUNNER_TEMP/council-published-venv-$label"
+            junit="$RUNNER_TEMP/council-published-$label-junit.xml"
+            test_dir="$TEST_ROOT/$label"
+            run_clean mkdir -p "$test_dir"
+            run_clean cp tests/test_provider_sdk_wire.py "$test_dir/test_provider_sdk_wire.py"
+
+            run_clean uv venv --python 3.12.16 "$venv"
+            run_clean uv pip install --python "$venv/bin/python" \
+              --default-index https://pypi.org/simple \
+              "the-llm-council[all,dev] @ file://$artifact"
+            run_clean uv pip check --python "$venv/bin/python"
+
+            run_clean "$venv/bin/python" - "$EXPECTED_VERSION" "$venv" "$GITHUB_WORKSPACE" <<'PY'
+          import importlib.metadata
+          import sys
+          from pathlib import Path
+
+          expected_version, venv_path, checkout = sys.argv[1:]
+          import llm_council
+
+          module_path = Path(llm_council.__file__).resolve()
+          venv_path = Path(venv_path).resolve()
+          checkout = Path(checkout).resolve()
+          actual_version = importlib.metadata.version("the-llm-council")
+          print(f"installed version={actual_version} module={module_path}")
+          if actual_version != expected_version:
+              raise SystemExit(f"expected {expected_version}, got {actual_version}")
+          if venv_path not in module_path.parents or checkout in module_path.parents:
+              raise SystemExit("llm_council imported outside the fresh venv")
+          PY
+
+            set +e
+            run_clean "$venv/bin/python" -m pytest -p no:cacheprovider -q \
+              -o asyncio_mode=auto --junitxml="$junit" \
+              "$test_dir/test_provider_sdk_wire.py"
+            test_status=$?
+            set -e
+
+            set +e
+            run_clean "$venv/bin/python" - "$junit" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path(sys.argv[1])
+          if not report.is_file():
+              raise SystemExit(f"JUnit report missing: {report}")
+          required = {
+              "test_sdk_serializes_basic_request_and_parses_response[anthropic]",
+              "test_sdk_serializes_basic_request_and_parses_response[openai]",
+              "test_anthropic_serializes_council_temperature_and_reasoning_together",
+              "test_google_sdk_serializes_requested_thinking_without_provider_traffic[gemini]",
+              "test_google_sdk_serializes_requested_thinking_without_provider_traffic[vertex]",
+              "test_vertex_anthropic_sdk_serializes_basic_request",
+          }
+          cases = [case for case in ET.parse(report).iter("testcase")]
+          wire = [case for case in cases if case.get("classname", "").endswith("test_provider_sdk_wire")]
+          passed = {
+              case.get("name") for case in wire
+              if not any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
+          }
+          skipped = {case.get("name") for case in wire if case.find("skipped") is not None}
+          missing = required - passed
+          print(
+              f"required={len(required)} passed={len(required & passed)} "
+              f"skipped={sorted(required & skipped)} missing={sorted(missing)}"
+          )
+          if missing or required & skipped:
+              raise SystemExit(1)
+          PY
+            validation_status=$?
+            set -e
+            if [ "$test_status" -ne 0 ]; then return "$test_status"; fi
+            return "$validation_status"
+          }
+
+          verify_artifact "$wheel" wheel
+          verify_artifact "$sdist" sdist
