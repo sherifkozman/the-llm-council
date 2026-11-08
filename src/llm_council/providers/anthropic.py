@@ -138,6 +138,8 @@ def _anthropic_temperature_unsupported_reason(
     """Explain known model and thinking restrictions on sampling temperature."""
     if temperature is None:
         return None
+    if thinking_enabled:
+        return "Anthropic thinking does not accept temperature"
     try:
         import anthropic._constants as anthropic_constants
 
@@ -147,8 +149,6 @@ def _anthropic_temperature_unsupported_reason(
         sdk_api_version = "2023-06-01"
     if sdk_api_version >= "2026-10-21":
         return f"Anthropic API {sdk_api_version} does not accept sampling parameters"
-    if thinking_enabled:
-        return "Anthropic thinking does not accept temperature"
     if (
         temperature != 1
         and model
