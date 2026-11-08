@@ -2465,7 +2465,6 @@
       "files": {
         "bin/codex": "030316ecfbb41f4e7946e584b0063ef333b7a36cd312ba349f2f6869e39b62cc",
         "bin/codex-code-mode-host": "5cc29d144fc05e3563f5f90c36adc95bdc287e2297b48ecf0bf4abdf1892d3ab",
-        "codex-package.json": "65c332ef9c4f187d30c466166ddfbdef38f8bb9380d0c47967f84dc95e56ea7f",
         "codex-path/rg": "13424ef22134a65a211e490475bc17a4671e4fad3c82ad4c613fe5978f022a6d",
         "codex-resources/voice/NOTICE.md": "40097a1799441051aa0b6645cdc819cceb19be73cdd265eb602aa2b15e0b1f48",
         "codex-resources/voice/bin/codex-voice-host": "5c6c72bd15b4d7f2dd964093acf8573cfb267e54293bd852682f1eef7e85fb11",
