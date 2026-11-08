@@ -11,7 +11,7 @@ import inspect
 import logging
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, ClassVar, cast
 
 from llm_council.providers.base import (
@@ -176,6 +176,7 @@ def _is_structured_output_schema_error(error: Exception | str) -> bool:
 
 def _adapt_sdk_kwargs(method: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
     """Adapt message arguments to the installed Anthropic SDK signature."""
+    parameters: Mapping[str, inspect.Parameter]
     try:
         parameters = inspect.signature(method).parameters
     except (TypeError, ValueError):
