@@ -9,6 +9,108 @@ permissions:
   contents: read
 
 jobs:
+  exact-lock-wire:
+    name: Locked all-extras synthetic wire validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.16'
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.13.5'
+          enable-cache: false
+      - name: Sync exact lock and verify synthetic wire tests
+        env:
+          SAFE_HOME: ${{ runner.temp }}/council-lock-home
+          SAFE_UV_CACHE: ${{ runner.temp }}/council-lock-cache
+          LOCK_JUNIT: ${{ runner.temp }}/council-lock-junit.xml
+        run: |
+          set -euo pipefail
+          run_clean() {
+            env -i \
+              PATH="$PATH" \
+              HOME="$SAFE_HOME" \
+              USERPROFILE="$SAFE_HOME" \
+              TMPDIR="${RUNNER_TEMP:-/tmp}" \
+              UV_CACHE_DIR="$SAFE_UV_CACHE" \
+              PYTHONDONTWRITEBYTECODE=1 \
+              "$@"
+          }
+
+          run_clean mkdir -p "$SAFE_HOME" "$SAFE_UV_CACHE"
+          run_clean uv sync --locked --all-extras --python 3.12.16 \
+            --default-index https://pypi.org/simple
+          run_clean .venv/bin/python -c 'from importlib.metadata import version; print("locked versions:", ", ".join(f"{name}=={version(name)}" for name in ("pydantic", "pydantic-core", "typing-inspection", "anthropic", "google-genai", "openai")))'
+
+          set +e
+          run_clean .venv/bin/python -m pytest -p no:cacheprovider -q \
+            --junitxml="$LOCK_JUNIT" \
+            tests/test_provider_sdk_wire.py \
+            tests/test_cli_contract.py::test_parser_error_remains_stderr_exit_two
+          test_status=$?
+          set -e
+
+          run_clean .venv/bin/python - "$LOCK_JUNIT" <<'PY'
+          import importlib.util
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path(sys.argv[1])
+          if not report.is_file():
+              raise SystemExit(f"JUnit report missing: {report}")
+
+          spec = importlib.util.spec_from_file_location(
+              "provider_upgrade_matrix", "scripts/provider-upgrade-matrix.py"
+          )
+          if spec is None or spec.loader is None:
+              raise SystemExit("Could not load provider-upgrade-matrix.py")
+          matrix = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = matrix
+          spec.loader.exec_module(matrix)
+          expected = set().union(*(matrix.EXPECTED[extra] for extra in matrix.EXTRAS))
+
+          cases = list(ET.parse(report).iter("testcase"))
+          passed_wire = {
+              case.get("name")
+              for case in cases
+              if case.get("classname", "").endswith("test_provider_sdk_wire")
+              and not any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
+          }
+          skipped_wire = {
+              case.get("name")
+              for case in cases
+              if case.get("classname", "").endswith("test_provider_sdk_wire")
+              and case.find("skipped") is not None
+          }
+          missing = expected - passed_wire
+          print(
+              f"wire-required={len(expected)} passed={len(expected & passed_wire)} "
+              f"skipped={sorted(expected & skipped_wire)} missing={sorted(missing)}"
+          )
+          if missing or expected & skipped_wire:
+              raise SystemExit(1)
+
+          parser_cases = [
+              case
+              for case in cases
+              if case.get("classname", "").endswith("test_cli_contract")
+              and case.get("name") == "test_parser_error_remains_stderr_exit_two"
+          ]
+          parser_passed = len(parser_cases) == 1 and not any(
+              parser_cases[0].find(tag) is not None for tag in ("skipped", "failure", "error")
+          )
+          print(f"parser-required=1 passed={int(parser_passed)}")
+          if not parser_passed:
+              raise SystemExit(1)
+          PY
+          exit "$test_status"
+
   anthropic-floor-probe:
     name: Anthropic 0.87.0 provider wire floor
     runs-on: ubuntu-latest
