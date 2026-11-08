@@ -127,7 +127,8 @@ and catalog checks from a verified private copy and rejects unknown or changed
 builds. Native binaries and standard npm/pnpm installations are supported on
 macOS, Linux and Windows for ARM64 and x86-64. The
 [0.8.9 release notes](releases/0.8.9.md) summarize the current Codex 0.167.0
-qualification and tested request contexts; the [0.8.7 verification matrix](releases/0.8.7.md)
+qualification and tested request contexts; the [0.8.8 release notes](releases/0.8.8.md)
+describe Codex 0.166.0 coverage, and the [0.8.7 verification matrix](releases/0.8.7.md)
 documents earlier coverage. Unrecorded combinations still fail closed. Record
 updates can add qualified builds without changing Council; they do not certify
 arbitrary future versions or provider behavior.

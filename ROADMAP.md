@@ -4,7 +4,9 @@
 
 This document outlines the development direction for The LLM Council. We welcome community input on priorities and feature design.
 
-## Current Release: v0.7.0
+## Current Release: v0.8.9
+
+See the [0.8.9 release notes](docs/releases/0.8.9.md) for the latest changes and verification limits.
 
 The current release foundation includes:
 

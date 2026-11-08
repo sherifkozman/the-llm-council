@@ -102,6 +102,8 @@ and request context still needs a current entry in the
 [compatibility record](compatibility/codex-v1.json). The current
 [0.8.9 qualification notes](docs/releases/0.8.9.md) cover Codex 0.167.0 on
 six official npm platform builds and the recorded request contexts. The
+[0.8.8 release notes](docs/releases/0.8.8.md) describe Codex 0.166.0 coverage,
+including its qualified macOS ARM64 Homebrew runtime copy; the
 [0.8.7 verification matrix](docs/releases/0.8.7.md) documents earlier coverage.
 Unknown builds or contexts fail closed. Each request needs a reachable, current
 record and a temporary runtime copy (about 356 MB for Codex 0.165.0 on macOS).

@@ -121,7 +121,8 @@ Native binaries and standard npm/pnpm installations are supported on macOS,
 Linux and Windows for ARM64 and x86-64. The current public record determines
 which exact builds and request contexts are admitted; unrecorded combinations
 fail closed. See the [0.8.9 release notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.9/docs/releases/0.8.9.md) for
-current qualification evidence and the [0.8.7 verification matrix](https://github.com/sherifkozman/the-llm-council/blob/v0.8.7/docs/releases/0.8.7.md)
+current qualification evidence, the [0.8.8 release notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.8/docs/releases/0.8.8.md)
+for Codex 0.166.0 coverage, and the [0.8.7 verification matrix](https://github.com/sherifkozman/the-llm-council/blob/v0.8.7/docs/releases/0.8.7.md)
 for earlier coverage. The output monitor stops the child after an unexpected
 tool event, but it does not prevent an action that started before the event. A pre-existing limitation was
 observed with enterprise-managed MCP servers; the same synthetic configuration
