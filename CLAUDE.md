@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Multi-LLM Council Framework (released v0.8.9) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Package name: `the-llm-council` on PyPI. See [0.8.9 release notes](docs/releases/0.8.9.md) for provider compatibility, dependency updates, qualification evidence and limits.
+Multi-LLM Council Framework (released v0.8.10) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Package name: `the-llm-council` on PyPI. See [0.8.10 release notes](docs/releases/0.8.10.md) for this patch and [0.8.9 release notes](docs/releases/0.8.9.md) for provider compatibility, dependency updates, qualification evidence and limits.
 
 - **Python**: >=3.10 (tested 3.10, 3.11, 3.12)
 - **Build**: hatchling

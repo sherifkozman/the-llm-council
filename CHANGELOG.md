@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10] - 2026-11-07
+
+### Changed
+- Align the packaged skill, plugin metadata and current release references with
+  the 0.8.10 package. Keep Codex 0.167.0 qualification evidence linked to 0.8.9.
+
+See the [0.8.10 release notes](docs/releases/0.8.10.md) for scope and limits.
+
 ## [0.8.9] - 2026-11-07
 
 ### Added
@@ -1000,7 +1008,8 @@ Tested candidate, not a publication or global-install claim. See
 - Basic provider adapters
 - JSON schema validation for subagent outputs
 
-[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.9...HEAD
+[Unreleased]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.10...HEAD
+[0.8.10]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.9...v0.8.10
 [0.8.9]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/sherifkozman/the-llm-council/compare/v0.8.6...v0.8.7
