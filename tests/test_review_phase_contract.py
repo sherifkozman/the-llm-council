@@ -213,13 +213,19 @@ async def test_nonreview_security_and_custom_keep_existing_phase_contracts(runti
     )
     assert ("Schema (JSON):" in provider.requests[0].messages[1].content) is (runtime == "default")
     assert all("Prepared coverage metadata" not in r.messages[1].content for r in provider.requests)
-    assert all(
-        r.messages[0].content
-        == (
-            "You are the synthesizer. Combine drafts and critique into a single response. Return ONLY valid JSON that matches the provided schema."
-        )
-        for r in provider.requests[1:]
+    prefix = (
+        "You are the synthesizer. Combine drafts and critique into a single response. "
+        "Return ONLY valid JSON that matches the provided schema."
     )
+    for request in provider.requests[1:]:
+        system = request.messages[0].content
+        assert system.startswith(prefix)
+        if kind == "planner":
+            assert "Drafts and critiques are not evidence of user requirements" in system
+        elif kind == "security":
+            assert "short-circuit evaluation" in system
+        else:
+            assert system == prefix
 
 
 @pytest.mark.asyncio

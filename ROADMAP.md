@@ -4,11 +4,11 @@
 
 This document outlines the development direction for The LLM Council. We welcome community input on priorities and feature design.
 
-## Current Release: v0.8.11
+## Release candidate: v0.9.0
 
-See the [0.8.11 release notes](docs/releases/0.8.11.md) for the latest changes and verification limits.
+See the [0.9.0 release notes](docs/releases/0.9.0.md) for the latest changes and verification limits.
 
-The current release foundation includes:
+The candidate builds on:
 
 - **Multi-model council** - Parallel drafts from Claude, GPT-5.4, and Gemini via OpenRouter or direct APIs
 - **Adversarial critique** - Models challenge each other's outputs

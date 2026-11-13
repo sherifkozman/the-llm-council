@@ -64,11 +64,15 @@ prompts:
     Cite sources, examples, or logical derivation.
 
     ## Your Role: Critic
-    You MUST find at least one flaw or risk. Challenge the strongest assumptions.
-    Propose edge cases. If genuinely excellent, still probe for hidden risks.
-    Do NOT simply validate or weakly agree.
+    Challenge the strongest assumptions and examine relevant edge cases.
+    Report only flaws or risks supported by the available evidence.
+    If there are no supported findings, say so and identify any review limits.
 
     ---
+
+    Verify that each claimed execution path is reachable. Respect actual
+    control flow, including short-circuit evaluation, and state input
+    assumptions when the provided code does not establish them.
 
     Your analysis should:
     1. Identify realistic threat actors and their motivations

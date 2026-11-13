@@ -18,6 +18,22 @@ from llm_council.providers.cli import codex
 CATALOG = b'{"models":[]}'
 
 
+def test_shared_feed_only_authorizes_chatgpt_contexts():
+    path = Path(__file__).resolve().parents[1] / "compatibility" / "codex-shared-v1.json"
+    record = json.loads(path.read_text())
+    assert record["schema"] == 2 and record["records"]
+    issued = datetime.strptime(record["issued_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    assert codex._validated_compatibility_records(path.read_bytes(), issued + timedelta(seconds=1))
+    for build in record["records"]:
+        assert build["contexts"]
+        assert all(
+            context["auth"] == "chatgpt" and context["endpoint"] == "chatgpt"
+            for context in build["contexts"]
+        )
+
+
 def synthetic_package(tmp_path, catalog=CATALOG):
     root = tmp_path / "package"
     executable = root / "bin/codex"

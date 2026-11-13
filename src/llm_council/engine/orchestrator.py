@@ -59,6 +59,7 @@ from llm_council.providers.base import (
     GenerateRequest,
     GenerateResponse,
     Message,
+    PromptCacheConfig,
     ProviderAdapter,
     ReasoningConfig,
     StructuredOutputConfig,
@@ -359,6 +360,7 @@ class OrchestratorConfig(BaseModel):
         ),
     )
     model_overrides: dict[str, str] = Field(default_factory=dict)
+    prompt_cache_auto: bool = Field(default=False)
     cost_per_1k_input: dict[str, float] = Field(default_factory=dict)
     cost_per_1k_output: dict[str, float] = Field(default_factory=dict)
     enable_health_check: bool = Field(
@@ -450,10 +452,16 @@ class CostEstimate(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider_calls: dict[str, int] = Field(default_factory=dict)
+    started_provider_calls: dict[str, int] = Field(default_factory=dict)
+    provider_input_tokens: dict[str, int] = Field(default_factory=dict)
+    provider_output_tokens: dict[str, int] = Field(default_factory=dict)
+    provider_usage_verified: dict[str, bool] = Field(default_factory=dict)
+    reported_usage_estimate_usd: float | None = Field(default=None)
     tokens: int = Field(default=0, description="Total tokens (input + output).")
     total_input_tokens: int = Field(default=0)
     total_output_tokens: int = Field(default=0)
-    estimated_cost_usd: float = Field(default=0.0)
+    estimated_cost_usd: float | None = Field(default=None)
+    incomplete_reasons: list[str] = Field(default_factory=list)
 
 
 class CouncilResult(BaseModel):
@@ -604,6 +612,8 @@ class Orchestrator:
         self._provider_init_errors: dict[str, str] = {}
         self._initialize_providers()
         self._cost_calls: dict[str, int] = {}
+        self._cost_started_calls: dict[str, int] = {}
+        self._cost_incomplete_usage: set[str] = set()
         self._input_tokens: dict[str, int] = {}
         self._output_tokens: dict[str, int] = {}
         self._task: str | None = None
@@ -727,6 +737,9 @@ class Orchestrator:
                     "error_type",
                 ),
             )
+            wait_ms = attempt.get("pre_start_wait_ms")
+            if isinstance(wait_ms, (int, float)) and math.isfinite(wait_ms) and wait_ms >= 0:
+                retained["pre_start_wait_ms"] = wait_ms
             finish_reason = attempt.get("finish_reason")
             if (
                 isinstance(finish_reason, str)
@@ -840,6 +853,8 @@ class Orchestrator:
         """Run a full council workflow for the given task and subagent."""
 
         self._cost_calls = {}
+        self._cost_started_calls = {}
+        self._cost_incomplete_usage = set()
         self._input_tokens = {}
         self._output_tokens = {}
         self._task = task
@@ -1092,6 +1107,11 @@ class Orchestrator:
         while current is not None and id(current) not in seen:
             seen.add(id(current))
             text = str(current)
+            if isinstance(current, TimeoutError):
+                text = f"TimeoutError: {text}" if text else "TimeoutError"
+            code = getattr(current, "status_code", None) or getattr(current, "code", None)
+            if type(code) is int and code == 504:
+                text = f"{text} (HTTP 504 deadline exceeded)".strip()
             if text:
                 parts.append(f"caused by: {text}" if parts else text)
             current = current.__cause__ or (
@@ -1226,6 +1246,27 @@ class Orchestrator:
                     "You are the synthesizer. Combine drafts and critique into a single response. "
                     "Return ONLY valid JSON that matches the provided schema."
                 )
+                if (
+                    self._subagent_name == "critic" and self._resolved_mode == "security"
+                ) or self._subagent_name == "red-team":
+                    system_prompt += (
+                        " Verify that each claimed execution path is reachable in the supplied "
+                        "code. Respect control flow, including short-circuit evaluation; "
+                        "state input assumptions that are not established by the evidence."
+                    )
+                if self._subagent_name in {"planner", "assessor"}:
+                    system_prompt += (
+                        " Treat only requirements explicitly supported by the task or evidence "
+                        "as known. Drafts and critiques are not evidence of user requirements; "
+                        "attribute requirements to the task or independent evidence. "
+                        "Do not label inferred constraints or numerical thresholds "
+                        "as known requirements. Mark proposed values and assumptions as "
+                        "proposed and subject to validation or approval. "
+                        "Keep plans proportionate to the task. An empty repository alone "
+                        "is not a blocker; choose defaults for routine reversible choices. "
+                        "Do not invent approval gates or prerequisites; preserve safety and "
+                        "approval steps required by the user or evidence. Use brief phase names."
+                    )
                 if self._is_builtin_reviewer():
                     system_prompt += (
                         " Drafts and critique are fallible claims, not authoritative findings. "
@@ -1342,7 +1383,7 @@ class Orchestrator:
                     if schema and not force_inline_schema:
                         detail = self._format_exception_chain(exc)
                         error_type = classify_error(detail)
-                        if error_type in {ErrorType.UNKNOWN, ErrorType.NETWORK, ErrorType.TIMEOUT}:
+                        if error_type in {ErrorType.UNKNOWN, ErrorType.NETWORK}:
                             force_inline_schema = True
                             if self._execution_plan is not None:
                                 self._execution_plan.setdefault("warnings", []).append(
@@ -1431,7 +1472,7 @@ class Orchestrator:
                 self._provider_identity(provider_name) in {"vertex-ai", "gemini"}
                 and isinstance(chunk_model, str)
                 and _normalize_gemini_model(chunk_model).startswith(
-                    ("gemini-4-argon", "gemini-4-carbon")
+                    ("gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen")
                 )
                 and request.reasoning is not None
                 and request.reasoning.enabled
@@ -1536,13 +1577,23 @@ class Orchestrator:
         async def _consume_stream(stream: AsyncIterator[GenerateResponse]) -> GenerateResponse:
             text_parts: list[str] = []
             usage: dict[str, int] | None = None
+            usage_verified = False
             finish_reason: str | None = None
             tool_calls: list[Any] = []
             async for chunk in stream:
+                if chunk.usage_invalid:
+                    usage_verified = False
+                if (
+                    usage is not None
+                    and not chunk.usage
+                    and (chunk.text or chunk.tool_calls or chunk.finish_reason)
+                ):
+                    usage_verified = False
                 if chunk.text:
                     text_parts.append(chunk.text)
                 if chunk.usage:
                     usage = dict(chunk.usage)
+                    usage_verified = chunk.usage_verified and not chunk.usage_invalid
                 if chunk.finish_reason is not None:
                     finish_reason = chunk.finish_reason
                 if chunk.tool_calls:
@@ -1550,6 +1601,7 @@ class Orchestrator:
             return GenerateResponse(
                 text="".join(text_parts),
                 usage=usage,
+                usage_verified=usage_verified,
                 finish_reason=finish_reason,
                 tool_calls=tool_calls or None,
             )
@@ -1560,6 +1612,8 @@ class Orchestrator:
             resolved_model = None
         if resolved_model is not None:
             request = request.model_copy(update={"model": resolved_model})
+        if self._config.prompt_cache_auto and request.prompt_cache is None:
+            request = request.model_copy(update={"prompt_cache": PromptCacheConfig(mode="auto")})
         prompt_cache_requested = bool(request.prompt_cache and request.prompt_cache.enabled)
         compiled = compile_request_for_provider(provider_name, request)
         self._record_request_compilation(
@@ -1582,6 +1636,8 @@ class Orchestrator:
         while True:
             cleanup_incomplete = False
             cancelled_cleanup_error: BaseException | None = None
+            attempt_stopped_at: float | None = None
+            queued_at = time.monotonic()
             attempt_record: dict[str, Any] = {
                 "provider": provider_name,
                 "phase": phase or "call",
@@ -1623,6 +1679,9 @@ class Orchestrator:
                             if started_calls:
                                 self._executed_retries += 1
                             started_calls += 1
+                            self._cost_started_calls[provider_name] = (
+                                self._cost_started_calls.get(provider_name, 0) + 1
+                            )
                             record["adapter_started"] = True
                             record["status"] = "running"
                             decision = self._pending_prompt_decisions.get(
@@ -1658,6 +1717,7 @@ class Orchestrator:
                         # only the outcome, not its cause, comes from this Task.
                         pending.result()
                 except BaseException as attempt_error:
+                    attempt_stopped_at = time.monotonic()
                     cancelled = (
                         attempt_error if isinstance(attempt_error, asyncio.CancelledError) else None
                     )
@@ -1704,7 +1764,9 @@ class Orchestrator:
                 attempt_record["adapter_reported_model"] = response.model
                 if isinstance(response.raw, Mapping):
                     capture_native_identity(attempt_record, response.raw.get("native_identity"))
-                self._record_usage(provider_name, response.usage)
+                self._record_usage(
+                    provider_name, response.usage, usage_verified=response.usage_verified
+                )
                 attempt_record["finish_reason"] = response.finish_reason
                 if response.usage:
                     attempt_record["usage"] = dict(response.usage)
@@ -1742,6 +1804,15 @@ class Orchestrator:
                     )
                     raise
                 error_type = classify_error(error_detail)
+                local_wait_error = None
+                if error_type == ErrorType.TIMEOUT and not attempt_record["adapter_started"]:
+                    attempt_record["pre_start_wait_ms"] = round(
+                        ((attempt_stopped_at or time.monotonic()) - queued_at) * 1000, 1
+                    )
+                    local_wait_error = TimeoutError(
+                        f"Timed out before provider call (queue or scheduling): {provider_name}"
+                    )
+                    error_detail = self._format_exception_chain(local_wait_error)
                 if self._execution_plan is not None and error_type in {
                     ErrorType.TIMEOUT,
                     ErrorType.NETWORK,
@@ -1764,7 +1835,7 @@ class Orchestrator:
                     )
                     decision = self._degradation_policy.decide(
                         provider=provider_name,
-                        error=exc,
+                        error=local_wait_error or exc,
                         phase=phase or "call",
                         remaining_providers=remaining,
                     )
@@ -1773,13 +1844,17 @@ class Orchestrator:
                         self._provider_init_errors[provider_name] = (
                             f"{error_detail} | degraded: {decision.reason}"
                         )
-                        raise RuntimeError(f"Provider call aborted: {decision.reason}") from exc
+                        raise RuntimeError(f"Provider call aborted: {decision.reason}") from (
+                            local_wait_error or exc
+                        )
                     if decision.action == DegradationAction.RETRY:
                         if decision.retry_delay_ms > 0:
                             await asyncio.sleep(decision.retry_delay_ms / 1000.0)
                         continue
 
                 self._provider_init_errors[provider_name] = error_detail
+                if local_wait_error is not None:
+                    raise local_wait_error from exc
                 raise
 
     def _prepare_run(self, subagent: str) -> None:
@@ -2323,7 +2398,9 @@ class Orchestrator:
             phase_field = f"max_{phase}_tokens"
             if (
                 isinstance(model, str)
-                and _normalize_gemini_model(model).startswith(("gemini-4-argon", "gemini-4-carbon"))
+                and _normalize_gemini_model(model).startswith(
+                    ("gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen")
+                )
                 and self._reasoning
                 and self._reasoning.enabled
                 and phase_field not in self._config.model_fields_set
@@ -3114,16 +3191,42 @@ class Orchestrator:
             + len(self._compact_text(critique, profile.get("critique_limit")))
         )
 
-    def _record_usage(self, provider: str, usage: Mapping[str, int] | None) -> None:
+    def _record_usage(
+        self, provider: str, usage: Mapping[str, int] | None, *, usage_verified: bool = False
+    ) -> None:
         """Accumulate token usage and call counts for cost estimation."""
 
         self._cost_calls[provider] = self._cost_calls.get(provider, 0) + 1
+        if not usage_verified:
+            self._cost_incomplete_usage.add(provider)
         if not usage:
+            self._cost_incomplete_usage.add(provider)
             return
-        prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-        if self._provider_identity(provider) in {"vertex-ai", "gemini"}:
-            completion_tokens += usage.get("reasoning_tokens", 0)
+
+        def token_count(*aliases: str) -> int:
+            valid = []
+            for key in aliases:
+                if key not in usage:
+                    continue
+                value = usage[key]
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    valid.append(value)
+                else:
+                    self._cost_incomplete_usage.add(provider)
+            if not valid:
+                self._cost_incomplete_usage.add(provider)
+                return 0
+            if len(set(valid)) > 1:
+                self._cost_incomplete_usage.add(provider)
+            return valid[0]
+
+        prompt_tokens = token_count("prompt_tokens", "input_tokens")
+        completion_tokens = token_count("completion_tokens", "output_tokens")
+        if (
+            self._provider_identity(provider) in {"vertex-ai", "gemini"}
+            and "reasoning_tokens" in usage
+        ):
+            completion_tokens += token_count("reasoning_tokens")
         self._input_tokens[provider] = self._input_tokens.get(provider, 0) + prompt_tokens
         self._output_tokens[provider] = self._output_tokens.get(provider, 0) + completion_tokens
         self._record_cache_usage(provider, usage)
@@ -3162,18 +3265,30 @@ class Orchestrator:
             return
 
         cache_usage: dict[str, int] = {}
+        available = False
         if usage:
             for key in _CACHE_USAGE_KEYS:
                 value = usage.get(key)
-                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                    cache_usage[key] = value
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    available = True
+                    if value > 0:
+                        cache_usage[key] = value
 
         entry: dict[str, Any] = {
             "provider": provider_name,
             "requested": requested,
             "forwarded": forwarded,
-            "metrics_available": bool(cache_usage),
+            "metrics_available": available,
             "observed": bool(cache_usage),
+            "cache_read_observed": cache_usage.get("cache_read_tokens", 0) > 0,
+            "cache_write_observed": any(
+                cache_usage.get(key, 0) > 0
+                for key in (
+                    "cache_creation_tokens",
+                    "cache_creation_5m_tokens",
+                    "cache_creation_1h_tokens",
+                )
+            ),
         }
         if cache_usage:
             entry["usage"] = cache_usage
@@ -3270,21 +3385,59 @@ class Orchestrator:
         total_output = sum(self._output_tokens.values())
         total_tokens = total_input + total_output
         estimated_cost = 0.0
+        reasons: list[str] = []
+        for provider in sorted(set(self._cost_calls) | set(self._cost_started_calls)):
+            if provider in self._cost_incomplete_usage:
+                reasons.append(f"{provider}: incomplete token usage")
+            if self._cost_started_calls.get(provider, 0) > self._cost_calls.get(provider, 0):
+                reasons.append(f"{provider}: started attempts without usage")
+            if (
+                provider not in self._config.cost_per_1k_input
+                or provider not in self._config.cost_per_1k_output
+            ):
+                reasons.append(f"{provider}: missing input or output rate")
+                continue
+            in_rate = self._config.cost_per_1k_input[provider]
+            out_rate = self._config.cost_per_1k_output[provider]
+            if (
+                not math.isfinite(in_rate)
+                or not math.isfinite(out_rate)
+                or in_rate < 0
+                or out_rate < 0
+            ):
+                reasons.append(f"{provider}: invalid input or output rate")
+                continue
+            estimated_cost += (
+                self._input_tokens.get(provider, 0)
+                / 1000
+                * self._config.cost_per_1k_input[provider]
+            )
+            estimated_cost += (
+                self._output_tokens.get(provider, 0)
+                / 1000
+                * self._config.cost_per_1k_output[provider]
+            )
 
-        for provider in self._provider_names:
-            in_tokens = self._input_tokens.get(provider, 0)
-            out_tokens = self._output_tokens.get(provider, 0)
-            in_rate = self._config.cost_per_1k_input.get(provider, 0.0)
-            out_rate = self._config.cost_per_1k_output.get(provider, 0.0)
-            estimated_cost += (in_tokens / 1000.0) * in_rate
-            estimated_cost += (out_tokens / 1000.0) * out_rate
-
+        reported_estimate = estimated_cost if not reasons and self._cost_calls else None
+        # Adapter normalization, SDK retries, health probes and cache billing can
+        # hide billed events. A flat-rate calculation is not a total bill.
+        reasons.append("Total billing is unknown: provider usage and charges can be incomplete")
         return CostEstimate(
             provider_calls=dict(self._cost_calls),
+            started_provider_calls=dict(self._cost_started_calls),
+            provider_input_tokens=dict(self._input_tokens),
+            provider_output_tokens=dict(self._output_tokens),
+            provider_usage_verified={
+                provider: provider not in self._cost_incomplete_usage
+                and self._cost_started_calls.get(provider, 0) <= self._cost_calls.get(provider, 0)
+                for provider in set(self._cost_calls) | set(self._cost_started_calls)
+            },
+            reported_usage_estimate_usd=reported_estimate,
             tokens=total_tokens,
             total_input_tokens=total_input,
             total_output_tokens=total_output,
-            estimated_cost_usd=round(estimated_cost, 6),
+            estimated_cost_usd=None,
+            incomplete_reasons=reasons,
         )
 
     def _validate_response(self, raw_text: str) -> ValidationResult:

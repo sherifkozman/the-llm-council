@@ -23,6 +23,9 @@ from llm_council.providers.base import (
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    cache_read_reconciles,
+    token_counts_present,
+    token_usage_reconciles,
 )
 
 # Default models for different use cases (March 2026)
@@ -369,29 +372,63 @@ class OpenRouterProvider(ProviderAdapter):
 
         usage = data.get("usage", {})
         usage_dict = None
-        if usage:
+        usage_verified = False
+        if (
+            isinstance(usage, dict)
+            and all(
+                key not in usage or token_counts_present(usage[key])
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            )
+            and usage
+        ):
+            usage_verified = token_usage_reconciles(
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                usage.get("total_tokens"),
+            )
             usage_dict = {
                 "prompt_tokens": usage.get("prompt_tokens", 0) or 0,
                 "completion_tokens": usage.get("completion_tokens", 0) or 0,
                 "total_tokens": usage.get("total_tokens", 0) or 0,
             }
             prompt_token_details = usage.get("prompt_tokens_details")
+            usage_verified = usage_verified and (
+                prompt_token_details is None or isinstance(prompt_token_details, dict)
+            )
+            raw_cached = (
+                prompt_token_details.get("cached_tokens")
+                if isinstance(prompt_token_details, dict)
+                else getattr(prompt_token_details, "cached_tokens", None)
+            )
+            cache_valid = cache_read_reconciles(usage.get("prompt_tokens"), raw_cached)
+            usage_verified = usage_verified and cache_valid
             cached_tokens = 0
             if isinstance(prompt_token_details, dict):
                 cached_tokens = _positive_int(prompt_token_details.get("cached_tokens"))
             else:
                 cached_tokens = _positive_int(getattr(prompt_token_details, "cached_tokens", 0))
-            cache_write_tokens = _positive_int(usage.get("cache_write_tokens"))
-            if cached_tokens:
+            nested_write = (
+                prompt_token_details.get("cache_write_tokens")
+                if isinstance(prompt_token_details, dict)
+                else getattr(prompt_token_details, "cache_write_tokens", None)
+            )
+            legacy_write = usage.get("cache_write_tokens")
+            write_values = [value for value in (nested_write, legacy_write) if value is not None]
+            write_valid = all(token_counts_present(value) for value in write_values) and (
+                len(write_values) < 2 or write_values[0] == write_values[1]
+            )
+            usage_verified = usage_verified and write_valid
+            if cache_valid and token_counts_present(raw_cached):
                 usage_dict["cache_read_tokens"] = cached_tokens
-            if cache_write_tokens:
-                usage_dict["cache_creation_tokens"] = cache_write_tokens
+            if write_valid and write_values:
+                usage_dict["cache_creation_tokens"] = write_values[0]
 
         return GenerateResponse(
             text=content,
             content=content,
             tool_calls=message.get("tool_calls"),
             usage=usage_dict,
+            usage_verified=usage_verified,
             model=data.get("model"),
             finish_reason=choice.get("finish_reason"),
             raw=data,
@@ -410,7 +447,11 @@ class OpenRouterProvider(ProviderAdapter):
         if not isinstance(content, str):
             content = None
 
+        usage_response = self._parse_response(data)
         return GenerateResponse(
+            usage=usage_response.usage,
+            usage_invalid=data.get("usage") is not None and not usage_response.usage_verified,
+            usage_verified=usage_response.usage_verified,
             text=content,
             content=content,
             tool_calls=delta.get("tool_calls"),

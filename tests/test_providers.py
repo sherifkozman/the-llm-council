@@ -922,6 +922,7 @@ class TestAnthropicPromptCaching:
             "completion_tokens": 16,
             "total_tokens": 11007,
             "cache_read_tokens": 10988,
+            "cache_creation_tokens": 0,
         }
 
 
@@ -1151,7 +1152,7 @@ class TestOpenAIProviderRequestParams:
             "cache_read_tokens": 1200,
         }
 
-    def test_parse_response_omits_openai_cache_telemetry_when_missing_or_zero(self):
+    def test_parse_response_omits_openai_cache_telemetry_when_missing(self):
         provider = OpenAIProvider(api_key="test-key")
         message = MagicMock(content="ok", tool_calls=None)
         choice = MagicMock(message=message, finish_reason="stop")
@@ -1163,12 +1164,6 @@ class TestOpenAIProviderRequestParams:
                 completion_tokens=2,
                 total_tokens=12,
                 prompt_tokens_details=SimpleNamespace(),
-            ),
-            SimpleNamespace(
-                prompt_tokens=10,
-                completion_tokens=2,
-                total_tokens=12,
-                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
             ),
         ):
             response_obj = MagicMock(choices=[choice], usage=usage, model="gpt-5.4")
@@ -2078,9 +2073,10 @@ class TestCLIProviderTimeouts:
 
         assert response.text == "ok"
         assert response.usage == {
-            "prompt_tokens": 7,
+            "prompt_tokens": 5,
             "completion_tokens": 3,
-            "total_tokens": 10,
+            "total_tokens": 8,
+            "cache_read_tokens": 2,
         }
         assert mock_exec.await_args.kwargs["start_new_session"] is True
 

@@ -748,6 +748,19 @@ class TestMarkdownOutputFormat:
         assert "- Providers: openrouter" in md
         assert md.endswith("\n")
 
+    def test_render_markdown_distinguishes_unknown_total_from_usage_estimate(self):
+        from types import SimpleNamespace
+
+        from llm_council.cli.main import _render_result_markdown
+
+        result = self._success_result()
+        result.cost_estimate = SimpleNamespace(
+            estimated_cost_usd=None, reported_usage_estimate_usd=0.0000001
+        )
+        text = _render_result_markdown(result)
+        assert "Total cost: unknown" in text
+        assert "normalized reported usage: $1e-07" in text
+
     def test_render_markdown_failure_lists_errors(self):
         """Failed results render an Errors section with validation messages."""
         from types import SimpleNamespace
@@ -986,6 +999,21 @@ class TestCLIContextMetadata:
 
 class TestCLIEvaluate:
     """Tests for eval command."""
+
+    def test_empty_evaluation_and_comparison_exit_nonzero(self, tmp_path):
+        dataset = tmp_path / "dataset.yaml"
+        variants = tmp_path / "variants.yaml"
+        dataset.write_text("version: 1\nname: empty\ncases: []\n")
+        variants.write_text("version: 1\nname: candidates\nvariants:\n  - name: one\n")
+        with (
+            patch("llm_council.cli.main._load_config_defaults", return_value={}),
+            patch("llm_council.cli.main._load_provider_configs", return_value={}),
+        ):
+            evaluated = runner.invoke(app, ["eval", str(dataset), "--json"])
+            compared = runner.invoke(app, ["eval-compare", str(dataset), str(variants), "--json"])
+        assert evaluated.exit_code == 1
+        assert compared.exit_code == 1
+        assert '"best_variant": null' in compared.stdout
 
     def test_evaluate_json_output(self, tmp_path):
         """Eval should emit JSON and exit cleanly when all cases pass."""

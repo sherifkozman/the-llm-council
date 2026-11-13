@@ -444,6 +444,7 @@ def test_execution_manifest_filters_nested_metadata(tmp_path):
         "provider_attempts": [
             {
                 "provider": "p",
+                "pre_start_wait_ms": 51.2,
                 "secret": "DO_NOT_COPY",
                 "native_identity": {"cli_path": "/synthetic", "token": "DO_NOT_COPY"},
             }
@@ -455,7 +456,9 @@ def test_execution_manifest_filters_nested_metadata(tmp_path):
     orch._store_execution_manifest("settled")
     data = store.get_artifact_content(store.get_run_artifacts(orch._run_id)[0].artifact_id)
     assert "DO_NOT_COPY" not in data
-    assert json.loads(data)["provider_attempts"][0]["native_identity"]["cli_path"] == "/synthetic"
+    attempt = json.loads(data)["provider_attempts"][0]
+    assert attempt["native_identity"]["cli_path"] == "/synthetic"
+    assert attempt["pre_start_wait_ms"] == 51.2
 
 
 @pytest.mark.asyncio

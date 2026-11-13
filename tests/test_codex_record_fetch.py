@@ -63,6 +63,19 @@ def test_fetch_uses_fixed_verified_tls_origin_and_bounded_body(monkeypatch):
     assert response.read_limit == 256 * 1024 + 1
 
 
+def test_shared_record_uses_distinct_fixed_path_and_rejects_unknown_kind(monkeypatch):
+    module = worker()
+    Connection.response = Response()
+    monkeypatch.setattr(module.http.client, "HTTPSConnection", Connection)
+    assert module.fetch_record(certifi.where(), "shared") == b'{"schema":1}'
+    assert Connection.request_args[0] == (
+        "GET",
+        "/sherifkozman/the-llm-council/main/compatibility/codex-shared-v1.json",
+    )
+    with pytest.raises(ValueError):
+        module.fetch_record(certifi.where(), "https://untrusted.invalid/")
+
+
 @pytest.mark.parametrize(
     "response",
     [
@@ -103,6 +116,24 @@ async def test_fetch_launcher_uses_only_sanitized_environment(monkeypatch, tmp_p
     assert cmd[3] == certifi.where()
     assert kwargs["env"] == {"PATH": module.os.defpath}
     assert kwargs["deadline"] == deadline
+
+
+@pytest.mark.asyncio
+async def test_shared_fetch_launcher_selects_fixed_shared_feed(monkeypatch):
+    module = importlib.import_module("llm_council.providers.cli.codex")
+    provider = module.CodexCLIProvider(cli_path="synthetic")
+    calls = []
+
+    async def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return 0, module._LiveCodexState(stdout_parts=['{"schema":1}'])
+
+    monkeypatch.setattr(provider, "_run_cli", fake_run)
+    await provider._fetch_compatibility_record(
+        deadline=asyncio.get_running_loop().time() + 5, shared=True
+    )
+    assert calls[0][0][-1] == "shared"
+    assert calls[0][1]["env"] == {"PATH": module.os.defpath}
 
 
 @pytest.mark.asyncio

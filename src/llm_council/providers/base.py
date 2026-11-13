@@ -430,6 +430,24 @@ class GenerateRequest(BaseModel):
         return self
 
 
+def token_counts_present(*counts: Any) -> bool:
+    """Check that source counters are explicit nonnegative integers."""
+    return all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in counts)
+
+
+def cache_read_reconciles(prompt: Any, cached: Any) -> bool:
+    """Cached prompt tokens must be an explicit subset of the prompt when reported."""
+    return cached is None or (token_counts_present(prompt, cached) and cached <= prompt)
+
+
+def token_usage_reconciles(prompt: Any, completion: Any, total: Any, reasoning: Any = 0) -> bool:
+    """Verify explicit nonnegative counters reconcile without inventing missing usage."""
+    counts = (prompt, completion, total, reasoning)
+    if not token_counts_present(*counts):
+        return False
+    return bool(total == prompt + completion + reasoning)
+
+
 class GenerateResponse(BaseModel):
     """Provider-agnostic response payload for a generation call."""
 
@@ -442,6 +460,13 @@ class GenerateResponse(BaseModel):
     tool_calls: Any | None = Field(default=None, description="Tool call payloads if applicable.")
     usage: Mapping[str, int] | None = Field(
         default=None, description="Token usage information (prompt/completion/total)."
+    )
+    usage_invalid: bool = Field(
+        default=False, description="Provider supplied malformed or incomplete usage."
+    )
+    usage_verified: bool = Field(
+        default=False,
+        description="Both input and output token counts were present in the source usage.",
     )
     model: str | None = Field(default=None, description="Resolved model identifier.")
     finish_reason: str | None = Field(default=None, description="Stop reason.")

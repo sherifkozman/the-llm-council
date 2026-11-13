@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 from importlib.metadata import PackageNotFoundError, version
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -362,6 +363,11 @@ async def test_anthropic_beta_stream_adapts_structured_output_keyword():
         async def __aexit__(self, *_):
             return None
 
+        async def get_final_message(self):
+            return SimpleNamespace(
+                content=[], usage=None, model="synthetic", stop_reason="end_turn"
+            )
+
         @property
         def text_stream(self):
             async def chunks():
@@ -392,7 +398,8 @@ async def test_anthropic_beta_stream_adapts_structured_output_keyword():
         )
     ]
 
-    assert [chunk.text for chunk in chunks] == ["OK"]
+    assert [chunk.text for chunk in chunks if chunk.text] == ["OK"]
+    assert chunks[-1].finish_reason == "end_turn"
     assert captured["output_config"] == {
         "format": {"type": "json_schema", "schema": {"type": "object"}}
     }
@@ -751,7 +758,7 @@ async def test_openai_gpt6_serializes_reasoning_request(model):
     assert "temperature" not in body and "top_p" not in body and "max_tokens" not in body
 
 
-@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-4-carbon"])
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"])
 async def test_vertex_gemini4_serializes_schema_and_reasoning(model):
     genai = import_optional("google.genai", "google-genai")
     credentials_module = import_optional("google.auth.credentials", "google-auth")

@@ -8,6 +8,7 @@ import pytest
 
 from llm_council.engine.orchestrator import CouncilResult
 from llm_council.evaluation import (
+    EvalCaseResult,
     EvalDataset,
     EvalReport,
     EvalVariantsFile,
@@ -113,6 +114,7 @@ class TestRunEvalDataset:
                 "success_criteria": ["Milestone shipped"],
             },
             duration_ms=42,
+            critique="Checked the plan against the supplied evidence.",
             execution_plan={
                 "mode": "plan",
                 "execution_profile": "light_tools",
@@ -172,6 +174,8 @@ class TestRunEvalDataset:
             report = await run_eval_dataset(dataset, fail_fast=True)
 
         assert report.total_cases == 1
+        assert report.selected_cases == 2
+        assert report.execution_complete is False
         assert report.failed_cases == 1
         council.run.assert_awaited_once()
 
@@ -306,7 +310,13 @@ cases:
     @pytest.mark.asyncio
     async def test_run_eval_comparison_ranks_variants(self):
         """Comparison should run all variants and rank them by score."""
-        dataset = EvalDataset.model_validate({"version": 1, "name": "smoke", "cases": []})
+        dataset = EvalDataset.model_validate(
+            {
+                "version": 1,
+                "name": "smoke",
+                "cases": [{"id": "case", "task": "Review", "subagent": "critic"}],
+            }
+        )
         variants = EvalVariantsFile.model_validate(
             {
                 "version": 1,
@@ -328,7 +338,16 @@ cases:
             criteria_pass_rate=0.5,
             duration_ms=50,
             mode_scorecards=[],
-            case_results=[],
+            case_results=[
+                EvalCaseResult(
+                    case_id="case",
+                    mode_key="critic",
+                    passed=True,
+                    success=True,
+                    duration_ms=1,
+                    criteria=[],
+                )
+            ],
         )
         strong_report = EvalReport(
             dataset_name="smoke",
@@ -341,7 +360,16 @@ cases:
             criteria_pass_rate=1.0,
             duration_ms=80,
             mode_scorecards=[],
-            case_results=[],
+            case_results=[
+                EvalCaseResult(
+                    case_id="case",
+                    mode_key="critic",
+                    passed=True,
+                    success=True,
+                    duration_ms=1,
+                    criteria=[],
+                )
+            ],
         )
 
         with patch(
@@ -359,7 +387,13 @@ cases:
     @pytest.mark.asyncio
     async def test_run_eval_comparison_can_filter_variants(self):
         """Comparison should run only the requested named variants."""
-        dataset = EvalDataset.model_validate({"version": 1, "name": "smoke", "cases": []})
+        dataset = EvalDataset.model_validate(
+            {
+                "version": 1,
+                "name": "smoke",
+                "cases": [{"id": "case", "task": "Review", "subagent": "critic"}],
+            }
+        )
         variants = EvalVariantsFile.model_validate(
             {
                 "version": 1,
@@ -382,7 +416,16 @@ cases:
             criteria_pass_rate=1.0,
             duration_ms=10,
             mode_scorecards=[],
-            case_results=[],
+            case_results=[
+                EvalCaseResult(
+                    case_id="case",
+                    mode_key="critic",
+                    passed=True,
+                    success=True,
+                    duration_ms=1,
+                    criteria=[],
+                )
+            ],
         )
 
         with patch(

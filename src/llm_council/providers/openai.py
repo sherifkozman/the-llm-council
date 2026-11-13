@@ -7,11 +7,12 @@ Direct integration with the OpenAI API for GPT models.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from llm_council.providers.base import (
     DoctorResult,
@@ -20,6 +21,9 @@ from llm_council.providers.base import (
     ProviderAdapter,
     ProviderCapabilities,
     ReasoningConfig,
+    cache_read_reconciles,
+    token_counts_present,
+    token_usage_reconciles,
 )
 
 DEFAULT_MODEL = "gpt-5.4"
@@ -196,6 +200,14 @@ def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _supports_stream_usage_option(method: Any) -> bool:
+    """Only send optional parameters explicitly supported by this SDK."""
+    try:
+        return "stream_options" in inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 class OpenAIProvider(ProviderAdapter):
@@ -376,6 +388,8 @@ class OpenAIProvider(ProviderAdapter):
 
         if request.stream:
             kwargs["stream"] = True
+            if _supports_stream_usage_option(client.chat.completions.create):
+                kwargs["stream_options"] = {"include_usage": True}
             return self._generate_stream(client, kwargs)
 
         response = await client.chat.completions.create(**kwargs)
@@ -387,11 +401,39 @@ class OpenAIProvider(ProviderAdapter):
         """Stream responses from OpenAI API."""
         stream = await client.chat.completions.create(**kwargs)
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
+            choices = getattr(chunk, "choices", None) or []
+            choice = choices[0] if choices else None
+            delta = getattr(choice, "delta", None)
+            text = getattr(delta, "content", None)
+            finish_reason = getattr(choice, "finish_reason", None)
+            raw_usage = getattr(chunk, "usage", None)
+            usage = None
+            verified = False
+            if raw_usage is not None:
+                prompt = getattr(raw_usage, "prompt_tokens", None)
+                completion = getattr(raw_usage, "completion_tokens", None)
+                total = getattr(raw_usage, "total_tokens", None)
+                details = getattr(raw_usage, "prompt_tokens_details", None)
+                cached = getattr(details, "cached_tokens", None)
+                cache_valid = cache_read_reconciles(prompt, cached)
+                verified = token_usage_reconciles(prompt, completion, total) and cache_valid
+                if verified:
+                    usage = {
+                        "prompt_tokens": cast(int, prompt),
+                        "completion_tokens": cast(int, completion),
+                        "total_tokens": cast(int, total),
+                    }
+                    if token_counts_present(cached):
+                        usage["cache_read_tokens"] = cast(int, cached)
+            invalid = raw_usage is not None and not verified
+            if text or finish_reason or usage or invalid:
                 yield GenerateResponse(
-                    text=chunk.choices[0].delta.content,
-                    content=chunk.choices[0].delta.content,
-                    finish_reason=chunk.choices[0].finish_reason,
+                    text=text,
+                    content=text,
+                    finish_reason=finish_reason,
+                    usage=usage,
+                    usage_invalid=invalid,
+                    usage_verified=verified,
                 )
 
     def _parse_response(self, response: Any) -> GenerateResponse:
@@ -411,7 +453,19 @@ class OpenAIProvider(ProviderAdapter):
             ]
 
         usage = None
+        usage_verified = False
         if response.usage:
+            prompt_token_details = getattr(response.usage, "prompt_tokens_details", None)
+            cached_tokens = getattr(prompt_token_details, "cached_tokens", None)
+            cache_valid = cache_read_reconciles(response.usage.prompt_tokens, cached_tokens)
+            usage_verified = (
+                token_usage_reconciles(
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                    response.usage.total_tokens,
+                )
+                and cache_valid
+            )
             prompt_tokens = response.usage.prompt_tokens or 0
             completion_tokens = response.usage.completion_tokens or 0
             total_tokens = response.usage.total_tokens or 0
@@ -420,17 +474,15 @@ class OpenAIProvider(ProviderAdapter):
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
             }
-            prompt_token_details = getattr(response.usage, "prompt_tokens_details", None)
-            cached_tokens = getattr(prompt_token_details, "cached_tokens", 0) or 0
-            if isinstance(cached_tokens, int) and not isinstance(cached_tokens, bool):
-                if cached_tokens > 0:
-                    usage["cache_read_tokens"] = cached_tokens
+            if cache_valid and token_counts_present(cached_tokens):
+                usage["cache_read_tokens"] = cast(int, cached_tokens)
 
         return GenerateResponse(
             text=message.content,
             content=message.content,
             tool_calls=tool_calls,
             usage=usage,
+            usage_verified=usage_verified,
             model=response.model,
             finish_reason=choice.finish_reason,
             raw=response,

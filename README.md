@@ -68,7 +68,7 @@ boundaries, complete result files and execution-status handling. The shipped
 skill and caller examples require Council 0.8.5 or later for automatic evidence
 containment and dependency security floors, in addition to capability-based
 Claude admission and the earlier reporting fixes. See the
-[0.8.11 release notes](docs/releases/0.8.11.md) for the latest documentation
+[0.9.0 release notes](docs/releases/0.9.0.md) for the latest documentation
 and plugin metadata, and [0.8.5 release notes](docs/releases/0.8.5.md) for
 containment details.
 
@@ -84,14 +84,14 @@ the required values; absent choices fail closed. Help output can still be
 incomplete in ways this check cannot detect. Help advertises syntax, not
 authentication, isolation semantics or generation success. Existing policy
 checks and strict terminal-response validation remain.
-The Codex provider uses a separately maintained compatibility record
-instead of a fixed version list. Council requires a current record for the selected
+The Codex provider uses separately maintained compatibility records. Council
+requires a current record for the selected
 build, platform, model, authentication route, reasoning and output mode. It copies
 and verifies the listed executable and resources, then checks the version and
 bundled catalog from that same copy before running a request. Unknown, changed or
-unrecorded combinations fail closed. A new Codex release can be supported without
-a new Council build only after its exact combination has been independently
-qualified and added to the record.
+unrecorded combinations fail closed. A new API-key build can be supported by a
+record update after its exact combination has been independently qualified.
+Shared ChatGPT login also requires a version explicitly qualified by Council.
 
 Council uses an explicit Council or request model first; otherwise it uses the
 model in the selected Codex configuration. If neither selects a model, Council
@@ -100,7 +100,8 @@ asks the user to select one.
 Council supports official native Codex binaries and standard npm/pnpm installations
 on macOS, Linux and native Windows, including ARM64 and x86-64. Each exact build
 and request context still needs a current entry in the
-[compatibility record](compatibility/codex-v1.json). The current
+[compatibility record](compatibility/codex-v1.json), or the separate
+[shared-login record](compatibility/codex-shared-v1.json) for ChatGPT. The
 [0.8.9 qualification notes](docs/releases/0.8.9.md) cover Codex 0.167.0 on
 six official npm platform builds and the recorded request contexts. The
 macOS ARM64 entry also covers the shared Homebrew and npm 0.167.0 runtime
@@ -304,9 +305,17 @@ council doctor
 council doctor --deep --provider claude --provider gemini-cli --provider codex
 ```
 
-The Codex CLI adapter runs the verified private copy with an isolated temporary
-`HOME` and only the selected authentication file. Its record-backed environment
-is restricted and does not inherit proxy, CA or loader overrides. Custom API-key
+The Codex CLI adapter runs a verified executable snapshot with a temporary working
+directory. ChatGPT login uses the selected native `CODEX_HOME` directly, so
+Codex owns token refresh; the native global `AGENTS.md` instructions are also
+used. Council ignores native user configuration during generation to prevent
+unintended MCP servers and tools. It does not explicitly suppress native rules;
+full policy parity has not been established. This path is
+qualified only for Codex 0.167.0 and 0.167.2 on builds covered by the public
+compatibility record. It selects the native login at use time within the
+workspace selected when the request starts; a same-workspace login change may
+select a different user. API-key authentication remains isolated. The restricted
+environment does not inherit proxy, CA or loader overrides. Custom API-key
 endpoints require an explicitly qualified custom-route record; a ChatGPT custom
 route is not currently supported. If the record cannot be fetched or does not
 match, the request fails without falling back to a version string. The snapshot
@@ -750,7 +759,7 @@ After publication and approval to update the installed tool, preserve any local
 package edits and the uv receipt, then replace the exact version constraint:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.8.11'
+uv tool install --reinstall 'the-llm-council[all]==0.9.0'
 ```
 
 This targets the uv-managed tool and its exposed executable, and updates the

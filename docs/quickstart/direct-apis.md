@@ -513,7 +513,37 @@ async def stream_example():
             print(chunk.text, end="", flush=True)
 ```
 
+### Optional automatic prompt caching
+
+Council can request automatic prompt caching on supported provider routes:
+
+```bash
+council run critic --mode review "Review this synthetic plan" --prompt-cache-auto
+```
+
+Python callers can set `CouncilConfig(prompt_cache_auto=True)`. The option is
+off by default. Supported Anthropic routes receive their native automatic
+cache control; unsupported routes drop the request and report that decision in
+the execution plan. Gemini and Vertex Gemini cached-content resources use the
+separate provider API; this switch does not create those resources. Providers
+may retain cached prompts temporarily and charge for cache writes and reads.
+The automatic control requests the provider's five-minute cache setting where
+supported; actual retention and billing follow the provider's terms.
+This switch applies to every supported phase, including chunked calls and
+synthesis, which may contain task context and other providers' drafts. Some
+providers can also perform implicit caching independently of this switch.
+A request being forwarded or cache activity being observed does not establish a
+cache hit or savings. Check `cache_read_observed` for a reported positive read,
+`cache_write_observed` for creation, and the provider-reported token usage.
+
 ### Custom Timeouts
+
+The configured timeout applies to each provider attempt, including time spent
+waiting for a provider slot. Vertex receives the remaining time as its request
+deadline; `504 DEADLINE_EXCEEDED` means the service did not finish within that
+deadline. High-reasoning requests can take longer than short smoke-test limits.
+The default is 120 seconds. Increase the timeout only when the task and latency
+budget justify it; a longer timeout does not guarantee a successful response.
 
 ```bash
 # CLI
@@ -615,10 +645,45 @@ Track your costs:
 result = await council.run(task="...", subagent="drafter")
 
 if result.cost_estimate:
-    print(f"Cost: ${result.cost_estimate.estimated_cost_usd:.4f}")
+    cost = result.cost_estimate.estimated_cost_usd
+    print(f"Cost: ${cost:.4f}" if cost is not None else "Cost: unknown")
     print(f"Input tokens: {result.cost_estimate.total_input_tokens}")
     print(f"Output tokens: {result.cost_estimate.total_output_tokens}")
 ```
+
+The total `estimated_cost_usd` is currently null because provider usage does not
+cover all possible billed events. Consumers must handle null. If rates are
+provided through `CouncilConfig.cost_per_1k_input` and `cost_per_1k_output`,
+`reported_usage_estimate_usd` is a flat-rate approximation of normalized reported
+usage. It is not a bill: missing provider fields, retries, health probes, cache
+charges and model-specific rates can change the result. Inspect
+`incomplete_reasons` and `provider_usage_verified`. Token counters are
+normalized, may zero-fill missing fields, and are not guaranteed billable totals.
+
+For a Python client that uses one known model and rate schedule per provider,
+set the input and output rates in US dollars per 1,000 tokens. Supply the
+rates for your actual model and billing arrangement; Council does not discover
+or update them automatically:
+
+```python
+config = CouncilConfig(
+    providers=["vertex-ai"],
+    cost_per_1k_input={"vertex-ai": input_usd_per_1k},
+    cost_per_1k_output={"vertex-ai": output_usd_per_1k},
+)
+council = Council(config=config)
+```
+
+Rates are keyed by provider, not by model. If one provider uses models with
+different prices during a run, a single provider rate cannot accurately price
+all of them. Cache discounts, cache writes and other charges are also not
+separately priced in this approximation.
+
+`started_provider_calls` counts adapter invocations; `provider_calls` counts
+responses with usage recording, not internal SDK or health-probe requests.
+Providers verify source token fields only when the available counters are
+complete and consistent. Missing, interrupted or ambiguous usage remains
+unverified, and the reported-usage estimate remains unknown.
 
 ## CLI Providers (Local CLI Tooling)
 
@@ -632,16 +697,19 @@ supports CLI-based providers:
 council run drafter --mode impl "Build a parser" --providers codex
 ```
 
-`codex` defaults to `gpt-5.4` so local ChatGPT-authenticated Codex CLI installs work
-without extra config. If your local Codex environment supports `*-codex` variants,
-you can still opt in via `providers[].default_model`.
+Select a model through Council or the native Codex configuration. The model,
+reasoning level and output mode must match a qualified compatibility record;
+an unsupported combination fails closed.
 
-Council also launches nested Codex subprocesses under an isolated temporary
-`HOME` that only includes the Codex auth files. This avoids inheriting MCP
-tools, plugins, or skills from the parent Codex session while keeping the
-existing Codex login usable. The adapter preserves the ambient Codex runtime
-environment and can fail fast if a nested `codex exec` stalls after
-`turn.started`, instead of waiting for the full request timeout.
+For a ChatGPT login, Council uses the selected native `CODEX_HOME` so Codex
+manages its own refresh credentials. The native global `AGENTS.md` is included,
+while user configuration is ignored for generation to keep inherited MCP
+servers and tools disabled. Council does not explicitly suppress native rules,
+but full policy parity has not been established. The request uses the
+native current login within the workspace selected at startup, so a different
+login selected in the same workspace can be used. Shared login requires a
+qualified Codex 0.167.0 or 0.167.2 build and a matching public compatibility
+record. API-key authentication uses an isolated temporary home.
 
 ### Gemini CLI
 

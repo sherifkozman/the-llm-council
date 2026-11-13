@@ -6,16 +6,20 @@ import sys
 
 _HOST = "raw.githubusercontent.com"
 _PATH = "/sherifkozman/the-llm-council/main/compatibility/codex-v1.json"
+_SHARED_PATH = "/sherifkozman/the-llm-council/main/compatibility/codex-shared-v1.json"
 _MAX_BYTES = 256 * 1024
 
 
-def fetch_record(ca_bundle: str) -> bytes:
+def fetch_record(ca_bundle: str, kind: str = "legacy") -> bytes:
+    if kind not in {"legacy", "shared"}:
+        raise ValueError("unknown compatibility record kind")
+    path = _SHARED_PATH if kind == "shared" else _PATH
     connection = http.client.HTTPSConnection(
         _HOST, context=ssl.create_default_context(cafile=ca_bundle), timeout=5.0
     )
     try:
         connection.request(
-            "GET", _PATH, headers={"Accept": "application/json", "Accept-Encoding": "identity"}
+            "GET", path, headers={"Accept": "application/json", "Accept-Encoding": "identity"}
         )
         response = connection.getresponse()
         if response.status != 200:
@@ -39,7 +43,9 @@ def fetch_record(ca_bundle: str) -> bytes:
 
 if __name__ == "__main__":
     try:
-        sys.stdout.buffer.write(fetch_record(sys.argv[1]))
+        sys.stdout.buffer.write(
+            fetch_record(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "legacy")
+        )
     except (IndexError, OSError, ValueError, http.client.HTTPException):
         print("Codex compatibility record unavailable", file=sys.stderr)
         sys.exit(1)

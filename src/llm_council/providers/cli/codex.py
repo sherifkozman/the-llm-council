@@ -44,6 +44,7 @@ from llm_council.providers.base import (
     ProviderAdapter,
     ProviderCapabilities,
     classify_error,
+    token_counts_present,
 )
 from llm_council.providers.cli._compatibility import (
     native_identity,
@@ -57,6 +58,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_FLAGS = "--sandbox read-only --skip-git-repo-check"
 _CLEANUP_SECONDS = 1.0
 _MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024
+_SHARED_LOGIN_VERSIONS = frozenset({"codex-cli 0.167.0", "codex-cli 0.167.2"})
+_OPENAI_REFRESH_URL = "https://auth.openai.com/oauth/token"
 _GENERATION_CONFIG = {
     "features.shell_tool": False,
     "features.view_image": False,
@@ -529,6 +532,7 @@ class _CodexRuntime:
     category: str
     config: dict[str, str]
     configured_model: Any = None
+    native_home: str | None = None
 
     def diagnostics_env(self) -> dict[str, str]:
         values = dict(self.env)
@@ -663,7 +667,9 @@ class _LiveCodexState:
     agent_message: str = ""
     error_message: str = ""
     usage: dict[str, int] | None = None
+    usage_verified: bool = False
     saw_turn_completed: bool = False
+    saw_turn_started: bool = False
     saw_event: bool = False
     protocol_error: str = ""
 
@@ -690,6 +696,10 @@ def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
     state.saw_event = True
     event_type = payload.get("type")
     if event_type == "turn.started":
+        if state.saw_turn_started or state.saw_turn_completed:
+            state.protocol_error = "multiple turns unsupported"
+            return
+        state.saw_turn_started = True
         state.saw_turn_completed = False
         state.agent_message = ""
     elif event_type in ("item.started", "item.updated", "item.completed"):
@@ -707,22 +717,35 @@ def _ingest_codex_stdout_line(line: str, state: _LiveCodexState) -> None:
             else:
                 state.protocol_error = "malformed agent message"
     elif event_type == "turn.completed":
+        if state.saw_turn_completed:
+            state.protocol_error = "duplicate terminal event"
+            return
         state.saw_turn_completed = True
         usage = payload.get("usage")
         if isinstance(usage, dict):
             try:
-                prompt_tokens = int(usage.get("input_tokens", 0) or 0) + int(
-                    usage.get("cached_input_tokens", 0) or 0
-                )
+                prompt_tokens = int(usage.get("input_tokens", 0) or 0)
+                cached_tokens = int(usage.get("cached_input_tokens", 0) or 0)
                 completion_tokens = int(usage.get("output_tokens", 0) or 0)
             except (ValueError, TypeError):
                 state.protocol_error = "malformed usage"
                 return
+            state.usage_verified = token_counts_present(
+                usage.get("input_tokens"), usage.get("output_tokens")
+            ) and (
+                "cached_input_tokens" not in usage
+                or (
+                    token_counts_present(usage["cached_input_tokens"])
+                    and cached_tokens <= prompt_tokens
+                )
+            )
             state.usage = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
             }
+            if cached_tokens > 0:
+                state.usage["cache_read_tokens"] = cached_tokens
     elif event_type == "turn.failed":
         # Codex emits turn.failed with exit code 0 when the server rejects the
         # request -- e.g. a model this CLI version does not support. Capture the
@@ -943,10 +966,21 @@ class CodexCLIProvider(ProviderAdapter):
                 and data.get("auth_mode") in (None, "chatgpt")
             ):
                 fields = {"id_token", "access_token", "refresh_token", "account_id"}
-                if set(tokens) != fields or not all(
-                    isinstance(tokens[x], str) and tokens[x] for x in fields
+                if (
+                    not fields <= set(tokens)
+                    or set(tokens) - fields - {"oauth_provenance", "login_owner_id"}
+                    or not all(isinstance(tokens[x], str) and tokens[x] for x in fields)
                 ):
                     raise ValueError("Codex unsupported ChatGPT auth token shape")
+                provenance = tokens.get("oauth_provenance")
+                if provenance is not None and provenance != {
+                    "issuer": "https://auth.openai.com",
+                    "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+                }:
+                    raise ValueError("Codex unsupported ChatGPT auth provenance")
+                owner = tokens.get("login_owner_id")
+                if owner is not None and (not isinstance(owner, str) or not owner):
+                    raise ValueError("Codex unsupported ChatGPT login owner")
                 category = "chatgpt"
                 account = tokens["account_id"]
             else:
@@ -965,6 +999,11 @@ class CodexCLIProvider(ProviderAdapter):
             if not isinstance(workspace, str) or category != "chatgpt" or workspace != account:
                 raise ValueError("Codex auth does not satisfy forced workspace")
             native["forced_chatgpt_workspace_id"] = workspace
+        if category == "chatgpt":
+            if not isinstance(account, str) or not account:
+                raise ValueError("Codex unsupported ChatGPT workspace")
+            native["forced_login_method"] = "chatgpt"
+            native["forced_chatgpt_workspace_id"] = account
         ambient_url = env.pop("OPENAI_BASE_URL", None)
         if ambient_url and config.get("openai_base_url") not in (None, ambient_url):
             raise ValueError("Codex ambiguous OpenAI route sources")
@@ -987,7 +1026,14 @@ class CodexCLIProvider(ProviderAdapter):
             native["openai_base_url"] = value
         for key in ("CODEX_API_KEY", "OPENAI_API_KEY"):
             env.pop(key, None)
-        return _CodexRuntime(env, auth, category, native, config.get("model"))
+        return _CodexRuntime(
+            env,
+            auth,
+            category,
+            native,
+            config.get("model"),
+            str(source) if category == "chatgpt" else None,
+        )
 
     def _create_isolated_cli_home(self, runtime: _CodexRuntime | None = None) -> str:
         runtime = runtime or self._resolve_runtime()
@@ -995,7 +1041,7 @@ class CodexCLIProvider(ProviderAdapter):
         try:
             codex_dir = cli_home / ".codex"
             codex_dir.mkdir()
-            if runtime.auth is not None:
+            if runtime.auth is not None and runtime.native_home is None:
                 try:
                     auth_path = codex_dir / "auth.json"
                     auth_path.touch(mode=0o600)
@@ -1011,12 +1057,12 @@ class CodexCLIProvider(ProviderAdapter):
             raise
 
     @staticmethod
-    def _record_environment(home: str) -> dict[str, str]:
+    def _record_environment(home: str, native_home: str | None = None) -> dict[str, str]:
         """Fixed environment shared by record-backed probes and generation."""
         env = {
             "PATH": os.defpath,
             "HOME": home,
-            "CODEX_HOME": str(Path(home) / ".codex"),
+            "CODEX_HOME": native_home or str(Path(home) / ".codex"),
             "XDG_CONFIG_HOME": str(Path(home) / ".config"),
             "TMPDIR": home,
             "TMP": home,
@@ -1024,6 +1070,8 @@ class CodexCLIProvider(ProviderAdapter):
             "LANG": "C",
             "LC_ALL": "C",
         }
+        if native_home:
+            env["CODEX_REFRESH_TOKEN_URL_OVERRIDE"] = _OPENAI_REFRESH_URL
         if sys.platform == "win32":
             # Windows needs its OS loader path; user configuration remains isolated.
             if os.environ.get("SYSTEMROOT"):
@@ -1065,6 +1113,7 @@ class CodexCLIProvider(ProviderAdapter):
         stdin: Any = None,
         events: bool = False,
         diagnostics_env: dict[str, str] | None = None,
+        suppress_error_details: bool = False,
         cleanup_confirmed: _SnapshotCleanup | None = None,
         pre_spawn_guard: Callable[[], bool] | None = None,
     ) -> tuple[int, _LiveCodexState]:
@@ -1166,7 +1215,10 @@ class CodexCLIProvider(ProviderAdapter):
         except asyncio.TimeoutError:
             if events and state.error_message:
                 self._raise_cli_error(
-                    state, proc.returncode if proc else -1, diagnostics_env or env
+                    state,
+                    proc.returncode if proc else -1,
+                    diagnostics_env or env,
+                    suppress_details=suppress_error_details,
                 )
             raise RuntimeError("Codex CLI timed out within the request deadline")
         except asyncio.CancelledError as exc:
@@ -1341,13 +1393,15 @@ class CodexCLIProvider(ProviderAdapter):
         ) as snapshot:
             yield snapshot
 
-    async def _fetch_compatibility_record(self, *, deadline: float) -> bytes | None:
+    async def _fetch_compatibility_record(
+        self, *, deadline: float, shared: bool = False
+    ) -> bytes | None:
         """Fetch only the fixed public record, using a credential-free child."""
         self._require_remaining(deadline)
         worker = Path(__file__).with_name("_codex_record_worker.py")
         fetch_deadline = min(deadline, asyncio.get_running_loop().time() + 5.0)
         code, state = await self._run_cli(
-            [sys.executable, "-I", str(worker), certifi.where()],
+            [sys.executable, "-I", str(worker), certifi.where(), *(["shared"] if shared else [])],
             env={
                 key: value
                 for key, value in self._record_environment(tempfile.gettempdir()).items()
@@ -1395,7 +1449,10 @@ class CodexCLIProvider(ProviderAdapter):
             "reasoning": self._reasoning_effort(request) or "default",
             "output": "json_schema" if request.structured_output else "text",
         }
-        payload = await self._fetch_compatibility_record(deadline=deadline)
+        if runtime.native_home is not None:
+            payload = await self._fetch_compatibility_record(deadline=deadline, shared=True)
+        else:
+            payload = await self._fetch_compatibility_record(deadline=deadline)
         if payload is None:
             raise RuntimeError("Codex compatibility record unavailable")
         validated_payload: bytes = payload
@@ -1634,7 +1691,12 @@ class CodexCLIProvider(ProviderAdapter):
         return "\n".join(error_lines[-3:] or lines[-8:])
 
     def _raise_cli_error(
-        self, state: _LiveCodexState, code: int | None, env: dict[str, str]
+        self,
+        state: _LiveCodexState,
+        code: int | None,
+        env: dict[str, str],
+        *,
+        suppress_details: bool = False,
     ) -> None:
         details = self._redact(
             "\n".join(
@@ -1656,6 +1718,13 @@ class CodexCLIProvider(ProviderAdapter):
             ErrorType.RATE_LIMIT: "RATE LIMIT",
         }
         label = labels.get(error_type, f"CLI failed ({error_type.value})")
+        if suppress_details:
+            safe_labels = {
+                ErrorType.AUTH: "Authentication failed",
+                ErrorType.MODEL_UNAVAILABLE: "Model not found or unsupported",
+                ErrorType.EMPTY_RESPONSE: "empty_response: Codex returned an empty response",
+            }
+            raise RuntimeError(safe_labels.get(error_type, label))
         raise RuntimeError(f"{label}: {details or f'exit {code}'}")
 
     async def generate(
@@ -1704,7 +1773,9 @@ class CodexCLIProvider(ProviderAdapter):
             output_schema_path=str(schema_path) if schema_path else None,
         )
         cmd[0] = str(admission.snapshot.executable)
-        cmd.extend(["--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config"])
+        cmd.extend(["--ignore-user-config", "--ephemeral", "--strict-config"])
+        if runtime.native_home is None:
+            cmd.append("--ignore-rules")
         cmd.extend(_config_args(runtime.config))
         cmd.extend(_config_args(_GENERATION_CONFIG))
         if admission.record["profile"] == "generation-v1":
@@ -1731,10 +1802,16 @@ class CodexCLIProvider(ProviderAdapter):
                 stdin=stdin,
                 events=True,
                 diagnostics_env=runtime.diagnostics_env(),
+                suppress_error_details=runtime.category == "chatgpt",
                 **run_options,
             )
         if code != 0 or state.error_message:
-            self._raise_cli_error(state, code, runtime.diagnostics_env())
+            self._raise_cli_error(
+                state,
+                code,
+                runtime.diagnostics_env(),
+                suppress_details=runtime.category == "chatgpt",
+            )
         if state.protocol_error:
             raise RuntimeError(f"Codex CLI {state.protocol_error}")
         if not state.saw_turn_completed:
@@ -1748,8 +1825,9 @@ class CodexCLIProvider(ProviderAdapter):
             text=output,
             content=output,
             usage=state.usage,
+            usage_verified=state.usage_verified,
             raw={
-                "stdout": "".join(state.stdout_parts),
+                "stdout": "" if runtime.category == "chatgpt" else "".join(state.stdout_parts),
                 "native_version": version,
                 "cli_path": self._cli_path,
                 "model": model,
@@ -1781,6 +1859,8 @@ class CodexCLIProvider(ProviderAdapter):
         async with self._admit_recorded_codex(
             runtime, request, deadline=deadline, identity=identity
         ) as admission:
+            if runtime.native_home is not None and admission.version not in _SHARED_LOGIN_VERSIONS:
+                raise RuntimeError("Codex native shared login requires a qualified CLI version")
             home = self._create_isolated_cli_home(runtime)
             operation_error: BaseException | None = None
             try:
@@ -1796,7 +1876,7 @@ class CodexCLIProvider(ProviderAdapter):
                     request,
                     runtime,
                     root=root,
-                    env=self._record_environment(home),
+                    env=self._record_environment(home, runtime.native_home),
                     cwd=str(root / "work"),
                     deadline=deadline,
                     version=admission.version,
@@ -1835,6 +1915,8 @@ class CodexCLIProvider(ProviderAdapter):
         async with self._admit_recorded_codex(
             runtime, request, deadline=deadline, identity=identity
         ) as admission:
+            if runtime.native_home is not None and admission.version not in _SHARED_LOGIN_VERSIONS:
+                raise RuntimeError("Codex native shared login requires a qualified CLI version")
             home = self._create_isolated_cli_home(runtime)
             operation_error: BaseException | None = None
             try:
@@ -1855,7 +1937,7 @@ class CodexCLIProvider(ProviderAdapter):
                         "login",
                         "status",
                     ],
-                    env=self._record_environment(home),
+                    env=self._record_environment(home, runtime.native_home),
                     cwd=str(root / "work"),
                     deadline=deadline,
                     cleanup_confirmed=admission.snapshot.cleanup_confirmed,

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from llm_council.engine.orchestrator import (
+    CostEstimate,
     CouncilResult,
     Orchestrator,
     OrchestratorConfig,
@@ -58,6 +59,9 @@ class Council:
 
         return OrchestratorConfig(
             timeout=config.timeout,
+            prompt_cache_auto=config.prompt_cache_auto,
+            cost_per_1k_input=dict(config.cost_per_1k_input),
+            cost_per_1k_output=dict(config.cost_per_1k_output),
             max_retries=config.max_retries,
             enable_artifacts=config.enable_artifact_store,
             enable_health_check=config.enable_health_check,
@@ -164,6 +168,9 @@ class Council:
             routed_result = exc.result
             cancellation = exc
 
+        routed_result.cost_estimate = _combine_cost_estimates(
+            router_result.cost_estimate, routed_result.cost_estimate
+        )
         if routed_result.execution_plan is None:
             routed_result.execution_plan = {}
         child_status = routed_result.execution_status
@@ -234,3 +241,45 @@ class Council:
             "shipper",
             "red-team",
         ]
+
+
+def _combine_cost_estimates(
+    first: CostEstimate | None, second: CostEstimate | None
+) -> CostEstimate:
+    """Combine router and child usage without inventing missing stage costs."""
+    stages = [item for item in (first, second) if item is not None]
+
+    def merge(field: str) -> dict[str, int]:
+        combined: dict[str, int] = {}
+        for item in stages:
+            for key, value in getattr(item, field).items():
+                combined[key] = combined.get(key, 0) + value
+        return combined
+
+    reasons = [reason for item in stages for reason in item.incomplete_reasons]
+    if len(stages) != 2:
+        reasons.append("Router or child usage unavailable")
+    amounts = [item.reported_usage_estimate_usd for item in stages]
+    return CostEstimate(
+        provider_calls=merge("provider_calls"),
+        started_provider_calls=merge("started_provider_calls"),
+        provider_input_tokens=merge("provider_input_tokens"),
+        provider_output_tokens=merge("provider_output_tokens"),
+        provider_usage_verified={
+            provider: len(stages) == 2
+            and all(
+                item.provider_usage_verified.get(provider, False)
+                for item in stages
+                if provider in item.provider_calls or provider in item.started_provider_calls
+            )
+            for provider in set(merge("provider_calls")) | set(merge("started_provider_calls"))
+        },
+        tokens=sum(item.tokens for item in stages),
+        total_input_tokens=sum(item.total_input_tokens for item in stages),
+        total_output_tokens=sum(item.total_output_tokens for item in stages),
+        estimated_cost_usd=None,
+        reported_usage_estimate_usd=sum(a for a in amounts if a is not None)
+        if len(stages) == 2 and all(a is not None for a in amounts)
+        else None,
+        incomplete_reasons=reasons,
+    )
