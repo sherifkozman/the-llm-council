@@ -813,3 +813,19 @@ async def test_vertex_gemini4_serializes_schema_and_reasoning(model):
     assert config["thinkingConfig"]["thinking_level"] == "HIGH"
     assert config["responseMimeType"] == "application/json"
     assert "responseSchema" in config
+
+
+def test_google_sdk_finish_reason_normalizes_to_wire_value():
+    types = import_optional("google.genai.types", "google-genai")
+    from types import SimpleNamespace
+
+    from llm_council.providers.gemini import GeminiProvider
+
+    response = SimpleNamespace(
+        text="partial",
+        candidates=[SimpleNamespace(finish_reason=types.FinishReason.MAX_TOKENS)],
+        usage_metadata=None,
+    )
+    assert (
+        GeminiProvider(api_key="synthetic")._parse_response(response).finish_reason == "MAX_TOKENS"
+    )

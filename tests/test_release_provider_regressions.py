@@ -258,9 +258,12 @@ async def test_nonempty_truncated_response_marks_execution_degraded(phase):
 
 
 def test_direct_gemini_sdk_finish_reason_enum_normalized():
-    from google.genai.types import FinishReason
+    from enum import Enum
 
     from llm_council.providers.gemini import GeminiProvider
+
+    class FinishReason(Enum):
+        MAX_TOKENS = "MAX_TOKENS"
 
     provider = GeminiProvider(api_key="test")
     response = SimpleNamespace(
