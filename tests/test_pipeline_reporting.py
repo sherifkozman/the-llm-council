@@ -178,7 +178,7 @@ def test_slice_span_excludes_whitespace_removed_at_cutoff(multiple_sections):
 def test_first_prompt_profile_reports_compaction():
     orch, _ = runner()
     orch._execution_plan = {}
-    draft = "synthetic finding " * 150
+    draft = "synthetic finding " * 5000
     _, decision = orch._select_prompt_profile(
         provider_name="openai",
         phase="critique",

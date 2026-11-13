@@ -696,3 +696,120 @@ async def test_openrouter_serializes_basic_request():
             },
         )
     ]
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
+async def test_openai_gpt6_serializes_reasoning_request(model):
+    sdk = import_optional("openai", "openai")
+    from llm_council.providers.base import ReasoningConfig
+    from llm_council.providers.compiler import compile_request_for_provider
+
+    captured = []
+
+    def respond(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "synthetic",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "{}"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False) as http:
+        adapter = OpenAIProvider(api_key="synthetic")
+        adapter._client = sdk.AsyncOpenAI(api_key="synthetic", http_client=http, max_retries=0)
+        compiled = compile_request_for_provider(
+            "openai",
+            GenerateRequest(
+                model=model,
+                prompt="hello",
+                max_tokens=4096,
+                temperature=0.2,
+                top_p=0.9,
+                reasoning=ReasoningConfig(enabled=True, effort="high"),
+                structured_output=StructuredOutputConfig(
+                    name="result", json_schema={"type": "object", "properties": {}}
+                ),
+            ),
+        )
+        await adapter.generate(compiled.request)
+    body = captured[0]
+    assert body["max_completion_tokens"] == 4096
+    assert body["reasoning_effort"] == "high"
+    assert body["response_format"]["type"] == "json_schema"
+    assert "temperature" not in body and "top_p" not in body and "max_tokens" not in body
+
+
+@pytest.mark.parametrize("model", ["gemini-4-argon", "gemini-4-carbon"])
+async def test_vertex_gemini4_serializes_schema_and_reasoning(model):
+    genai = import_optional("google.genai", "google-genai")
+    credentials_module = import_optional("google.auth.credentials", "google-auth")
+    from llm_council.providers.base import ReasoningConfig
+    from llm_council.providers.compiler import compile_request_for_provider
+    from llm_council.providers.vertex import VertexAIProvider
+
+    class SyntheticCredentials(credentials_module.Credentials):
+        def __init__(self):
+            super().__init__()
+            self.token = "synthetic"
+
+        def refresh(self, request):
+            raise AssertionError("synthetic credentials must not refresh")
+
+    captured = []
+
+    def respond(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": "{}"}]},
+                        "finishReason": "STOP",
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False) as http:
+        credentials = SyntheticCredentials()
+        adapter = VertexAIProvider(
+            project="synthetic", location="us-central1", credentials=credentials
+        )
+        adapter._gemini_client = genai.Client(
+            vertexai=True,
+            project="synthetic",
+            location="us-central1",
+            credentials=credentials,
+            http_options=genai.types.HttpOptions(httpx_async_client=http),
+        )
+        compiled = compile_request_for_provider(
+            "vertex-ai",
+            GenerateRequest(
+                model=model,
+                prompt="hello",
+                max_tokens=16000,
+                reasoning=ReasoningConfig(enabled=True, thinking_level="high"),
+                structured_output=StructuredOutputConfig(
+                    name="result", json_schema={"type": "object", "properties": {}}
+                ),
+            ),
+        )
+        await adapter.generate(compiled.request)
+    config = captured[0]["generationConfig"]
+    assert config["maxOutputTokens"] == 16000
+    assert config["thinkingConfig"]["thinking_level"] == "HIGH"
+    assert config["responseMimeType"] == "application/json"
+    assert "responseSchema" in config

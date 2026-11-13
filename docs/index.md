@@ -133,7 +133,7 @@ documents earlier coverage. Unrecorded combinations still fail closed. Record
 updates can add qualified builds without changing Council; they do not certify
 arbitrary future versions or provider behavior.
 
-See the [0.8.10 release notes](releases/0.8.10.md) for current documentation
+See the [0.8.11 release notes](releases/0.8.11.md) for current documentation
 and plugin metadata changes.
 
 Codex runs with an isolated temporary `HOME`, the selected authentication file,

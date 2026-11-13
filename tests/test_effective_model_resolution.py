@@ -97,24 +97,14 @@ async def test_default_model_controls_reach_real_openai_sdk(engine, sdk, monkeyp
 
     wire = sdk.call_args.kwargs
     assert wire["model"] == expected
-    assert wire.get("reasoning_effort") == (None if selection == "builtin" else "high")
+    assert wire.get("reasoning_effort") == "high"
     assert wire.get("response_format", {}).get("type") == "json_schema"
     assert wire["response_format"]["json_schema"]["schema"]["required"] == ["result"]
     assert request.model_dump() == before
     compilation = engine._execution_plan["phase_request_compilation"]["synthesis"][0]
     assert compilation["model"] == wire["model"]
     dropped = [d for d in compilation["decisions"] if d["action"] == "dropped"]
-    if selection == "builtin":
-        # Preserve the existing o-series-only reasoning policy; do not add capabilities here.
-        assert dropped == [
-            {
-                "option": "reasoning",
-                "action": "dropped",
-                "detail": "gpt-5.4 does not support reasoning controls",
-            }
-        ]
-    else:
-        assert dropped == []
+    assert dropped == []
     attempt = engine._execution_plan["provider_attempts"][0]
     assert attempt["requested_model"] is None
     assert attempt["adapter_resolved_model"] == wire["model"]
