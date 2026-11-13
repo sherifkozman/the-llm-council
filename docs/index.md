@@ -130,14 +130,18 @@ macOS, Linux and Windows for ARM64 and x86-64. The
 qualification and tested request contexts; the [0.8.8 release notes](releases/0.8.8.md)
 describe Codex 0.166.0 coverage, and the [0.8.7 verification matrix](releases/0.8.7.md)
 documents earlier coverage. Unrecorded combinations still fail closed. Record
-updates can add qualified builds without changing Council; they do not certify
-arbitrary future versions or provider behavior.
+updates can add qualified API-key builds without changing Council. Shared
+ChatGPT login also requires a version explicitly qualified by Council. Records
+do not certify arbitrary future versions or provider behavior.
 
-See the [0.8.11 release notes](releases/0.8.11.md) for current documentation
+See the [0.9.0 release notes](releases/0.9.0.md) for current documentation
 and plugin metadata changes.
 
-Codex runs with an isolated temporary `HOME`, the selected authentication file,
-and a restricted environment that does not inherit proxy, CA or loader overrides.
+Codex runs with an isolated temporary `HOME` and a restricted environment that
+does not inherit proxy, CA or loader overrides. ChatGPT authentication uses the
+selected native `CODEX_HOME`; API-key authentication remains isolated. Native
+global instructions are included for shared login, and user config is ignored
+for generation to prevent unintended tools and MCP servers.
 An explicitly qualified API-key custom endpoint can use the user's selected URL;
 ChatGPT custom routing is not currently qualified. Base doctor checks only the
 default model, default reasoning, text output and login status. It does not prove
@@ -152,7 +156,8 @@ private benchmark creation.
 JSON-lines protocol enables seamless integration with Claude Code and other IDEs. Results stream as structured JSON for programmatic consumption.
 
 ### Secret-Safe Logging
-Built-in redaction pipeline prevents API keys and credentials from leaking into logs or artifacts.
+Built-in redaction removes known credentials from supported diagnostic paths.
+ChatGPT Codex CLI output details are withheld because credentials may rotate.
 
 ## Installation
 

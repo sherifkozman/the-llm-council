@@ -348,9 +348,24 @@ not proof that this larger workload completed.
 result = await council.run(task="...", subagent="drafter")
 
 if result.cost_estimate:
-    print(f"Estimated cost: ${result.cost_estimate.estimated_cost_usd:.4f}")
+    cost = result.cost_estimate.estimated_cost_usd
+    print(f"Estimated cost: ${cost:.4f}" if cost is not None else "Estimated cost: unknown")
     print(f"Total tokens: {result.cost_estimate.tokens}")
 ```
+
+The total `estimated_cost_usd` is currently null because provider usage does not
+cover all possible billed events. Consumers must handle null. If rates are
+provided through `CouncilConfig.cost_per_1k_input` and `cost_per_1k_output`,
+`reported_usage_estimate_usd` is a flat-rate approximation of normalized reported
+usage. It is not a bill: missing provider fields, retries, health probes, cache
+charges and model-specific rates can change the result. Inspect
+`incomplete_reasons` and `provider_usage_verified`. Token counters are
+normalized, may zero-fill missing fields, and are not guaranteed billable totals.
+`started_provider_calls` counts adapter invocations; `provider_calls` counts
+responses with usage recording, not internal SDK or health-probe requests.
+Providers verify source token fields only when the available counters are
+complete and consistent. Missing, interrupted or ambiguous usage remains
+unverified, and the reported-usage estimate remains unknown.
 
 ### Reduce Costs
 

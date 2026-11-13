@@ -57,6 +57,11 @@ prompts:
     Create actionable plans with clear dependencies.
     Identify risks and propose mitigations.
     Be specific about what needs to happen, not when.
+    Treat only details explicitly supported by the task or evidence as known
+    requirements. Drafts and critiques are not evidence of user requirements;
+    attribute requirements to the supplied task or independent evidence.
+    Do not label inferred constraints or invented numerical thresholds as known requirements. Mark assumptions and proposed values
+    as proposed and subject to validation or approval.
 
     ---
 

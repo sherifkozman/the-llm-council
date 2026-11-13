@@ -32,6 +32,8 @@ from llm_council.providers.base import (
     ProviderCapabilities,
     classify_error,
     get_billing_help_url,
+    token_counts_present,
+    token_usage_reconciles,
 )
 from llm_council.providers.cli._subprocess import terminate_process_tree
 
@@ -127,6 +129,18 @@ def _normalize_usage(raw_stats: Any) -> dict[str, int] | None:
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
     }
+
+
+def _usage_stats_verified(raw_stats: Any) -> bool:
+    """Verify explicit CLI counters; do not infer absent counts as zero."""
+    if not isinstance(raw_stats, dict):
+        return False
+    input_count = raw_stats.get("inputTokenCount", raw_stats.get("input_tokens"))
+    output_count = raw_stats.get("outputTokenCount", raw_stats.get("output_tokens"))
+    if "totalTokenCount" in raw_stats or "total_tokens" in raw_stats:
+        total = raw_stats.get("totalTokenCount", raw_stats.get("total_tokens"))
+        return token_usage_reconciles(input_count, output_count, total)
+    return token_counts_present(input_count, output_count)
 
 
 def _format_gemini_error(error_payload: Any) -> str:
@@ -420,6 +434,7 @@ class GeminiCLIProvider(ProviderAdapter):
 
             output = ""
             usage = None
+            usage_verified = False
             try:
                 payload = _extract_json_payload(stdout_text)
                 if isinstance(payload, dict) and payload.get("error"):
@@ -429,6 +444,7 @@ class GeminiCLIProvider(ProviderAdapter):
                 output = _extract_text_payload(payload)
                 if isinstance(payload, dict):
                     usage = _normalize_usage(payload.get("stats"))
+                    usage_verified = _usage_stats_verified(payload.get("stats"))
             except json.JSONDecodeError:
                 output = stdout_text
                 logger.warning("Gemini CLI returned non-JSON output, using raw text")
@@ -443,6 +459,7 @@ class GeminiCLIProvider(ProviderAdapter):
                 text=output,
                 content=output,
                 usage=usage,
+                usage_verified=usage_verified,
                 raw={"stdout": stdout_text},
             )
         finally:

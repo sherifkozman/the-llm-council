@@ -55,6 +55,11 @@ class CouncilConfig(BaseModel):
             "Example: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o', 'google/gemini-pro']"
         ),
     )
+    prompt_cache_auto: bool = Field(
+        default=False, description="Opt in to provider-supported automatic prompt caching."
+    )
+    cost_per_1k_input: dict[str, float] = Field(default_factory=dict)
+    cost_per_1k_output: dict[str, float] = Field(default_factory=dict)
     timeout: int = Field(
         default=120,
         ge=10,
@@ -206,9 +211,17 @@ class CostEstimate(BaseModel):
         default_factory=dict,
         description="Call count per provider",
     )
+    started_provider_calls: dict[str, int] = Field(default_factory=dict)
+    provider_input_tokens: dict[str, int] = Field(default_factory=dict)
+    provider_output_tokens: dict[str, int] = Field(default_factory=dict)
+    provider_usage_verified: dict[str, bool] = Field(default_factory=dict)
+    reported_usage_estimate_usd: float | None = Field(default=None)
     total_input_tokens: int = Field(default=0, description="Total input tokens")
     total_output_tokens: int = Field(default=0, description="Total output tokens")
-    estimated_cost_usd: float = Field(default=0.0, description="Estimated cost in USD")
+    estimated_cost_usd: float | None = Field(
+        default=None, description="Estimated cost in USD, or null when incomplete"
+    )
+    incomplete_reasons: list[str] = Field(default_factory=list)
 
 
 class PhaseTiming(BaseModel):

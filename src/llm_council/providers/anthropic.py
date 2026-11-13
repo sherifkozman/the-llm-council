@@ -20,6 +20,7 @@ from llm_council.providers.base import (
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    token_counts_present,
 )
 
 DEFAULT_MODEL = "claude-opus-4-6"
@@ -412,11 +413,27 @@ class AnthropicProvider(ProviderAdapter):
             async with beta_messages.stream(betas=[STRUCTURED_OUTPUTS_BETA], **kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
+                final_message = getattr(stream, "get_final_message", None)
+                if callable(final_message):
+                    final = self._parse_response(await final_message())
+                    yield GenerateResponse(
+                        usage=final.usage,
+                        usage_verified=final.usage_verified,
+                        finish_reason=final.finish_reason,
+                    )
         else:
             kwargs = _adapt_sdk_kwargs(client.messages.stream, kwargs)
             async with client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
+                final_message = getattr(stream, "get_final_message", None)
+                if callable(final_message):
+                    final = self._parse_response(await final_message())
+                    yield GenerateResponse(
+                        usage=final.usage,
+                        usage_verified=final.usage_verified,
+                        finish_reason=final.finish_reason,
+                    )
 
     def _model_supports_structured_output(self, model: str) -> bool:
         """Check if a specific model supports structured output.
@@ -484,7 +501,14 @@ class AnthropicProvider(ProviderAdapter):
                 )
 
         usage = None
+        usage_verified = False
         if hasattr(response, "usage") and response.usage:
+            usage_verified = token_counts_present(
+                getattr(response.usage, "input_tokens", None),
+                getattr(response.usage, "output_tokens", None),
+                getattr(response.usage, "cache_read_input_tokens", None),
+                getattr(response.usage, "cache_creation_input_tokens", None),
+            )
             input_tokens = response.usage.input_tokens or 0
             cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
             cache_creation_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
@@ -495,9 +519,9 @@ class AnthropicProvider(ProviderAdapter):
                 "completion_tokens": output_tokens,
                 "total_tokens": prompt_tokens + output_tokens,
             }
-            if cache_read_tokens:
+            if token_counts_present(getattr(response.usage, "cache_read_input_tokens", None)):
                 usage["cache_read_tokens"] = cache_read_tokens
-            if cache_creation_tokens:
+            if token_counts_present(getattr(response.usage, "cache_creation_input_tokens", None)):
                 usage["cache_creation_tokens"] = cache_creation_tokens
 
             cache_creation = getattr(response.usage, "cache_creation", None)
@@ -518,6 +542,7 @@ class AnthropicProvider(ProviderAdapter):
             content=text,
             tool_calls=tool_calls,
             usage=usage,
+            usage_verified=usage_verified,
             model=response.model,
             finish_reason=response.stop_reason,
             raw=response,

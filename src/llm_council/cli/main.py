@@ -487,6 +487,11 @@ def _render_result_markdown(
             cost = getattr(cost_estimate, "estimated_cost_usd", None)
             if cost is not None:
                 lines.append(f"- Estimated cost: ${cost:.4f}")
+            else:
+                lines.append("- Total cost: unknown (billing data unavailable)")
+            reported_cost = getattr(cost_estimate, "reported_usage_estimate_usd", None)
+            if reported_cost is not None:
+                lines.append(f"- Estimated cost of normalized reported usage: ${reported_cost:.8g}")
         run_id = getattr(result, "run_id", None)
         if run_id:
             lines.append(f"- Run ID: {run_id}")
@@ -728,6 +733,13 @@ def run(
         int | None,
         typer.Option("--max-tokens", help="Max output tokens"),
     ] = None,
+    prompt_cache_auto: Annotated[
+        bool,
+        typer.Option(
+            "--prompt-cache-auto",
+            help="Opt in to automatic provider caching; provider retention and charges may apply",
+        ),
+    ] = False,
     runtime_profile: Annotated[
         RuntimeProfile,
         typer.Option(
@@ -934,6 +946,7 @@ def run(
                 "context_metadata": context_metadata,
                 "runtime_profile": runtime_profile.value,
                 "reasoning_profile": reasoning_profile.value,
+                "prompt_cache_auto": prompt_cache_auto,
             }
             if output_file:
                 _write_result(output_file, json.dumps(plan, indent=2))
@@ -960,6 +973,7 @@ def run(
         _print(f"  Max tokens: {max_tokens if max_tokens is not None else 'default'}")
         _print(f"  Runtime profile: {runtime_profile.value}")
         _print(f"  Reasoning profile: {reasoning_profile.value}")
+        _print(f"  Automatic prompt cache: {'on' if prompt_cache_auto else 'off'}")
         ctx_display = context[:50] + "..." if context and len(context) > 50 else context or "none"
         _print(f"  Context: {ctx_display}")
         _print(f"  Schema: {effective_schema}")
@@ -995,6 +1009,7 @@ def run(
             mode=resolved_mode,
             temperature=temperature,
             max_tokens=max_tokens,
+            prompt_cache_auto=prompt_cache_auto,
             runtime_profile=runtime_profile,
             reasoning_profile=reasoning_profile,
             system_context=context,
@@ -1049,7 +1064,15 @@ def run(
                 console.print(f"  Duration: {result.duration_ms}ms")
                 console.print(f"  Attempts: {result.synthesis_attempts}")
                 if result.cost_estimate:
-                    console.print(f"  Est. cost: ${result.cost_estimate.estimated_cost_usd:.4f}")
+                    cost = result.cost_estimate.estimated_cost_usd
+                    console.print(
+                        f"  Est. cost: ${cost:.4f}"
+                        if cost is not None
+                        else "  Total cost: unknown (billing data unavailable)"
+                    )
+                    reported_cost = result.cost_estimate.reported_usage_estimate_usd
+                    if reported_cost is not None:
+                        console.print(f"  Normalized reported usage estimate: ${reported_cost:.8g}")
                 if result.execution_plan:
                     console.print("\n[bold]Execution Plan:[/bold]")
                     console.print(
@@ -1513,7 +1536,7 @@ def evaluate(
         raise typer.Exit(1)
 
     _emit_eval_report(report, output_json=output_json, output_file=output_file)
-    if report.failed_cases:
+    if report.failed_cases or report.total_cases == 0 or report.execution_complete is False:
         raise typer.Exit(1)
 
 
@@ -1627,7 +1650,7 @@ def evaluate_compare(
         raise typer.Exit(1)
 
     _emit_eval_comparison_report(report, output_json=output_json, output_file=output_file)
-    if any(item.report.failed_cases for item in report.variant_results):
+    if not report.ranking or any(item.report.failed_cases for item in report.variant_results):
         raise typer.Exit(1)
 
 
@@ -1697,6 +1720,8 @@ def _emit_eval_report(
         f"Criteria: {report.passed_criteria}/{report.total_criteria} passed\n"
         f"Duration: {report.duration_ms}ms"
     )
+    if report.execution_complete is False:
+        summary += f"\nCases evaluated: {report.total_cases}/{report.selected_cases} (incomplete)"
     title = f"[green]Eval: {report.dataset_name}[/green]"
     border_style = "green" if report.failed_cases == 0 else "yellow"
     console.print(Panel(summary, title=title, border_style=border_style))
@@ -1789,6 +1814,10 @@ def _emit_eval_comparison_report(
             ", ".join(item.providers),
         )
     console.print(table)
+    if report.ineligible_variants:
+        console.print("\n[bold]Unranked variants:[/bold]")
+        for name, reason in report.ineligible_variants.items():
+            console.print(f"  - {name}: {reason}")
 
 
 @app.command()

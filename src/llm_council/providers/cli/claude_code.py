@@ -27,6 +27,7 @@ from llm_council.providers.base import (
     ProviderAdapter,
     ProviderCapabilities,
     classify_error,
+    token_counts_present,
 )
 from llm_council.providers.cli._compatibility import (
     native_identity,
@@ -86,17 +87,22 @@ def _normalize_usage(raw_usage: Any) -> dict[str, int] | None:
     if not isinstance(raw_usage, dict):
         return None
     try:
-        input_tokens = int(raw_usage.get("input_tokens", 0) or 0) + int(
-            raw_usage.get("cache_read_input_tokens", 0) or 0
-        )
+        cache_read = int(raw_usage.get("cache_read_input_tokens", 0) or 0)
+        cache_creation = int(raw_usage.get("cache_creation_input_tokens", 0) or 0)
+        input_tokens = int(raw_usage.get("input_tokens", 0) or 0) + cache_read + cache_creation
         output_tokens = int(raw_usage.get("output_tokens", 0) or 0)
     except (TypeError, ValueError, OverflowError) as exc:
         raise RuntimeError("Claude Code invalid terminal usage") from exc
-    return {
+    result = {
         "prompt_tokens": input_tokens,
         "completion_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
     }
+    if cache_read > 0:
+        result["cache_read_tokens"] = cache_read
+    if cache_creation > 0:
+        result["cache_creation_tokens"] = cache_creation
+    return result
 
 
 async def _read_help_terminal(fd: int) -> bytes:
@@ -697,6 +703,18 @@ class ClaudeCodeCLIProvider(ProviderAdapter):
             text=text,
             content=text,
             usage=_normalize_usage(result.get("usage")),
+            usage_verified=isinstance(result.get("usage"), dict)
+            and token_counts_present(
+                *(
+                    result["usage"].get(key)
+                    for key in (
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_read_input_tokens",
+                        "cache_creation_input_tokens",
+                    )
+                )
+            ),
             raw={
                 "stdout": self._redact(stdout_text, env),
                 "stderr": self._redact(stderr_text, env),

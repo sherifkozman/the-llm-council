@@ -1,7 +1,8 @@
 """Native platform qualification on disposable CI runners, with synthetic credentials only.
 
-No live provider calls. The production adapter is used unchanged except that record
-fetching and response endpoints are replaced by test data and a TLS loopback server.
+The adapter uses synthetic credentials and a TLS loopback server. Record fetching
+and response endpoints are replaced by test data. An external OS network sandbox
+is required to prove that the native executable cannot contact other endpoints.
 """
 
 import asyncio
@@ -23,11 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from llm_council.providers.base import GenerateRequest, ReasoningConfig, StructuredOutputConfig
-from llm_council.providers.cli.codex import (
-    CodexCLIProvider,
-    _CodexRuntime,
-    _resolve_codex_executable,
-)
+from llm_council.providers.cli.codex import CodexCLIProvider, _resolve_codex_executable
 
 launcher = Path(sys.argv[1]).resolve(strict=True)
 record_output = Path(sys.argv[2]).resolve()
@@ -57,6 +54,14 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
             relative = path.relative_to(source).as_posix()
             if path == selected:
                 relative = "bin/codex"
+            # Metadata and an optional execution helper differ by distribution.
+            # The full probe validates the reduced, tool-disabled snapshot.
+            if relative in {
+                "codex-package.json",
+                "bin/codex-exec-server",
+                "bin/codex-exec-server.exe",
+            }:
+                continue
             files[relative] = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
             is_executable = (
                 path.suffix.lower() == ".exe"
@@ -319,9 +324,15 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
         ).encode()
         provider = CodexCLIProvider(cli_path=str(launcher), default_model="gpt-6.1-sol", timeout=45)
 
-        async def fake_fetch(*, deadline):
+        async def fake_fetch(*, deadline, shared=False):
             provider._require_remaining(deadline)
-            return payload
+            document = json.loads(payload)
+            document["records"][0]["contexts"] = [
+                context
+                for context in document["records"][0]["contexts"]
+                if (context["auth"] == "chatgpt") == shared
+            ]
+            return json.dumps(document).encode()
 
         provider._fetch_compatibility_record = fake_fetch
         claims = {
@@ -343,13 +354,23 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
                     "access_token": token,
                     "refresh_token": "dummy-refresh",
                     "account_id": "dummy-account",
+                    "oauth_provenance": {
+                        "issuer": "https://auth.openai.com",
+                        "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+                    },
+                    "login_owner_id": "dummy-owner",
                 },
             }
         ).encode()
         original_run = provider._run_cli
+        assert shutil.which("codex-exec-server", path=os.defpath) is None
 
         async def route_to_loopback(cmd, **kwargs):
             if Path(cmd[0]).name in ("codex", "codex.exe") and len(cmd) > 1 and cmd[1] == "exec":
+                snapshot_bin = Path(cmd[0]).parent
+                assert not (snapshot_bin / "codex-exec-server").exists()
+                assert not (snapshot_bin / "codex-exec-server.exe").exists()
+                assert not (snapshot_bin.parent / "codex-package.json").exists()
                 key = (
                     "chatgpt_base_url"
                     if scenario["context"]["auth"] == "chatgpt"
@@ -375,20 +396,20 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
                 text='{"ok":true}' if context["output"] == "json_schema" else "SYNTHETIC_FINAL",
             )
             captured.clear()
-            native_config = {"model_provider": "openai", "cli_auth_credentials_store": "file"}
+            native_home = root / "selected-codex-home"
+            native_home.mkdir(exist_ok=True)
+            os.environ["CODEX_HOME"] = str(native_home)
+            native_config = 'model_provider = "openai"\ncli_auth_credentials_store = "file"\n'
+            if context["auth"] == "chatgpt":
+                (native_home / "auth.json").write_bytes(auth_bytes)
+                (native_home / "AGENTS.md").write_text("SYNTHETIC_GLOBAL_INSTRUCTIONS")
+            else:
+                (native_home / "auth.json").write_text(
+                    json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "dummy-native-api-key"})
+                )
             if context["endpoint"] == "custom":
-                native_config["openai_base_url"] = base_url + "/v1"
-            runtime = _CodexRuntime(
-                {},
-                auth_bytes
-                if context["auth"] == "chatgpt"
-                else json.dumps(
-                    {"auth_mode": "apikey", "OPENAI_API_KEY": "dummy-native-api-key"}
-                ).encode(),
-                context["auth"],
-                native_config,
-            )
-            provider._resolve_runtime = lambda: runtime
+                native_config += f"openai_base_url = {json.dumps(base_url + '/v1')}\n"
+            (native_home / "config.toml").write_text(native_config)
             response = await provider.generate(
                 GenerateRequest(
                     prompt="Synthetic test only",
@@ -410,17 +431,44 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
             )
             assert response.text == scenario["text"] and captured
             for body, bearer, route, account in captured:
-                tools = body.get("tools")
-                if tools is None:
-                    candidates = [
-                        item["tools"]
-                        for item in body.get("input", [])
-                        if item.get("type") == "additional_tools"
-                    ]
-                    tools = (
-                        candidates[0] if len(candidates) == 1 else [] if not candidates else None
-                    )
-                assert tools == [], "Native request unexpectedly advertised tools"
+                allowed_fields = {
+                    "client_metadata",
+                    "include",
+                    "input",
+                    "instructions",
+                    "model",
+                    "parallel_tool_calls",
+                    "prompt_cache_key",
+                    "reasoning",
+                    "store",
+                    "stream",
+                    "text",
+                    "tool_choice",
+                    "tools",
+                    "type",
+                }
+                assert not (set(body) - allowed_fields), "Unrecognized native request field"
+                items = body.get("input")
+                assert isinstance(items, list) and items, "Unrecognized native request shape"
+                assert body.get("tool_choice") == "auto", "Unrecognized native tool mode"
+                assert all(
+                    isinstance(item, dict)
+                    and item.get("type")
+                    in {
+                        "message",
+                        "additional_tools",
+                        "function_call",
+                        "function_call_output",
+                        "custom_tool_call",
+                        "custom_tool_call_output",
+                    }
+                    for item in items
+                ), "Unrecognized native input item"
+                assert body.get("tools", []) == [], "Native request unexpectedly advertised tools"
+                assert all(
+                    item.get("type") != "additional_tools" or item.get("tools") == []
+                    for item in items
+                ), "Native request unexpectedly advertised additional tools"
                 expected_token = token if context["auth"] == "chatgpt" else "dummy-native-api-key"
                 assert bearer == "Bearer " + expected_token
                 assert route == (
@@ -430,6 +478,7 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
                 )
                 if context["auth"] == "chatgpt":
                     assert account == "dummy-account"
+                    assert "SYNTHETIC_GLOBAL_INSTRUCTIONS" in json.dumps(body)
                 if context["reasoning"] == "high":
                     assert body["reasoning"]["effort"] == "high"
             if attack:
@@ -442,6 +491,8 @@ with tempfile.TemporaryDirectory(prefix="council-native-platform-") as temporary
                 assert outputs and "UNSOLICITED_EXECUTED" not in str(outputs)
                 assert any(word in str(outputs).lower() for word in ("unsupported", "unknown"))
             assert not canary.exists()
+            if context["auth"] == "chatgpt":
+                assert (native_home / "auth.json").read_bytes() == auth_bytes
             assert not list(root.glob("llm-council-codex-home-*"))
             assert not list(root.glob("llm-council-codex-snapshot-*"))
             print(

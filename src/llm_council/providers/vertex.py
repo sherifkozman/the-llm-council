@@ -41,6 +41,9 @@ from llm_council.providers.base import (
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    cache_read_reconciles,
+    token_counts_present,
+    token_usage_reconciles,
 )
 
 # Import shared schema stripping logic from Gemini API provider
@@ -656,19 +659,33 @@ class VertexAIProvider(ProviderAdapter):
         answer_text = text if text_parts and (preserve_whitespace or text.strip()) else None
 
         usage = None
+        usage_verified = False
         if hasattr(response, "usage_metadata") and response.usage_metadata:
             um = response.usage_metadata
+            usage_verified = token_usage_reconciles(
+                getattr(um, "prompt_token_count", None),
+                getattr(um, "candidates_token_count", None),
+                getattr(um, "total_token_count", None),
+                0 if getattr(um, "thoughts_token_count", None) is None else um.thoughts_token_count,
+            )
+
+            def safe_count(field: str) -> int:
+                value = getattr(um, field, None)
+                return cast(int, value) if token_counts_present(value) else 0
+
             usage = {
-                "prompt_tokens": getattr(um, "prompt_token_count", 0) or 0,
-                "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
-                "total_tokens": getattr(um, "total_token_count", 0) or 0,
+                "prompt_tokens": safe_count("prompt_token_count"),
+                "completion_tokens": safe_count("candidates_token_count"),
+                "total_tokens": safe_count("total_token_count"),
             }
             reasoning_tokens = _positive_int(getattr(um, "thoughts_token_count", 0))
             if reasoning_tokens:
                 usage["reasoning_tokens"] = reasoning_tokens
-            cache_read_tokens = _positive_int(getattr(um, "cached_content_token_count", 0))
-            if cache_read_tokens:
-                usage["cache_read_tokens"] = cache_read_tokens
+            cached = getattr(um, "cached_content_token_count", None)
+            cache_valid = cache_read_reconciles(getattr(um, "prompt_token_count", None), cached)
+            usage_verified = usage_verified and cache_valid
+            if cache_valid and token_counts_present(cached):
+                usage["cache_read_tokens"] = cast(int, cached)
 
         finish_reason = None
         fr = getattr(candidate, "finish_reason", None)
@@ -680,6 +697,8 @@ class VertexAIProvider(ProviderAdapter):
             content=answer_text,
             tool_calls=tool_calls or None,
             usage=usage,
+            usage_invalid=usage is not None and not usage_verified,
+            usage_verified=usage_verified,
             finish_reason=finish_reason,
             raw=response,
             prompt_cache=prompt_cache,
@@ -786,11 +805,27 @@ class VertexAIProvider(ProviderAdapter):
             async with beta_messages.stream(betas=[STRUCTURED_OUTPUTS_BETA], **kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
+                final_message = getattr(stream, "get_final_message", None)
+                if callable(final_message):
+                    final = self._parse_claude_response(await final_message())
+                    yield GenerateResponse(
+                        usage=final.usage,
+                        usage_verified=final.usage_verified,
+                        finish_reason=final.finish_reason,
+                    )
         else:
             kwargs = _adapt_sdk_kwargs(client.messages.stream, kwargs)
             async with client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     yield GenerateResponse(text=text, content=text)
+                final_message = getattr(stream, "get_final_message", None)
+                if callable(final_message):
+                    final = self._parse_claude_response(await final_message())
+                    yield GenerateResponse(
+                        usage=final.usage,
+                        usage_verified=final.usage_verified,
+                        finish_reason=final.finish_reason,
+                    )
 
     def _parse_claude_response(self, response: Any) -> GenerateResponse:
         """Parse Claude API response."""
@@ -812,7 +847,14 @@ class VertexAIProvider(ProviderAdapter):
                 )
 
         usage = None
+        usage_verified = False
         if hasattr(response, "usage") and response.usage:
+            usage_verified = token_counts_present(
+                getattr(response.usage, "input_tokens", None),
+                getattr(response.usage, "output_tokens", None),
+                getattr(response.usage, "cache_read_input_tokens", None),
+                getattr(response.usage, "cache_creation_input_tokens", None),
+            )
             input_tokens = response.usage.input_tokens or 0
             cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
             cache_creation_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
@@ -823,9 +865,9 @@ class VertexAIProvider(ProviderAdapter):
                 "completion_tokens": output_tokens,
                 "total_tokens": prompt_tokens + output_tokens,
             }
-            if cache_read_tokens:
+            if token_counts_present(getattr(response.usage, "cache_read_input_tokens", None)):
                 usage["cache_read_tokens"] = cache_read_tokens
-            if cache_creation_tokens:
+            if token_counts_present(getattr(response.usage, "cache_creation_input_tokens", None)):
                 usage["cache_creation_tokens"] = cache_creation_tokens
 
         return GenerateResponse(
@@ -833,6 +875,7 @@ class VertexAIProvider(ProviderAdapter):
             content=text,
             tool_calls=tool_calls,
             usage=usage,
+            usage_verified=usage_verified,
             model=response.model,
             finish_reason=response.stop_reason,
             raw=response,

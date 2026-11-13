@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -21,6 +21,7 @@ class EvalExpectations(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     success: bool | None = True
+    execution_status: Literal["completed", "degraded", "failed", "cancelled"] | None = None
     routed: bool | None = None
     execution_plan_values: dict[str, Any] = Field(default_factory=dict)
     required_capabilities: list[str] = Field(default_factory=list)
@@ -93,6 +94,7 @@ class EvalCaseResult(BaseModel):
     mode_key: str
     passed: bool
     success: bool
+    execution_status: Literal["completed", "degraded", "failed", "cancelled"] | None = None
     error: str | None = None
     validation_errors: list[str] | None = None
     provider_errors: dict[str, str] | None = None
@@ -124,6 +126,8 @@ class EvalReport(BaseModel):
     dataset_name: str
     dataset_description: str | None = None
     total_cases: int
+    selected_cases: int | None = None
+    execution_complete: bool | None = None
     passed_cases: int
     failed_cases: int
     case_pass_rate: float
@@ -186,6 +190,7 @@ class EvalComparisonReport(BaseModel):
     variants_description: str | None = None
     best_variant: str | None = None
     ranking: list[str] = Field(default_factory=list)
+    ineligible_variants: dict[str, str] = Field(default_factory=dict)
     variant_results: list[EvalVariantResult]
 
 
@@ -253,7 +258,12 @@ async def run_eval_dataset(
             break
 
     duration_ms = int((time.perf_counter() - started) * 1000)
-    return build_eval_report(dataset, results, duration_ms=duration_ms)
+    return build_eval_report(
+        dataset,
+        results,
+        duration_ms=duration_ms,
+        selected_case_ids=[case.id for case in selected_cases],
+    )
 
 
 async def run_eval_comparison(
@@ -292,8 +302,30 @@ async def run_eval_comparison(
             )
         )
 
+    selected_case_ids = [
+        case.id for case in _select_cases(dataset.cases, case_ids=case_ids, max_cases=max_cases)
+    ]
+    cases_by_id = {case.id: case for case in dataset.cases}
+    eligible = []
+    ineligible: dict[str, str] = {}
+    for item in results:
+        evaluated_ids = [case.case_id for case in item.report.case_results]
+        if not selected_case_ids:
+            ineligible[item.variant_name] = "No evaluation cases were selected."
+        elif evaluated_ids != selected_case_ids:
+            ineligible[item.variant_name] = "Selected evaluation cases were not all completed."
+        elif any(
+            case.execution_status != "completed"
+            and cases_by_id[case.case_id].expectations.success is None
+            and cases_by_id[case.case_id].expectations.execution_status is None
+            for case in item.report.case_results
+        ):
+            ineligible[item.variant_name] = "A non-completed run had no expected execution status."
+        else:
+            eligible.append(item)
+
     ranked = sorted(
-        results,
+        eligible,
         key=lambda item: (
             item.report.case_pass_rate,
             item.report.criteria_pass_rate,
@@ -309,6 +341,7 @@ async def run_eval_comparison(
         variants_description=variants.description,
         best_variant=ranking[0] if ranking else None,
         ranking=ranking,
+        ineligible_variants=ineligible,
         variant_results=results,
     )
 
@@ -462,12 +495,26 @@ def evaluate_case_result(case: EvalCase, result: CouncilResult) -> EvalCaseResul
             )
         )
 
+    expected_status = expectations.execution_status
+    if expected_status is None and expectations.success is True:
+        expected_status = "completed"
+    if expected_status is not None:
+        criteria.append(
+            _criterion(
+                "execution_status",
+                result.execution_status == expected_status,
+                expected=expected_status,
+                actual=result.execution_status,
+            )
+        )
+
     passed = all(item.passed for item in criteria)
     return EvalCaseResult(
         case_id=case.id,
         mode_key=case.mode_key,
         passed=passed,
         success=result.success,
+        execution_status=result.execution_status,
         error=result.error,
         validation_errors=list(result.validation_errors) if result.validation_errors else None,
         provider_errors=dict(result.provider_errors) if result.provider_errors else None,
@@ -482,9 +529,13 @@ def build_eval_report(
     case_results: list[EvalCaseResult],
     *,
     duration_ms: int,
+    selected_case_ids: list[str] | None = None,
 ) -> EvalReport:
-    """Aggregate case results into a report and per-mode scorecards."""
+    """Aggregate case results and retain selected-case coverage."""
 
+    if selected_case_ids is None:
+        selected_case_ids = [case.id for case in dataset.cases]
+    completed_ids = [case.case_id for case in case_results]
     total_cases = len(case_results)
     passed_cases = sum(1 for item in case_results if item.passed)
     failed_cases = total_cases - passed_cases
@@ -497,6 +548,8 @@ def build_eval_report(
         dataset_name=dataset.name,
         dataset_description=dataset.description,
         total_cases=total_cases,
+        selected_cases=len(selected_case_ids),
+        execution_complete=completed_ids == selected_case_ids,
         passed_cases=passed_cases,
         failed_cases=failed_cases,
         case_pass_rate=_ratio(passed_cases, total_cases),

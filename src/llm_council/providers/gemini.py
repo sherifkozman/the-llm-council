@@ -21,6 +21,8 @@ from llm_council.providers.base import (
     ProviderAdapter,
     ProviderCapabilities,
     ReasoningConfig,
+    cache_read_reconciles,
+    token_counts_present,
 )
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
@@ -39,6 +41,7 @@ DEFAULT_RETRY_ATTEMPTS = 1
 STRUCTURED_OUTPUT_MODEL_PREFIXES = (
     "gemini-4-argon",
     "gemini-4-carbon",
+    "gemini-4-hydrogen",
     # Gemini 3.x family (December 2025+)
     "gemini-3",  # All Gemini 3.x models (gemini-3-pro, gemini-3-flash, etc.)
     "gemini-3.0",  # Explicit 3.0 version
@@ -582,8 +585,9 @@ class GeminiProvider(ProviderAdapter):
             config=config if config else None,
         )
         async for chunk in stream:
-            if chunk.text:
-                yield GenerateResponse(text=chunk.text, content=chunk.text)
+            parsed = self._parse_response(chunk).model_copy(update={"raw": None})
+            if parsed.text or parsed.usage or parsed.finish_reason:
+                yield parsed
 
     def _parse_response(
         self, response: Any, *, prompt_cache: dict[str, Any] | None = None
@@ -602,19 +606,43 @@ class GeminiProvider(ProviderAdapter):
                         text = "".join(part.text for part in parts if hasattr(part, "text"))
 
         usage = None
+        usage_verified = False
         if hasattr(response, "usage_metadata") and response.usage_metadata:
             um = response.usage_metadata
+            counts = [
+                getattr(um, "prompt_token_count", None),
+                getattr(um, "candidates_token_count", None),
+            ]
+            total = getattr(um, "total_token_count", None)
+            thoughts = getattr(um, "thoughts_token_count", None)
+
+            def valid(n: Any) -> bool:
+                return isinstance(n, int) and not isinstance(n, bool) and n >= 0
+
+            usage_verified = (
+                all(valid(n) for n in counts)
+                and valid(total)
+                and (thoughts is None or valid(thoughts))
+                and total == sum(cast(int, n) for n in counts) + (thoughts or 0)
+            )
+
+            def safe_count(field: str) -> int:
+                value = getattr(um, field, None)
+                return cast(int, value) if token_counts_present(value) else 0
+
             usage = {
-                "prompt_tokens": getattr(um, "prompt_token_count", 0) or 0,
-                "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
-                "total_tokens": getattr(um, "total_token_count", 0) or 0,
+                "prompt_tokens": safe_count("prompt_token_count"),
+                "completion_tokens": safe_count("candidates_token_count"),
+                "total_tokens": safe_count("total_token_count"),
             }
             reasoning_tokens = _positive_int(getattr(um, "thoughts_token_count", 0))
             if reasoning_tokens:
                 usage["reasoning_tokens"] = reasoning_tokens
-            cache_read_tokens = _positive_int(getattr(um, "cached_content_token_count", 0))
-            if cache_read_tokens:
-                usage["cache_read_tokens"] = cache_read_tokens
+            cached = getattr(um, "cached_content_token_count", None)
+            cache_valid = cache_read_reconciles(getattr(um, "prompt_token_count", None), cached)
+            usage_verified = usage_verified and cache_valid
+            if cache_valid and token_counts_present(cached):
+                usage["cache_read_tokens"] = cast(int, cached)
 
         finish_reason = None
         if hasattr(response, "candidates") and response.candidates:
@@ -626,6 +654,8 @@ class GeminiProvider(ProviderAdapter):
             text=text,
             content=text,
             usage=usage,
+            usage_invalid=usage is not None and not usage_verified,
+            usage_verified=usage_verified,
             finish_reason=finish_reason,
             raw=response,
             prompt_cache=prompt_cache,

@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Enable schema-constrained output for Gemini 4 Hydrogen on Gemini and Vertex,
+  and apply the Gemini 4 reasoning output allowance while preserving explicit limits.
+- Update the locked OpenAI Python SDK from 3.46.0 to 3.50.0 and Anthropic SDK
+  from 2.6.0 to 2.8.0; direct SDK wire tests cover Python 3.10 and 3.12.
+- Update the locked Typer version from 0.28.0 to 0.29.1 and Google Auth from
+  2.62.1 to 2.62.2; CLI and provider tests cover Python 3.10 and 3.12.
+- Require Node.js 26.13.1 or newer within the 26.x line for native CLI
+  qualification CI, incorporating the November 2026 security fixes.
+- Codex ChatGPT authentication uses the native selected login home instead of
+  copying refreshable credentials. This path requires a qualified Codex
+  0.167.0 or 0.167.2 build and matching compatibility record; other versions
+  fail closed. Native global instructions are included and native rules are not
+  explicitly suppressed, while user config is ignored for generation. A
+  same-workspace login change can select a different current user.
+- Codex ChatGPT sessions no longer include raw CLI stdout in response metadata
+  or raw CLI error details in failures, because tokens can rotate after the
+  initial redaction snapshot. Safe error categories remain available.
+- Cost reporting: `cost_estimate.estimated_cost_usd` is now nullable and is
+  currently null for new runs because complete billing data is unavailable.
+  Clients must check for null before formatting or arithmetic. The optional
+  `reported_usage_estimate_usd` is a flat-rate approximation for normalized
+  reported tokens, not a provider bill. It can omit charges and usage. The
+  configured rates are supplied through `CouncilConfig`; existing saved results
+  retain their previous values. Source usage is verified only when provider
+  counters are sufficiently complete; otherwise the scoped estimate is unknown.
+- Correct Codex cached-input double counting, preserve Claude Code cache
+  creation usage, and retain terminal stream usage when providers supply it.
+- Reject impossible cache-read counters instead of reporting false cache hits,
+  retain explicit zero readings, and recognize OpenRouter's nested cache writes.
+- Add an explicit default-off automatic prompt-cache control to Council and its
+  CLI; provider capability decisions and cache observations remain visible.
+- Skip the alternate inline-schema synthesis retry after provider timeout;
+  timeout alone does not establish a schema incompatibility.
+- Distinguish timeouts before a provider call starts from upstream timeouts,
+  and record local queue or scheduling wait separately from cancellation cleanup.
+- In planning and security modes, distinguish sourced requirements and reachable
+  control flow from model assumptions and drafts.
+- Evaluation reports now distinguish degraded runs and incomplete case coverage.
+
 ## [0.8.11] - 2026-11-12
 
 ### Fixed

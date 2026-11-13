@@ -106,6 +106,28 @@ def test_vertex_gemini4_default_output_budget_preserves_explicit_override():
     assert orch._phase_max_tokens(4000, phase="draft", provider_name="vertex-ai") == 5000
 
 
+@pytest.mark.parametrize("provider", ["vertex-ai", "gemini"])
+def test_hydrogen_reasoning_budget_respects_explicit_limits(provider):
+    orch = Orchestrator([provider], OrchestratorConfig())
+    orch._resolved_model_overrides = {provider: "gemini-4-hydrogen"}
+    orch._reasoning = ReasoningConfig(enabled=True, thinking_level="high")
+    assert orch._phase_max_tokens(4000, phase="draft", provider_name=provider) == 16000
+    assert orch._phase_max_tokens(2000, phase="critique", provider_name=provider) == 16000
+    assert orch._phase_max_tokens(8000, phase="synthesis", provider_name=provider) == 16000
+    orch._config.max_tokens = 5000
+    assert orch._phase_max_tokens(4000, phase="draft", provider_name=provider) == 5000
+
+    configured = Orchestrator([provider], OrchestratorConfig(max_draft_tokens=1234))
+    configured._resolved_model_overrides = {provider: "gemini-4-hydrogen"}
+    configured._reasoning = ReasoningConfig(enabled=True, thinking_level="high")
+    assert configured._phase_max_tokens(1234, phase="draft", provider_name=provider) == 1234
+
+    bounded = Orchestrator([provider], OrchestratorConfig(runtime_profile="bounded"))
+    bounded._resolved_model_overrides = {provider: "gemini-4-hydrogen"}
+    bounded._reasoning = ReasoningConfig(enabled=True, thinking_level="high")
+    assert bounded._phase_max_tokens(4000, phase="draft", provider_name=provider) == 2000
+
+
 def test_openai_gpt54_high_reasoning_is_preserved_and_sampling_removed():
     request = GenerateRequest(
         prompt="test",

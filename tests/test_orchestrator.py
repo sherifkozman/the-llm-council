@@ -226,7 +226,7 @@ class TestCostEstimate:
         """Test default cost estimate values."""
         estimate = CostEstimate()
         assert estimate.tokens == 0
-        assert estimate.estimated_cost_usd == 0.0
+        assert estimate.estimated_cost_usd is None
 
 
 class TestCacheUsageReporting:
@@ -308,6 +308,8 @@ class TestCacheUsageReporting:
                 "forwarded": False,
                 "metrics_available": False,
                 "observed": False,
+                "cache_read_observed": False,
+                "cache_write_observed": False,
             },
             {
                 "provider": "anthropic",
@@ -315,6 +317,8 @@ class TestCacheUsageReporting:
                 "forwarded": True,
                 "metrics_available": True,
                 "observed": True,
+                "cache_read_observed": True,
+                "cache_write_observed": False,
                 "usage": {"cache_read_tokens": 100},
             },
         ]
@@ -728,6 +732,45 @@ class TestOrchestratorDoctor:
         assert orch._execution_plan["provider_queue_wait_ms"] == {
             "draft": [{"provider": "mock", "wait_ms": 42.5}]
         }
+
+    @pytest.mark.asyncio
+    async def test_timeout_before_provider_starts_is_reported_as_local_wait(self):
+        config = OrchestratorConfig(enable_graceful_degradation=False)
+        with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+            mock_reg.return_value = MagicMock()
+            mock_reg.return_value.get_provider.return_value = MagicMock()
+            orch = Orchestrator(providers=["mock"], config=config)
+        orch._execution_plan = {}
+        adapter = MagicMock()
+        adapter.generate = AsyncMock()
+
+        @asynccontextmanager
+        async def unavailable_slot(_provider_name: str, *, timeout_seconds: float | None = None):
+            try:
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.15)
+                raise
+            yield 0.0
+
+        started = asyncio.get_running_loop().time()
+        with (
+            patch("llm_council.engine.orchestrator.provider_call_slot", unavailable_slot),
+            pytest.raises(TimeoutError, match="before provider call"),
+        ):
+            await orch._call_provider(
+                "mock",
+                adapter,
+                GenerateRequest(prompt="test", timeout_seconds=0.05),
+                phase="draft",
+            )
+        adapter.generate.assert_not_awaited()
+        attempt = orch._execution_plan["provider_attempts"][0]
+        assert attempt["adapter_started"] is False
+        assert attempt["pre_start_wait_ms"] >= 0
+        elapsed_ms = (asyncio.get_running_loop().time() - started) * 1000
+        assert elapsed_ms - attempt["pre_start_wait_ms"] >= 100
+        assert "before provider call" in orch._provider_init_errors["mock"]
 
     @pytest.mark.asyncio
     async def test_doctor_with_failure(self, failing_provider):
@@ -2327,11 +2370,14 @@ class TestOrchestratorPromptFormatting:
 
 
 @pytest.mark.asyncio
-async def test_chunked_vertex_gemini4_keeps_reasoning_output_budget():
+@pytest.mark.parametrize("model", ["gemini-4-carbon", "gemini-4-hydrogen"])
+@pytest.mark.parametrize("override,expected", [(None, 2000), (5000, 5000)])
+async def test_chunked_vertex_gemini4_keeps_reasoning_output_budget(model, override, expected):
     config = OrchestratorConfig(
         system_context=build_file_system_context(),
         runtime_profile=RuntimeProfile.BOUNDED,
-        model_overrides={"vertex-ai": "gemini-4-carbon"},
+        max_tokens=override,
+        model_overrides={"vertex-ai": model},
     )
     provider = CaptureProvider()
     with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
@@ -2341,4 +2387,4 @@ async def test_chunked_vertex_gemini4_keeps_reasoning_output_budget():
     orch._prepare_run("critic")
     await orch._generate_draft("vertex-ai", provider)
     assert len(provider.requests) > 1
-    assert all(request.max_tokens == 2000 for request in provider.requests)
+    assert all(request.max_tokens == expected for request in provider.requests)
