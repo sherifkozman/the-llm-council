@@ -19,6 +19,7 @@ from llm_council.providers.base import (
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    ReasoningConfig,
 )
 
 DEFAULT_MODEL = "gpt-5.4"
@@ -70,6 +71,7 @@ STRUCTURED_OUTPUT_MODELS = frozenset(
 # Model prefixes for easier matching (handles dated versions)
 STRUCTURED_OUTPUT_MODEL_PREFIXES = (
     "gpt-5",  # All GPT-5.x models
+    "gpt-6",
     "gpt-4o",  # All GPT-4o variants
     "gpt-4.1",  # All GPT-4.1 variants
     "o1",  # o1 series
@@ -111,7 +113,17 @@ REASONING_MODEL_PREFIXES = ("o1", "o3", "o4")
 
 # Models that use max_completion_tokens instead of max_tokens
 # GPT-5.x and o-series use the new parameter
-MAX_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+MAX_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
+
+
+def _sampling_unsupported(model: str, reasoning: ReasoningConfig | None) -> bool:
+    if model.startswith(REASONING_MODEL_PREFIXES):
+        return True
+    if model.startswith("gpt-6"):
+        return not (reasoning and reasoning.enabled and reasoning.effort == "none")
+    if model.startswith("gpt-5.4"):
+        return bool(reasoning and reasoning.enabled and reasoning.effort != "none")
+    return False
 
 
 def _make_schema_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
@@ -296,14 +308,16 @@ class OpenAIProvider(ProviderAdapter):
                 kwargs["max_tokens"] = request.max_tokens
         if request.temperature is not None:
             model = request.model or self._default_model
-            if self._model_supports_temperature(model):
+            if self._model_supports_temperature(model, request.reasoning):
                 kwargs["temperature"] = request.temperature
             else:
                 logger.warning(
                     "Model %s does not support temperature parameter; ignored",
                     model,
                 )
-        if request.top_p is not None:
+        if request.top_p is not None and not _sampling_unsupported(
+            request.model or self._default_model, request.reasoning
+        ):
             kwargs["top_p"] = request.top_p
         if request.stop:
             kwargs["stop"] = list(request.stop)
@@ -351,6 +365,8 @@ class OpenAIProvider(ProviderAdapter):
                         model,
                     )
                     effort = "medium"
+                if effort == "none" and model.startswith(("gpt-6-astra", "gpt-6.1-sol")):
+                    raise ValueError(f"{model} does not support reasoning effort none")
                 kwargs["reasoning_effort"] = effort
             else:
                 logger.debug(
@@ -469,15 +485,15 @@ class OpenAIProvider(ProviderAdapter):
             return True
 
         # Check if model starts with any o-series prefix
-        return any(model.startswith(prefix) for prefix in REASONING_MODEL_PREFIXES)
+        return model.startswith(("gpt-6", "gpt-5.4")) or any(
+            model.startswith(prefix) for prefix in REASONING_MODEL_PREFIXES
+        )
 
-    def _model_supports_temperature(self, model: str) -> bool:
-        """Check if a model supports the temperature parameter.
-
-        OpenAI o-series reasoning models reject temperature entirely.
-        """
-
-        return not any(model.startswith(prefix) for prefix in REASONING_MODEL_PREFIXES)
+    def _model_supports_temperature(
+        self, model: str, reasoning: ReasoningConfig | None = None
+    ) -> bool:
+        """Check sampling support for the selected model and effort."""
+        return not _sampling_unsupported(model, reasoning)
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""

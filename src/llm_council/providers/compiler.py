@@ -24,6 +24,7 @@ from llm_council.providers.openai import (
     JSON_MODE_ONLY_MODELS,
     REASONING_MODEL_PREFIXES,
     REASONING_MODELS,
+    _sampling_unsupported,
 )
 from llm_council.providers.openai import (
     STRUCTURED_OUTPUT_MODEL_PREFIXES as OPENAI_STRUCTURED_OUTPUT_MODEL_PREFIXES,
@@ -190,7 +191,10 @@ def compile_request_for_provider(
             )
 
     if identity == "openai":
-        if compiled.temperature is not None and not _openai_supports_temperature(model):
+        if compiled.top_p is not None and _sampling_unsupported(model, compiled.reasoning):
+            update(top_p=None)
+            decide("top_p", "dropped", f"{model} rejects top_p with reasoning")
+        if compiled.temperature is not None and _sampling_unsupported(model, compiled.reasoning):
             update(temperature=None)
             decide("temperature", "dropped", f"{model} rejects temperature")
 
@@ -540,11 +544,9 @@ def _openai_supports_structured_output(model: str) -> bool:
 
 
 def _openai_supports_reasoning(model: str) -> bool:
-    return model in REASONING_MODELS or model.startswith(REASONING_MODEL_PREFIXES)
-
-
-def _openai_supports_temperature(model: str) -> bool:
-    return not _openai_supports_reasoning(model)
+    return model in REASONING_MODELS or model.startswith(
+        (*REASONING_MODEL_PREFIXES, "gpt-6", "gpt-5.4")
+    )
 
 
 def _anthropic_supports_structured_output(model: str) -> bool:
@@ -578,4 +580,4 @@ def _normalize_model_name(model: str) -> str:
     normalized = _strip_vertex_revision(model)
     if "/models/" in normalized:
         normalized = normalized.rsplit("/models/", 1)[1]
-    return normalized
+    return normalized.removeprefix("models/")

@@ -67,6 +67,7 @@ from llm_council.providers.base import (
 )
 from llm_council.providers.compiler import compile_request_for_provider
 from llm_council.providers.concurrency import provider_call_slot
+from llm_council.providers.gemini import _normalize_gemini_model
 from llm_council.providers.registry import get_registry, provider_identity
 from llm_council.schemas import load_schema
 from llm_council.storage.artifacts import ArtifactStore, ArtifactType, get_store
@@ -524,6 +525,12 @@ class CouncilResult(BaseModel):
             for item in entries
             if item.get("evidence_compacted", item.get("compacted")) and item.get("submitted", True)
         )
+        output_warnings = plan.get("output_warnings") or []
+        if output_warnings:
+            self.degradation_report = {
+                **(self.degradation_report or {}),
+                "output_warnings": output_warnings,
+            }
         if context_warnings:
             self.degradation_report = {
                 **(self.degradation_report or {}),
@@ -720,6 +727,25 @@ class Orchestrator:
                     "error_type",
                 ),
             )
+            finish_reason = attempt.get("finish_reason")
+            if (
+                isinstance(finish_reason, str)
+                and len(finish_reason) <= 40
+                and finish_reason.replace("_", "").replace("-", "").isalnum()
+            ):
+                retained["finish_reason"] = finish_reason
+            usage = attempt.get("usage")
+            if isinstance(usage, Mapping):
+                retained["usage"] = {
+                    key: value
+                    for key in (
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "reasoning_tokens",
+                        "total_tokens",
+                    )
+                    if isinstance(value := usage.get(key), int) and value >= 0
+                }
             if isinstance(attempt.get("native_identity"), Mapping):
                 retained["native_identity"] = fields(
                     attempt["native_identity"],
@@ -1136,7 +1162,7 @@ class Orchestrator:
                     "critique", provider_name=provider_name
                 ),
                 max_tokens=self._phase_max_tokens(
-                    self._config.max_critique_tokens, phase="critique"
+                    self._config.max_critique_tokens, phase="critique", provider_name=provider_name
                 ),
                 temperature=self._phase_temperature(self._config.critique_temperature),
                 reasoning=self._reasoning,
@@ -1273,6 +1299,7 @@ class Orchestrator:
                     max_tokens=self._phase_max_tokens(
                         self._config.max_synthesis_tokens,
                         phase="synthesis",
+                        provider_name=provider_name,
                     ),
                     temperature=self._phase_temperature(self._config.synthesis_temperature),
                     reasoning=self._reasoning,
@@ -1366,7 +1393,9 @@ class Orchestrator:
             timeout_seconds=self._provider_request_timeout_seconds(
                 "draft", provider_name=provider_name
             ),
-            max_tokens=self._phase_max_tokens(self._config.max_draft_tokens, phase="draft"),
+            max_tokens=self._phase_max_tokens(
+                self._config.max_draft_tokens, phase="draft", provider_name=provider_name
+            ),
             temperature=self._phase_temperature(self._config.draft_temperature),
             reasoning=self._reasoning,
         )
@@ -1392,6 +1421,21 @@ class Orchestrator:
                     "evidence_pack_chars": chunk_plan["evidence_pack_chars"],
                 }
             chunk_results: list[str] = []
+            chunk_model = request.model
+            if not chunk_model and self._provider_identity(provider_name) in {
+                "vertex-ai",
+                "gemini",
+            }:
+                chunk_model = adapter.resolve_model(None)
+            keep_chunk_budget = (
+                self._provider_identity(provider_name) in {"vertex-ai", "gemini"}
+                and isinstance(chunk_model, str)
+                and _normalize_gemini_model(chunk_model).startswith(
+                    ("gemini-4-argon", "gemini-4-carbon")
+                )
+                and request.reasoning is not None
+                and request.reasoning.enabled
+            )
             for index, chunk in enumerate(chunk_plan["chunks"], start=1):
                 chunk_context = self._render_file_context(chunk_plan["prefix"], chunk)
                 chunk_user_prompt = self._format_draft_prompt_with_context(
@@ -1413,6 +1457,8 @@ class Orchestrator:
                         "max_tokens": (
                             self._config.max_tokens
                             if self._config.max_tokens is not None
+                            else request.max_tokens
+                            if keep_chunk_budget
                             else min(
                                 request.max_tokens or _CHUNKED_DRAFT_MAX_TOKENS,
                                 _CHUNKED_DRAFT_MAX_TOKENS,
@@ -1659,6 +1705,9 @@ class Orchestrator:
                 if isinstance(response.raw, Mapping):
                     capture_native_identity(attempt_record, response.raw.get("native_identity"))
                 self._record_usage(provider_name, response.usage)
+                attempt_record["finish_reason"] = response.finish_reason
+                if response.usage:
+                    attempt_record["usage"] = dict(response.usage)
                 self._record_prompt_cache_observation(
                     phase=phase,
                     provider_name=provider_name,
@@ -1667,6 +1716,16 @@ class Orchestrator:
                     usage=response.usage,
                 )
                 ensure_text_response(response, provider=provider_name, phase=phase or "call")
+                if (response.finish_reason or "").lower() in {"max_tokens", "length"}:
+                    if self._execution_plan is not None:
+                        self._execution_plan["degraded_output"] = True
+                        self._execution_plan.setdefault("output_warnings", []).append(
+                            {
+                                "provider": provider_name,
+                                "phase": phase or "call",
+                                "finish_reason": response.finish_reason,
+                            }
+                        )
                 attempt_record["status"] = "completed"
                 return response
 
@@ -1793,6 +1852,17 @@ class Orchestrator:
                     self._config.max_synthesis_tokens,
                     phase="synthesis",
                 ),
+            },
+            "phase_token_budgets_by_provider": {
+                name: {
+                    phase: self._phase_max_tokens(
+                        getattr(self._config, f"max_{phase}_tokens"),
+                        phase=phase,
+                        provider_name=name,
+                    )
+                    for phase in ("draft", "critique", "synthesis")
+                }
+                for name in self._provider_names
             },
             "provider_request_timeouts": (
                 provider_timeout_map[self._provider_names[0]]
@@ -2229,7 +2299,9 @@ class Orchestrator:
             return 1
         return 2
 
-    def _phase_max_tokens(self, default: int, *, phase: str) -> int:
+    def _phase_max_tokens(
+        self, default: int, *, phase: str, provider_name: str | None = None
+    ) -> int:
         """Return phase token limit, honoring runtime and global overrides."""
 
         if self._config.max_tokens is not None:
@@ -2243,6 +2315,20 @@ class Orchestrator:
             }
             return min(default, bounded_caps.get(phase, default))
 
+        if provider_name and self._provider_identity(provider_name) in {"vertex-ai", "gemini"}:
+            model = self._model_override(provider_name)
+            if not model:
+                adapter = self._providers.get(provider_name)
+                model = adapter.resolve_model(None) if adapter else None
+            phase_field = f"max_{phase}_tokens"
+            if (
+                isinstance(model, str)
+                and _normalize_gemini_model(model).startswith(("gemini-4-argon", "gemini-4-carbon"))
+                and self._reasoning
+                and self._reasoning.enabled
+                and phase_field not in self._config.model_fields_set
+            ):
+                return max(default, 16_000)
         return default
 
     async def _collect_evidence_for_run(self) -> EvidenceBundle:
@@ -2430,6 +2516,18 @@ class Orchestrator:
                 "critique_limit": None,
             }
         )
+
+        full_profile: dict[str, int | None] = {
+            "draft_limit": None,
+            "excerpt_limit": 2**31 - 1,
+            "max_sources": None,
+            "max_findings": None,
+            "critique_limit": None,
+        }
+        if not self._phase_budget_status(provider_name, phase, system_prompt, unabridged)[
+            "over_budget"
+        ]:
+            profiles = [full_profile]
 
         for index, profile in enumerate(profiles):
             candidate_prompt = prompt_builder(profile)
@@ -3024,6 +3122,8 @@ class Orchestrator:
             return
         prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
         completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        if self._provider_identity(provider) in {"vertex-ai", "gemini"}:
+            completion_tokens += usage.get("reasoning_tokens", 0)
         self._input_tokens[provider] = self._input_tokens.get(provider, 0) + prompt_tokens
         self._output_tokens[provider] = self._output_tokens.get(provider, 0) + completion_tokens
         self._record_cache_usage(provider, usage)

@@ -47,7 +47,9 @@ from llm_council.providers.base import (
 from llm_council.providers.gemini import (
     LEGACY_MODEL_PREFIXES,
     STRUCTURED_OUTPUT_MODEL_PREFIXES,
+    _normalize_gemini_model,
     _strip_schema_meta_fields,
+    _validate_gemini4_thinking,
 )
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
@@ -457,6 +459,7 @@ class VertexAIProvider(ProviderAdapter):
         self, request: GenerateRequest, model: str
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate response using Gemini via google-genai SDK."""
+        _validate_gemini4_thinking(model, request.reasoning)
         client = self._get_gemini_client(timeout_ms=self._client_timeout_ms(request))
 
         # Build content - same format as GeminiProvider
@@ -660,6 +663,9 @@ class VertexAIProvider(ProviderAdapter):
                 "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
                 "total_tokens": getattr(um, "total_token_count", 0) or 0,
             }
+            reasoning_tokens = _positive_int(getattr(um, "thoughts_token_count", 0))
+            if reasoning_tokens:
+                usage["reasoning_tokens"] = reasoning_tokens
             cache_read_tokens = _positive_int(getattr(um, "cached_content_token_count", 0))
             if cache_read_tokens:
                 usage["cache_read_tokens"] = cache_read_tokens
@@ -842,11 +848,16 @@ class VertexAIProvider(ProviderAdapter):
 
     def _model_supports_structured_output(self, model: str) -> bool:
         """Check if a Gemini model supports structured output with response_schema."""
-        return any(model.startswith(prefix) for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES)
+        return any(
+            _normalize_gemini_model(model).startswith(prefix)
+            for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES
+        )
 
     def _is_legacy_model(self, model: str) -> bool:
         """Check if a model only supports simple JSON mode (no schema)."""
-        return any(model.startswith(prefix) for prefix in LEGACY_MODEL_PREFIXES)
+        return any(
+            _normalize_gemini_model(model).startswith(prefix) for prefix in LEGACY_MODEL_PREFIXES
+        )
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""

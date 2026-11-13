@@ -2324,3 +2324,21 @@ class TestOrchestratorPromptFormatting:
         assert "Drafts:" in prompt
         assert "Validation errors" in prompt
         assert "Previous error" in prompt
+
+
+@pytest.mark.asyncio
+async def test_chunked_vertex_gemini4_keeps_reasoning_output_budget():
+    config = OrchestratorConfig(
+        system_context=build_file_system_context(),
+        runtime_profile=RuntimeProfile.BOUNDED,
+        model_overrides={"vertex-ai": "gemini-4-carbon"},
+    )
+    provider = CaptureProvider()
+    with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+        mock_reg.return_value.get_provider.return_value = provider
+        orch = Orchestrator(providers=["vertex-ai"], config=config)
+    orch._task = "Review this change"
+    orch._prepare_run("critic")
+    await orch._generate_draft("vertex-ai", provider)
+    assert len(provider.requests) > 1
+    assert all(request.max_tokens == 2000 for request in provider.requests)

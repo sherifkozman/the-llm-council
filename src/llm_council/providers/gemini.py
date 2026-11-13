@@ -20,6 +20,7 @@ from llm_council.providers.base import (
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    ReasoningConfig,
 )
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview"
@@ -36,6 +37,8 @@ DEFAULT_RETRY_ATTEMPTS = 1
 # See: https://ai.google.dev/gemini-api/docs/structured-output
 # Gemini 2.0+ models support structured output
 STRUCTURED_OUTPUT_MODEL_PREFIXES = (
+    "gemini-4-argon",
+    "gemini-4-carbon",
     # Gemini 3.x family (December 2025+)
     "gemini-3",  # All Gemini 3.x models (gemini-3-pro, gemini-3-flash, etc.)
     "gemini-3.0",  # Explicit 3.0 version
@@ -54,6 +57,21 @@ LEGACY_MODEL_PREFIXES = (
     "gemini-1.0",
     "gemini-pro",  # Original Gemini Pro (1.0)
 )
+
+
+def _normalize_gemini_model(model: str) -> str:
+    normalized = model.split("@", 1)[0].rsplit("/models/", 1)[-1]
+    return normalized.removeprefix("models/")
+
+
+def _validate_gemini4_thinking(model: str, reasoning: ReasoningConfig | None) -> None:
+    normalized = _normalize_gemini_model(model)
+    if not normalized.startswith("gemini-4") or not reasoning or not reasoning.enabled:
+        return
+    if reasoning.thinking_level == "minimal":
+        raise ValueError("Gemini 4 does not support minimal thinking_level; use low")
+    if not reasoning.thinking_level and reasoning.budget_tokens:
+        raise ValueError("Gemini 4 requires thinking_level instead of thinking_budget")
 
 
 def _strip_schema_meta_fields(
@@ -395,8 +413,9 @@ class GeminiProvider(ProviderAdapter):
         self, request: GenerateRequest
     ) -> GenerateResponse | AsyncIterator[GenerateResponse]:
         """Generate a response using the Gemini API."""
-        client = self._get_client(timeout_ms=self._client_timeout_ms(request))
         model = request.model or self._default_model
+        _validate_gemini4_thinking(model, request.reasoning)
+        client = self._get_client(timeout_ms=self._client_timeout_ms(request))
 
         # Build content - new SDK uses simple string or list format
         contents: str | list[dict[str, Any]]
@@ -590,6 +609,9 @@ class GeminiProvider(ProviderAdapter):
                 "completion_tokens": getattr(um, "candidates_token_count", 0) or 0,
                 "total_tokens": getattr(um, "total_token_count", 0) or 0,
             }
+            reasoning_tokens = _positive_int(getattr(um, "thoughts_token_count", 0))
+            if reasoning_tokens:
+                usage["reasoning_tokens"] = reasoning_tokens
             cache_read_tokens = _positive_int(getattr(um, "cached_content_token_count", 0))
             if cache_read_tokens:
                 usage["cache_read_tokens"] = cache_read_tokens
@@ -598,7 +620,7 @@ class GeminiProvider(ProviderAdapter):
         if hasattr(response, "candidates") and response.candidates:
             fr = getattr(response.candidates[0], "finish_reason", None)
             if fr:
-                finish_reason = str(fr)
+                finish_reason = str(getattr(fr, "value", fr))
 
         return GenerateResponse(
             text=text,
@@ -622,7 +644,10 @@ class GeminiProvider(ProviderAdapter):
             True if the model supports response_schema in generation_config.
         """
         # Check if model starts with any supported prefix (Gemini 2.0+)
-        return any(model.startswith(prefix) for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES)
+        return any(
+            _normalize_gemini_model(model).startswith(prefix)
+            for prefix in STRUCTURED_OUTPUT_MODEL_PREFIXES
+        )
 
     def _is_legacy_model(self, model: str) -> bool:
         """Check if a model is a legacy model that only supports JSON mode.
@@ -633,7 +658,9 @@ class GeminiProvider(ProviderAdapter):
         Returns:
             True if the model only supports simple JSON mode (no schema).
         """
-        return any(model.startswith(prefix) for prefix in LEGACY_MODEL_PREFIXES)
+        return any(
+            _normalize_gemini_model(model).startswith(prefix) for prefix in LEGACY_MODEL_PREFIXES
+        )
 
     async def supports(self, capability: str) -> bool:
         """Check if the provider supports a capability."""
