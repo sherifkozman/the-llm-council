@@ -34,6 +34,29 @@ def test_shared_feed_only_authorizes_chatgpt_contexts():
         )
 
 
+def test_shared_feed_includes_qualified_linux_x86_64_codex_01672():
+    path = Path(__file__).resolve().parents[1] / "compatibility" / "codex-shared-v1.json"
+    records = json.loads(path.read_text())["records"]
+    linux = [
+        build
+        for build in records
+        if (build["os"], build["arch"], build["version"])
+        == ("linux", "x86_64", "codex-cli 0.167.2")
+    ]
+    assert len(linux) == 1
+    assert {
+        (context["model"], context["reasoning"], context["output"])
+        for context in linux[0]["contexts"]
+    } == {
+        ("gpt-6.1-sol", reasoning, output)
+        for reasoning in ("default", "high")
+        for output in ("text", "json_schema")
+    }
+    assert all(
+        context["auth"] == context["endpoint"] == "chatgpt" for context in linux[0]["contexts"]
+    )
+
+
 def synthetic_package(tmp_path, catalog=CATALOG):
     root = tmp_path / "package"
     executable = root / "bin/codex"

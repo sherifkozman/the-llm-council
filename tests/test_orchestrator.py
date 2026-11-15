@@ -2388,3 +2388,26 @@ async def test_chunked_vertex_gemini4_keeps_reasoning_output_budget(model, overr
     await orch._generate_draft("vertex-ai", provider)
     assert len(provider.requests) > 1
     assert all(request.max_tokens == expected for request in provider.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override,expected",
+    [(None, 900), (5000, 5000)],
+)
+async def test_bounded_chunked_openrouter_glm52_preserves_limits(override, expected):
+    config = OrchestratorConfig(
+        system_context=build_file_system_context(file_count=6),
+        runtime_profile=RuntimeProfile.BOUNDED,
+        max_tokens=override,
+        model_overrides={"openrouter": "z-ai/glm-5.2"},
+    )
+    provider = CaptureProvider()
+    with patch("llm_council.engine.orchestrator.get_registry") as mock_reg:
+        mock_reg.return_value.get_provider.return_value = provider
+        orch = Orchestrator(providers=["openrouter"], config=config)
+    orch._task = "Review this change"
+    orch._prepare_run("critic")
+    await orch._generate_draft("openrouter", provider)
+    assert len(provider.requests) > 1
+    assert all(request.max_tokens == expected for request in provider.requests)

@@ -106,6 +106,33 @@ def test_vertex_gemini4_default_output_budget_preserves_explicit_override():
     assert orch._phase_max_tokens(4000, phase="draft", provider_name="vertex-ai") == 5000
 
 
+def test_openrouter_glm52_high_reasoning_budget_respects_explicit_limits():
+    orch = Orchestrator(["openrouter"], OrchestratorConfig())
+    orch._resolved_model_overrides = {"openrouter": "z-ai/glm-5.2"}
+    orch._reasoning = ReasoningConfig(enabled=True, effort="high", budget_tokens=16384)
+    assert orch._phase_max_tokens(4000, phase="draft", provider_name="openrouter") == 32768
+    orch._config.max_tokens = 5000
+    assert orch._phase_max_tokens(4000, phase="draft", provider_name="openrouter") == 5000
+
+    configured = Orchestrator(["openrouter"], OrchestratorConfig(max_draft_tokens=1234))
+    configured._resolved_model_overrides = {"openrouter": "z-ai/glm-5.2"}
+    configured._reasoning = orch._reasoning
+    assert configured._phase_max_tokens(1234, phase="draft", provider_name="openrouter") == 1234
+
+    bounded = Orchestrator(["openrouter"], OrchestratorConfig(runtime_profile="bounded"))
+    bounded._resolved_model_overrides = {"openrouter": "z-ai/glm-5.2"}
+    bounded._reasoning = orch._reasoning
+    assert bounded._phase_max_tokens(4000, phase="draft", provider_name="openrouter") == 2000
+
+    other_model = Orchestrator(["openrouter"], OrchestratorConfig())
+    other_model._resolved_model_overrides = {"openrouter": "other/model"}
+    other_model._reasoning = orch._reasoning
+    assert other_model._phase_max_tokens(4000, phase="draft", provider_name="openrouter") == 4000
+    other_model._resolved_model_overrides = {"openrouter": "z-ai/glm-5.2"}
+    other_model._reasoning = ReasoningConfig(enabled=False)
+    assert other_model._phase_max_tokens(4000, phase="draft", provider_name="openrouter") == 4000
+
+
 @pytest.mark.parametrize("provider", ["vertex-ai", "gemini"])
 def test_hydrogen_reasoning_budget_respects_explicit_limits(provider):
     orch = Orchestrator([provider], OrchestratorConfig())
