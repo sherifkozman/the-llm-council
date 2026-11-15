@@ -68,7 +68,7 @@ boundaries, complete result files and execution-status handling. The shipped
 skill and caller examples require Council 0.8.5 or later for automatic evidence
 containment and dependency security floors, in addition to capability-based
 Claude admission and the earlier reporting fixes. See the
-[0.9.1 release notes](docs/releases/0.9.1.md) for the latest documentation
+[0.9.2 release notes](docs/releases/0.9.2.md) for the latest documentation
 and plugin metadata, and [0.8.5 release notes](docs/releases/0.8.5.md) for
 containment details.
 
@@ -311,7 +311,7 @@ Codex owns token refresh; the native global `AGENTS.md` instructions are also
 used. Council ignores native user configuration during generation to prevent
 unintended MCP servers and tools. It does not explicitly suppress native rules;
 full policy parity has not been established. This path is
-qualified only for Codex 0.167.0 and 0.167.2 on builds covered by the public
+qualified only for Codex 0.167.0, 0.167.2 and 0.169.0 on builds covered by the public
 compatibility record. It selects the native login at use time within the
 workspace selected when the request starts; a same-workspace login change may
 select a different user. API-key authentication remains isolated. The restricted
@@ -759,7 +759,7 @@ After publication and approval to update the installed tool, preserve any local
 package edits and the uv receipt, then replace the exact version constraint:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.9.1'
+uv tool install --reinstall 'the-llm-council[all]==0.9.2'
 ```
 
 This targets the uv-managed tool and its exposed executable, and updates the

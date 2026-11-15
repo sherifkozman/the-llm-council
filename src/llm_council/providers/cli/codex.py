@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_FLAGS = "--sandbox read-only --skip-git-repo-check"
 _CLEANUP_SECONDS = 1.0
 _MAX_PROBE_OUTPUT_BYTES = 8 * 1024 * 1024
-_SHARED_LOGIN_VERSIONS = frozenset({"codex-cli 0.167.0", "codex-cli 0.167.2"})
+_SHARED_LOGIN_VERSIONS = frozenset({"codex-cli 0.167.0", "codex-cli 0.167.2", "codex-cli 0.169.0"})
 _OPENAI_REFRESH_URL = "https://auth.openai.com/oauth/token"
 _GENERATION_CONFIG = {
     "features.shell_tool": False,

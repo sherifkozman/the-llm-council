@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.9.2 - 2026-11-15
+
+- Qualify shared ChatGPT login for the exact Codex 0.169.0 macOS ARM and
+  Linux x86-64 inventories and tested request contexts. Other builds and
+  contexts remain fail-closed.
+
 ## 0.9.1 - 2026-11-15
 
 - Recognize Python 3.10 asyncio timeouts when deciding synthesis fallback.

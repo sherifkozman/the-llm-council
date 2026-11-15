@@ -57,6 +57,47 @@ def test_shared_feed_includes_qualified_linux_x86_64_codex_01672():
     )
 
 
+@pytest.mark.parametrize("os_name,architecture", [("darwin", "arm64"), ("linux", "x86_64")])
+def test_shared_feed_includes_qualified_codex_01690(os_name, architecture):
+    path = Path(__file__).resolve().parents[1] / "compatibility" / "codex-shared-v1.json"
+    document = json.loads(path.read_text())
+    assert document["issued_at"] >= "2026-11-15T00:00:00Z"
+    assert document["expires_at"] > document["issued_at"]
+    issued = datetime.strptime(document["issued_at"], "%Y-%m-%dT%H:%M:%SZ")
+    expires = datetime.strptime(document["expires_at"], "%Y-%m-%dT%H:%M:%SZ")
+    assert expires - issued >= timedelta(days=30)
+    builds = document["records"]
+    matches = [
+        build
+        for build in builds
+        if (build["os"], build["arch"], build["version"])
+        == (os_name, architecture, "codex-cli 0.169.0")
+    ]
+    assert len(matches) == 1
+    assert (
+        matches[0]["catalog_sha256"]
+        == "9e01cd50ec8c4ba6d782413d1154cb2dbe1da63e014d622631b0603bc19659d6"
+    )
+    expected_models = {"gpt-6.1-sol"}
+    if (os_name, architecture) == ("darwin", "arm64"):
+        expected_models.add("gpt-5.6-sol")
+    assert {
+        (
+            context["auth"],
+            context["endpoint"],
+            context["model"],
+            context["reasoning"],
+            context["output"],
+        )
+        for context in matches[0]["contexts"]
+    } == {
+        ("chatgpt", "chatgpt", model, reasoning, output)
+        for model in expected_models
+        for reasoning in ("default", "high")
+        for output in ("text", "json_schema")
+    }
+
+
 def synthetic_package(tmp_path, catalog=CATALOG):
     root = tmp_path / "package"
     executable = root / "bin/codex"
