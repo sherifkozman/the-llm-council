@@ -736,7 +736,7 @@ async def test_cancellation_reaps_owned_child(isolated_env, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom", [False, True])
-@pytest.mark.parametrize("version", ["0.167.0", "0.167.2"])
+@pytest.mark.parametrize("version", ["0.167.0", "0.167.2", "0.169.0"])
 async def test_chatgpt_login_uses_native_home_without_copying_refresh_token(
     isolated_env, tmp_path, monkeypatch, custom, version
 ):
@@ -2168,7 +2168,7 @@ def test_native_adapter_tools_cannot_execute_and_auth_route_is_preserved(
         check=True,
         timeout=5,
     ).stdout.strip()
-    shared_versions = {"codex-cli 0.167.0", "codex-cli 0.167.2"}
+    shared_versions = {"codex-cli 0.167.0", "codex-cli 0.167.2", "codex-cli 0.169.0"}
     if refresh_concurrent and version not in shared_versions:
         pytest.skip("refresh race proof requires an inventoried Codex version")
     if shared_canary:
