@@ -1,5 +1,6 @@
 """A synthesis timeout is not evidence that native JSON schemas are unsupported."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +16,7 @@ from llm_council.providers.base import GenerateResponse
         TimeoutError("deadline exceeded"),
         TimeoutError(),
         TimeoutError("operation failed"),
+        asyncio.TimeoutError(),
         RuntimeError("wrapper"),
         type("GatewayTimeout", (Exception,), {"code": 504})("gateway failure"),
     ],

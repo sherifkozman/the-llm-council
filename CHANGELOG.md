@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.9.1 - 2026-11-15
+
+- Recognize Python 3.10 asyncio timeouts when deciding synthesis fallback.
+- Allow a higher default output budget for high-reasoning GLM 5.2 on OpenRouter;
+  explicit limits and the bounded runtime profile remain in effect.
+- Add the synthetically qualified Linux x86-64 Codex 0.167.2 shared-login
+  record. Other Linux builds and contexts still fail closed.
+
 - Enable schema-constrained output for Gemini 4 Hydrogen on Gemini and Vertex,
   and apply the Gemini 4 reasoning output allowance while preserving explicit limits.
 - Update the locked OpenAI Python SDK from 3.46.0 to 3.50.0 and Anthropic SDK

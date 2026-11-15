@@ -1107,7 +1107,7 @@ class Orchestrator:
         while current is not None and id(current) not in seen:
             seen.add(id(current))
             text = str(current)
-            if isinstance(current, TimeoutError):
+            if isinstance(current, (TimeoutError, asyncio.TimeoutError)):
                 text = f"TimeoutError: {text}" if text else "TimeoutError"
             code = getattr(current, "status_code", None) or getattr(current, "code", None)
             if type(code) is int and code == 504:
@@ -2389,6 +2389,20 @@ class Orchestrator:
                 "synthesis": 3000,
             }
             return min(default, bounded_caps.get(phase, default))
+
+        if provider_name and self._provider_identity(provider_name) == "openrouter":
+            model = self._model_override(provider_name)
+            if not model:
+                adapter = self._providers.get(provider_name)
+                model = adapter.resolve_model(None) if adapter else None
+            if (
+                model == "z-ai/glm-5.2"
+                and self._reasoning
+                and self._reasoning.enabled
+                and self._reasoning.effort == "high"
+                and f"max_{phase}_tokens" not in self._config.model_fields_set
+            ):
+                return max(default, 32_768)
 
         if provider_name and self._provider_identity(provider_name) in {"vertex-ai", "gemini"}:
             model = self._model_override(provider_name)
