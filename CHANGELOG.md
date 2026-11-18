@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.9.3
+
+- Limit Vertex AI slot waits to five seconds per attempt. Keep queue wait,
+  generation and retries within one request deadline. Report a busy local
+  slot separately from deadline expiry and allow other providers to continue.
+- Include verified reasoning and visible output counts in the diagnostic when
+  a token-capped response returns no usable text.
+- Qualify Codex 0.170.0 shared ChatGPT login for exact macOS ARM and Linux
+  x86-64 inventories and tested request contexts.
+
 ## 0.9.2 - 2026-11-15
 
 - Qualify shared ChatGPT login for the exact Codex 0.169.0 macOS ARM and

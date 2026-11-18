@@ -19,6 +19,7 @@ class ErrorType(str, Enum):
 
     NONE = "none"
     TIMEOUT = "timeout"
+    PROVIDER_BUSY = "provider_busy"
     CLI_NOT_FOUND = "cli_not_found"
     BILLING = "billing"  # Credits exhausted, payment required
     RATE_LIMIT = "rate_limit"  # Too many requests (429)
@@ -29,13 +30,14 @@ class ErrorType(str, Enum):
     UNKNOWN = "unknown"
 
 
-# Error types that should NOT be retried (permanent failures)
+# Error types for which repeating the same call is not useful.
 NON_RETRYABLE_ERRORS = frozenset(
     {
         ErrorType.BILLING,
         ErrorType.AUTH,
         ErrorType.CLI_NOT_FOUND,
         ErrorType.EMPTY_RESPONSE,
+        ErrorType.PROVIDER_BUSY,
     }
 )
 
@@ -139,6 +141,11 @@ def classify_error(error_text: str, return_code: int = -1) -> ErrorType:
 
     if "empty_response:" in error_lower:
         return ErrorType.EMPTY_RESPONSE
+    if any(
+        part.removeprefix("timeouterror: ").startswith("provider_busy:")
+        for part in error_lower.split(" | caused by: ")
+    ):
+        return ErrorType.PROVIDER_BUSY
 
     # Check billing errors first (most critical, don't waste money retrying)
     for pattern in _BILLING_PATTERNS:
@@ -502,10 +509,21 @@ def ensure_text_response(response: GenerateResponse, *, provider: str, phase: st
         "other",
     }:
         finish_reason = "unrecognized"
+    usage_details = ""
+    if (
+        finish_reason in {"length", "max_tokens"}
+        and response.usage
+        and response.usage_verified
+        and not response.usage_invalid
+    ):
+        for key in ("reasoning_tokens", "completion_tokens"):
+            count = response.usage.get(key)
+            if token_counts_present(count):
+                usage_details += f"; {key}={count}"
     raise RuntimeError(
         f"empty_response: {provider} {phase} returned no usable text; "
         f"finish_reason={finish_reason}; "
-        f"tool_calls_present={str(bool(response.tool_calls)).lower()}"
+        f"tool_calls_present={str(bool(response.tool_calls)).lower()}{usage_details}"
     )
 
 

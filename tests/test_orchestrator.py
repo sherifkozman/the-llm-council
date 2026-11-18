@@ -23,12 +23,20 @@ from llm_council.engine.orchestrator import (
 from llm_council.protocol.types import ReasoningProfile, RuntimeProfile
 from llm_council.providers.base import (
     DoctorResult,
+    ErrorType,
     GenerateRequest,
     GenerateResponse,
     ProviderAdapter,
     ProviderCapabilities,
+    classify_error,
 )
 from llm_council.schemas import load_schema
+
+
+@pytest.fixture(autouse=True)
+def isolated_provider_locks(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLM_COUNCIL_LOCK_DIR", str(tmp_path / "provider-locks"))
+    monkeypatch.delenv("LLM_COUNCIL_DISABLE_PROVIDER_LOCKS", raising=False)
 
 
 class CaptureProvider(ProviderAdapter):
@@ -771,6 +779,186 @@ class TestOrchestratorDoctor:
         elapsed_ms = (asyncio.get_running_loop().time() - started) * 1000
         assert elapsed_ms - attempt["pre_start_wait_ms"] >= 100
         assert "before provider call" in orch._provider_init_errors["mock"]
+
+    @pytest.mark.asyncio
+    async def test_vertex_busy_slot_is_bounded_and_never_retried(self, monkeypatch):
+        adapter = MagicMock()
+        adapter.generate = AsyncMock()
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.return_value = adapter
+            orch = Orchestrator(providers=["vertex-ai"], config=OrchestratorConfig())
+        orch._execution_plan = {}
+        monkeypatch.setattr(orch._degradation_policy, "BASE_RETRY_DELAY_MS", 0)
+        waits = []
+
+        @asynccontextmanager
+        async def busy_slot(_provider, *, timeout_seconds):
+            waits.append(timeout_seconds)
+            raise TimeoutError("Timed out waiting for provider slot")
+            yield 0.0
+
+        with (
+            patch("llm_council.engine.orchestrator.provider_call_slot", busy_slot),
+            pytest.raises(TimeoutError, match="provider_busy:.*before provider call"),
+        ):
+            await orch._call_provider(
+                "vertex-ai",
+                adapter,
+                GenerateRequest(prompt="synthetic", timeout_seconds=600),
+                phase="draft",
+                remaining_providers=2,
+            )
+
+        assert waits == [5.0]
+        adapter.generate.assert_not_awaited()
+        assert orch._cost_started_calls == {}
+        assert orch._get_degradation_report()["planned_retries"] == 0
+        assert orch._get_degradation_report()["failures"][0]["error_type"] == "provider_busy"
+        assert orch._execution_plan["provider_attempts"][0]["adapter_started"] is False
+        assert classify_error(orch._provider_init_errors["vertex-ai"]) == ErrorType.PROVIDER_BUSY
+        restored = orch._restore_transient_draft_providers(
+            {"vertex-ai": "Earlier draft"},
+            TimeoutError("A different provider timed out"),
+            phase="critique",
+        )
+        assert restored == []
+
+    @pytest.mark.asyncio
+    async def test_vertex_retry_uses_remaining_generation_time(self, monkeypatch):
+        adapter = MagicMock()
+        timeouts = []
+
+        async def generate(request):
+            timeouts.append(request.timeout_seconds)
+            if len(timeouts) == 1:
+                await asyncio.sleep(0.05)
+                raise TimeoutError("upstream request timed out")
+            return GenerateResponse(text="Completed.")
+
+        adapter.generate = AsyncMock(side_effect=generate)
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.return_value = adapter
+            orch = Orchestrator(providers=["vertex-ai"], config=OrchestratorConfig())
+        monkeypatch.setattr(orch._degradation_policy, "BASE_RETRY_DELAY_MS", 0)
+        response = await orch._call_provider(
+            "vertex-ai",
+            adapter,
+            GenerateRequest(prompt="synthetic", timeout_seconds=12),
+            phase="draft",
+            remaining_providers=2,
+        )
+        assert response.text == "Completed."
+        assert len(timeouts) == 2
+        assert 0 < timeouts[1] <= timeouts[0] - 0.04
+
+    @pytest.mark.asyncio
+    async def test_vertex_expired_generation_is_not_retried(self, monkeypatch):
+        adapter = MagicMock()
+
+        async def generate(_request):
+            await asyncio.sleep(10)
+
+        adapter.generate = AsyncMock(side_effect=generate)
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.return_value = adapter
+            orch = Orchestrator(providers=["vertex-ai"], config=OrchestratorConfig())
+        monkeypatch.setattr(orch._degradation_policy, "BASE_RETRY_DELAY_MS", 0)
+        with pytest.raises(TimeoutError, match="deadline expired"):
+            await orch._call_provider(
+                "vertex-ai",
+                adapter,
+                GenerateRequest(prompt="synthetic", timeout_seconds=0.05),
+                phase="draft",
+                remaining_providers=2,
+            )
+        adapter.generate.assert_awaited_once()
+        assert orch._get_degradation_report()["planned_retries"] == 0
+
+    @pytest.mark.asyncio
+    async def test_vertex_logical_deadline_in_queue_is_a_timeout(self):
+        adapter = MagicMock()
+        adapter.generate = AsyncMock()
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.return_value = adapter
+            orch = Orchestrator(providers=["vertex-ai"], config=OrchestratorConfig())
+
+        @asynccontextmanager
+        async def slow_slot(_provider, *, timeout_seconds):
+            await asyncio.sleep(timeout_seconds + 1)
+            yield 0.0
+
+        with (
+            patch("llm_council.engine.orchestrator.provider_call_slot", slow_slot),
+            pytest.raises(TimeoutError, match="before provider call"),
+        ):
+            await orch._call_provider(
+                "vertex-ai",
+                adapter,
+                GenerateRequest(prompt="synthetic", timeout_seconds=0.02),
+                phase="draft",
+                remaining_providers=2,
+            )
+        adapter.generate.assert_not_awaited()
+        assert classify_error(orch._provider_init_errors["vertex-ai"]) == ErrorType.TIMEOUT
+        assert orch._get_degradation_report()["planned_retries"] == 0
+
+    @pytest.mark.asyncio
+    async def test_vertex_does_not_start_a_retry_with_too_little_time(self, monkeypatch):
+        adapter = MagicMock()
+        adapter.generate = AsyncMock(side_effect=TimeoutError("upstream timed out"))
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.return_value = adapter
+            orch = Orchestrator(providers=["vertex-ai"], config=OrchestratorConfig())
+        monkeypatch.setattr(orch._degradation_policy, "BASE_RETRY_DELAY_MS", 0)
+        with pytest.raises(TimeoutError, match="upstream timed out"):
+            await orch._call_provider(
+                "vertex-ai",
+                adapter,
+                GenerateRequest(prompt="synthetic", timeout_seconds=1),
+                phase="draft",
+                remaining_providers=2,
+            )
+        adapter.generate.assert_awaited_once()
+        assert orch._get_degradation_report()["planned_retries"] == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("verified,invalid", [(True, False), (True, True), (False, False)])
+    async def test_vertex_empty_max_tokens_reports_usage_and_is_not_retried(
+        self, verified, invalid
+    ):
+        adapter = MagicMock()
+        usage = {
+            "prompt_tokens": 60000,
+            "completion_tokens": 3,
+            "reasoning_tokens": 39997,
+            "total_tokens": 100000,
+        }
+        adapter.generate = AsyncMock(
+            return_value=GenerateResponse(
+                text=" ",
+                finish_reason="MAX_TOKENS",
+                usage=usage,
+                usage_verified=verified,
+                usage_invalid=invalid,
+            )
+        )
+        with patch("llm_council.engine.orchestrator.get_registry") as registry:
+            registry.return_value.get_provider.return_value = adapter
+            orch = Orchestrator(providers=["vertex-ai"], config=OrchestratorConfig())
+        orch._execution_plan = {}
+        with pytest.raises(RuntimeError, match="finish_reason=max_tokens") as failure:
+            await orch._call_provider(
+                "vertex-ai",
+                adapter,
+                GenerateRequest(prompt="synthetic", max_tokens=40000),
+                phase="draft",
+                remaining_providers=2,
+            )
+        adapter.generate.assert_awaited_once()
+        assert ("reasoning_tokens=39997" in str(failure.value)) is (verified and not invalid)
+        assert ("completion_tokens=3" in str(failure.value)) is (verified and not invalid)
+        assert orch._execution_plan["provider_attempts"][0]["usage"] == usage
+        assert orch._get_degradation_report()["planned_retries"] == 0
 
     @pytest.mark.asyncio
     async def test_doctor_with_failure(self, failing_provider):

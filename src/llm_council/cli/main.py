@@ -722,7 +722,9 @@ def run(
     timeout: Annotated[
         int | None,
         typer.Option(
-            "--timeout", "-t", help="Per-attempt timeout in seconds (10-3600; default 120)"
+            "--timeout",
+            "-t",
+            help="Provider timeout in seconds (10-3600; default 120). Vertex retries share it.",
         ),
     ] = None,
     temperature: Annotated[

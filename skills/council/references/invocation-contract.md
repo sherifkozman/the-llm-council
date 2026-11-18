@@ -189,19 +189,22 @@ COUNCIL_WORKDIR, COUNCIL_TASK_FILE, COUNCIL_REFERENCE_FILE, COUNCIL_PROVIDERS an
 COUNCIL_MODELS. Paths are absolute; providers and models are comma-separated.
 These are example inputs, not new Council configuration variables.
 
-`--timeout` accepts 10-3600 seconds; the default remains 120. It is a per-attempt
-budget, not an outer workflow deadline. Queue wait, CLI discovery, spawn, generation
-and stream consumption share it. Retries receive a new attempt budget; phases,
-backoff and bounded cleanup can make a whole run much longer. Set the outer tool
+`--timeout` accepts 10–3600 seconds and defaults to 120. For Vertex AI, slot
+wait, generation and retries share one request deadline. The local slot wait
+ends after at most five seconds per attempt. If the slot limit expires first,
+Council reports `provider_busy` and proceeds with available peers. Each Vertex
+retry must have at least five seconds left when generation starts. Other
+providers get a fresh deadline for each attempt. Phases, backoff and bounded
+cleanup can make a whole run longer than any single request. Set the outer tool
 budget accordingly. The Python example uses 900 seconds as an example, not a
 package-wide guarantee. On an outer timeout, send SIGTERM and allow cleanup before
 forcing termination. A second signal, SIGKILL or host death can leave cleanup
 incomplete, especially outside the owned POSIX process groups.
 
-Use `--runtime-profile default` when a long attempt deadline is required.
+Use `--runtime-profile default` when a long provider deadline is required.
 `bounded` keeps its existing shorter provider/phase caps even with `--timeout 3600`;
 inspect `execution_plan.provider_request_timeouts_by_provider`. Raising
-the attempt limit neither extends the caller's deadline nor proves completion.
+the provider limit does not extend the caller's deadline or prove completion.
 
 For Claude and Codex CLI providers, `max_tokens` is not a verified whole-generation
 limit; inspect its dropped-option entry in request compilation. Native output may
