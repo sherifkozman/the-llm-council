@@ -58,7 +58,14 @@ def test_shared_feed_includes_qualified_linux_x86_64_codex_01672():
 
 
 @pytest.mark.parametrize("os_name,architecture", [("darwin", "arm64"), ("linux", "x86_64")])
-def test_shared_feed_includes_qualified_codex_01690(os_name, architecture):
+@pytest.mark.parametrize(
+    "version,catalog_sha256",
+    [
+        ("0.169.0", "9e01cd50ec8c4ba6d782413d1154cb2dbe1da63e014d622631b0603bc19659d6"),
+        ("0.170.0", "62b6f557b7d01093323249b38f3237482c704345961596c5c57795d89e30c381"),
+    ],
+)
+def test_shared_feed_includes_qualified_codex(os_name, architecture, version, catalog_sha256):
     path = Path(__file__).resolve().parents[1] / "compatibility" / "codex-shared-v1.json"
     document = json.loads(path.read_text())
     assert document["issued_at"] >= "2026-11-15T00:00:00Z"
@@ -71,13 +78,10 @@ def test_shared_feed_includes_qualified_codex_01690(os_name, architecture):
         build
         for build in builds
         if (build["os"], build["arch"], build["version"])
-        == (os_name, architecture, "codex-cli 0.169.0")
+        == (os_name, architecture, f"codex-cli {version}")
     ]
     assert len(matches) == 1
-    assert (
-        matches[0]["catalog_sha256"]
-        == "9e01cd50ec8c4ba6d782413d1154cb2dbe1da63e014d622631b0603bc19659d6"
-    )
+    assert matches[0]["catalog_sha256"] == catalog_sha256
     expected_models = {"gpt-6.1-sol"}
     if (os_name, architecture) == ("darwin", "arm64"):
         expected_models.add("gpt-5.6-sol")
