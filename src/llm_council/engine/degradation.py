@@ -159,6 +159,7 @@ class DegradationPolicy:
         error: Exception | str,
         phase: str,
         remaining_providers: int,
+        retry_delay_budget_seconds: float | None = None,
     ) -> DegradationDecision:
         """Decide how to handle a provider failure.
 
@@ -167,6 +168,7 @@ class DegradationPolicy:
             error: The exception or error message
             phase: Current phase (drafts, critique, synthesis)
             remaining_providers: Number of other providers still available
+            retry_delay_budget_seconds: Seconds available for retry backoff, if bounded
 
         Returns:
             DegradationDecision with action and details
@@ -187,6 +189,15 @@ class DegradationPolicy:
             current_retries=current_retries,
             remaining_providers=remaining_providers,
         )
+        if (
+            decision.action == DegradationAction.RETRY
+            and retry_delay_budget_seconds is not None
+            and decision.retry_delay_ms / 1000 >= retry_delay_budget_seconds
+        ):
+            decision = DegradationDecision(
+                action=DegradationAction.SKIP,
+                reason="Provider request deadline leaves no time for retry",
+            )
 
         # Record the failure event
         event = FailureEvent(

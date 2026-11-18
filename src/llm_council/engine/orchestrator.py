@@ -265,6 +265,8 @@ _STOPWORDS = frozenset(
         "with",
     }
 )
+_VERTEX_QUEUE_TIMEOUT_SECONDS = 5.0
+_VERTEX_MIN_RETRY_SECONDS = 5.0
 _PROVIDER_BUDGET_REGISTRY: dict[str, dict[str, Any]] = {
     "default": {
         "safe_input_tokens": {"draft": 14_000, "critique": 16_000, "synthesis": 16_000},
@@ -1624,6 +1626,13 @@ class Orchestrator:
         request = compiled.request
         prompt_cache_forwarded = bool(request.prompt_cache and request.prompt_cache.enabled)
         started_calls = 0
+        timeout = request.timeout_seconds
+        if timeout is None:
+            timeout = float(self._config.timeout)
+        is_vertex = self._provider_identity(provider_name) == "vertex-ai"
+        slot_name = "vertex-ai" if is_vertex else provider_name
+        # Retries must not reset the Vertex clock or spend a generation window queued.
+        vertex_deadline = time.monotonic() + timeout if is_vertex else None
 
         def capture_native_identity(record: dict[str, Any], identity: Any) -> None:
             if isinstance(identity, Mapping):
@@ -1637,6 +1646,7 @@ class Orchestrator:
             cleanup_incomplete = False
             cancelled_cleanup_error: BaseException | None = None
             attempt_stopped_at: float | None = None
+            slot_acquired = False
             queued_at = time.monotonic()
             attempt_record: dict[str, Any] = {
                 "provider": provider_name,
@@ -1649,20 +1659,23 @@ class Orchestrator:
             if self._execution_plan is not None:
                 self._execution_plan.setdefault("provider_attempts", []).append(attempt_record)
             try:
-                budget = request.timeout_seconds
-                if budget is None:
-                    budget = float(self._config.timeout)
-                deadline = time.monotonic() + budget
+                deadline = (
+                    vertex_deadline if vertex_deadline is not None else time.monotonic() + timeout
+                )
+                queue_timeout = timeout
+                if is_vertex:
+                    queue_timeout = min(_VERTEX_QUEUE_TIMEOUT_SECONDS, max(deadline - queued_at, 0))
 
                 async def attempt(
-                    budget: float, deadline: float, record: dict[str, Any]
+                    queue_timeout: float, deadline: float, record: dict[str, Any]
                 ) -> GenerateResponse:
-                    nonlocal cancelled_cleanup_error, started_calls
+                    nonlocal cancelled_cleanup_error, slot_acquired, started_calls
                     try:
                         async with provider_call_slot(
-                            provider_name,
-                            timeout_seconds=budget,
+                            slot_name,
+                            timeout_seconds=queue_timeout,
                         ) as queue_wait_ms:
+                            slot_acquired = True
                             self._record_provider_queue_wait(
                                 phase=phase,
                                 provider_name=provider_name,
@@ -1671,6 +1684,14 @@ class Orchestrator:
                             remaining = deadline - time.monotonic()
                             if remaining <= 0:
                                 raise TimeoutError("Provider attempt deadline expired in queue")
+                            if (
+                                is_vertex
+                                and started_calls
+                                and remaining < _VERTEX_MIN_RETRY_SECONDS
+                            ):
+                                raise TimeoutError(
+                                    "Provider request deadline leaves no time for retry"
+                                )
                             attempt_request = request.model_copy(
                                 update={"timeout_seconds": remaining}
                             )
@@ -1705,7 +1726,7 @@ class Orchestrator:
                         cancelled_cleanup_error = exc.__cause__
                         raise
 
-                pending = asyncio.create_task(attempt(budget, deadline, attempt_record))
+                pending = asyncio.create_task(attempt(queue_timeout, deadline, attempt_record))
                 try:
                     done, _ = await asyncio.wait(
                         {pending}, timeout=max(deadline - time.monotonic(), 0)
@@ -1806,22 +1827,32 @@ class Orchestrator:
                 error_type = classify_error(error_detail)
                 local_wait_error = None
                 if error_type == ErrorType.TIMEOUT and not attempt_record["adapter_started"]:
-                    attempt_record["pre_start_wait_ms"] = round(
-                        ((attempt_stopped_at or time.monotonic()) - queued_at) * 1000, 1
+                    stopped_at = attempt_stopped_at or time.monotonic()
+                    attempt_record["pre_start_wait_ms"] = round((stopped_at - queued_at) * 1000, 1)
+                    busy = (
+                        is_vertex
+                        and not slot_acquired
+                        and queue_timeout == _VERTEX_QUEUE_TIMEOUT_SECONDS
+                        and stopped_at < deadline
                     )
                     local_wait_error = TimeoutError(
+                        f"{'provider_busy: ' if busy else ''}"
                         f"Timed out before provider call (queue or scheduling): {provider_name}"
                     )
                     error_detail = self._format_exception_chain(local_wait_error)
+                    if busy:
+                        error_type = ErrorType.PROVIDER_BUSY
                 if self._execution_plan is not None and error_type in {
                     ErrorType.TIMEOUT,
                     ErrorType.NETWORK,
                     ErrorType.RATE_LIMIT,
+                    ErrorType.PROVIDER_BUSY,
                 }:
                     warning_reason = {
                         ErrorType.TIMEOUT: "timeout",
                         ErrorType.NETWORK: "network/read-abort",
                         ErrorType.RATE_LIMIT: "rate_limit",
+                        ErrorType.PROVIDER_BUSY: "local provider slot busy",
                     }[error_type]
                     self._execution_plan.setdefault("warnings", []).append(
                         f"{provider_name} degraded during {phase or 'call'} due to {warning_reason}: "
@@ -1838,6 +1869,11 @@ class Orchestrator:
                         error=local_wait_error or exc,
                         phase=phase or "call",
                         remaining_providers=remaining,
+                        retry_delay_budget_seconds=(
+                            vertex_deadline - time.monotonic() - _VERTEX_MIN_RETRY_SECONDS
+                            if vertex_deadline is not None
+                            else None
+                        ),
                     )
 
                     if decision.action == DegradationAction.ABORT:
@@ -1850,7 +1886,11 @@ class Orchestrator:
                     if decision.action == DegradationAction.RETRY:
                         if decision.retry_delay_ms > 0:
                             await asyncio.sleep(decision.retry_delay_ms / 1000.0)
-                        continue
+                        if (
+                            vertex_deadline is None
+                            or vertex_deadline - time.monotonic() >= _VERTEX_MIN_RETRY_SECONDS
+                        ):
+                            continue
 
                 self._provider_init_errors[provider_name] = error_detail
                 if local_wait_error is not None:
@@ -4046,7 +4086,8 @@ class Orchestrator:
 
         restored: list[str] = []
         for provider_name, draft_text in drafts.items():
-            if not draft_text or provider_name not in self._provider_init_errors:
+            error = self._provider_init_errors.get(provider_name)
+            if not draft_text or error is None or classify_error(error) == ErrorType.PROVIDER_BUSY:
                 continue
             self._provider_init_errors.pop(provider_name, None)
             restored.append(provider_name)

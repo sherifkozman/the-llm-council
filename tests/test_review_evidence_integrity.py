@@ -9,6 +9,7 @@ import pytest
 from jsonschema import validate
 
 from llm_council.engine.orchestrator import Orchestrator, OrchestratorConfig
+from llm_council.providers import concurrency
 from llm_council.providers.base import (
     DoctorResult,
     GenerateResponse,
@@ -219,6 +220,29 @@ async def test_empty_provider_does_not_erase_successful_peer():
     assert not result.drafts["openrouter"]
     assert "tool_calls_present=true" in result.provider_errors["openrouter"]
     assert "SECRET" not in json.dumps(result.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_busy_vertex_slot_preserves_peer_review(monkeypatch, tmp_path):
+    if concurrency.fcntl is None:
+        pytest.skip("Cross-process provider slots require fcntl")
+    monkeypatch.setenv("LLM_COUNCIL_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.delenv("LLM_COUNCIL_DISABLE_PROVIDER_LOCKS", raising=False)
+    monkeypatch.setattr(
+        "llm_council.engine.orchestrator.provider_call_slot", concurrency.provider_call_slot
+    )
+    monkeypatch.setattr("llm_council.engine.orchestrator._VERTEX_QUEUE_TIMEOUT_SECONDS", 0.02)
+    providers = {"openai": ReviewProvider(), "vertex": ReviewProvider()}
+    async with concurrency.provider_call_slot("vertex-ai"):
+        result = await orchestrator(providers).run("Review supplied source.", "critic")
+
+    assert result.success
+    assert result.execution_status == "degraded"
+    assert result.drafts["openai"]
+    assert not providers["vertex"].requests
+    failures = result.degradation_report["failures"]
+    assert failures[0]["error_type"] == "provider_busy"
+    assert result.degradation_report["planned_retries"] == 0
 
 
 def test_reviewer_explicit_zero_files_is_invalid_for_supplied_files():

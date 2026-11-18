@@ -68,7 +68,7 @@ boundaries, complete result files and execution-status handling. The shipped
 skill and caller examples require Council 0.8.5 or later for automatic evidence
 containment and dependency security floors, in addition to capability-based
 Claude admission and the earlier reporting fixes. See the
-[0.9.2 release notes](docs/releases/0.9.2.md) for the latest documentation
+[0.9.3 release notes](docs/releases/0.9.3.md) for the latest documentation
 and plugin metadata, and [0.8.5 release notes](docs/releases/0.8.5.md) for
 containment details.
 
@@ -759,7 +759,7 @@ After publication and approval to update the installed tool, preserve any local
 package edits and the uv receipt, then replace the exact version constraint:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.9.2'
+uv tool install --reinstall 'the-llm-council[all]==0.9.3'
 ```
 
 This targets the uv-managed tool and its exposed executable, and updates the
@@ -774,11 +774,16 @@ installation, prove publication, or establish live-provider compatibility.
 
 ### Timeout Budgets
 
-`--timeout` accepts 10 through 3600 seconds; its default remains 120. It limits
-each provider attempt, not the whole workflow. Retries, multiple phases, queue
-waits, backoff and cleanup can make the workflow longer. Set the caller's outer
-deadline separately and wait for the original process to finish before reading
-its result or considering another run.
+`--timeout` accepts 10 through 3600 seconds; the default is 120. Vertex AI
+shares one request deadline across slot wait, generation and retries. The
+`vertex` and `vertex-ai` names use the same local slot. Each attempt waits at
+most five seconds for it. If the slot wait limit expires first, Council reports
+`provider_busy` and skips the provider for the rest of the run. A retry needs
+at least five seconds left when generation starts. Other providers use a
+per-attempt deadline.
+Multiple phases and cleanup can make the workflow longer. Set the caller's
+outer deadline separately and wait for the original process to finish before
+reading its result or considering another run.
 
 For long-deadline work, use `--runtime-profile default`. The `bounded` profile
 keeps its shorter provider/phase caps even with `--timeout 3600`. Inspect
