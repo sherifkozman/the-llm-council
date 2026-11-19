@@ -445,6 +445,7 @@ def test_execution_manifest_filters_nested_metadata(tmp_path):
             {
                 "provider": "p",
                 "pre_start_wait_ms": 51.2,
+                "error_category": "provider_busy",
                 "secret": "DO_NOT_COPY",
                 "native_identity": {"cli_path": "/synthetic", "token": "DO_NOT_COPY"},
             }
@@ -459,6 +460,7 @@ def test_execution_manifest_filters_nested_metadata(tmp_path):
     attempt = json.loads(data)["provider_attempts"][0]
     assert attempt["native_identity"]["cli_path"] == "/synthetic"
     assert attempt["pre_start_wait_ms"] == 51.2
+    assert attempt["error_category"] == "provider_busy"
 
 
 @pytest.mark.asyncio

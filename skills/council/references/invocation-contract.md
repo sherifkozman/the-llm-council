@@ -230,6 +230,19 @@ do not lower reasoning, swap models, or repeat the failed run automatically.
    process outcome. Do not automatically rerun Council or claim a missing result
    from the earlier provisional observation.
 
+Report execution status alongside the review verdict. Exit code 0 and
+`success: true` can accompany a usable result with `execution_status: degraded`.
+For example, report “Review completed with degraded coverage. Vertex was skipped
+because its local slot was busy; no request was sent.” Apply the usual review
+quorum and coverage requirements before accepting the verdict.
+
+For a provider attempt, inspect `execution_plan.provider_attempts[].error_category`
+and `adapter_started`. A `provider_busy` category with `adapter_started: false`
+means the request stayed in the local queue. The legacy `error_type` field may
+still show the Python exception class. Older Council versions record the
+`provider_busy` category in `degradation_report.failures[].error_type` when
+degradation reporting is enabled.
+
 ### Python Subprocess
 
 ```python

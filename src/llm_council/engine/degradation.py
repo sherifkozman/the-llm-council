@@ -26,6 +26,10 @@ from llm_council.providers.base import (
 logger = logging.getLogger(__name__)
 
 
+class ProviderSlotBusyError(TimeoutError):
+    """The local slot wait expired before a provider adapter could start."""
+
+
 class DegradationAction(str, Enum):
     """Actions to take when a provider fails."""
 
@@ -215,7 +219,15 @@ class DegradationPolicy:
         if decision.action == DegradationAction.RETRY:
             self._retry_counts[retry_key] = current_retries + 1
 
-        if decision.should_log:
+        if decision.should_log and isinstance(error, ProviderSlotBusyError):
+            logger.warning(
+                "Provider %s did not start in %s: local slot busy; no request was sent "
+                "(provider_busy, action=%s)",
+                provider,
+                phase,
+                decision.action.value,
+            )
+        elif decision.should_log:
             logger.warning(
                 "Provider %s failed in %s: %s (action=%s)",
                 provider,
