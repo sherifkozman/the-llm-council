@@ -799,7 +799,7 @@ class TestOrchestratorDoctor:
 
         with (
             patch("llm_council.engine.orchestrator.provider_call_slot", busy_slot),
-            pytest.raises(TimeoutError, match="provider_busy:.*before provider call"),
+            pytest.raises(TimeoutError, match="provider_busy:.*no request was sent"),
         ):
             await orch._call_provider(
                 "vertex-ai",

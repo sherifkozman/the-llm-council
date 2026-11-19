@@ -44,7 +44,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from llm_council.config.models import get_council_models, is_multi_model_enabled
 from llm_council.engine.capabilities import CapabilityPlan, select_capability_plan
-from llm_council.engine.degradation import DegradationAction, DegradationPolicy
+from llm_council.engine.degradation import (
+    DegradationAction,
+    DegradationPolicy,
+    ProviderSlotBusyError,
+)
 from llm_council.engine.evidence import EvidenceBundle, collect_capability_evidence
 from llm_council.engine.health import HealthReport, preflight_check
 from llm_council.protocol.types import (
@@ -737,6 +741,7 @@ class Orchestrator:
                     "status",
                     "adapter_started",
                     "error_type",
+                    "error_category",
                 ),
             )
             wait_ms = attempt.get("pre_start_wait_ms")
@@ -1109,6 +1114,9 @@ class Orchestrator:
         while current is not None and id(current) not in seen:
             seen.add(id(current))
             text = str(current)
+            if isinstance(current, ProviderSlotBusyError):
+                parts.append(f"caused by: {text}" if parts else text)
+                break
             if isinstance(current, (TimeoutError, asyncio.TimeoutError)):
                 text = f"TimeoutError: {text}" if text else "TimeoutError"
             code = getattr(current, "status_code", None) or getattr(current, "code", None)
@@ -1825,7 +1833,7 @@ class Orchestrator:
                     )
                     raise
                 error_type = classify_error(error_detail)
-                local_wait_error = None
+                local_wait_error: TimeoutError | None = None
                 if error_type == ErrorType.TIMEOUT and not attempt_record["adapter_started"]:
                     stopped_at = attempt_stopped_at or time.monotonic()
                     attempt_record["pre_start_wait_ms"] = round((stopped_at - queued_at) * 1000, 1)
@@ -1835,13 +1843,19 @@ class Orchestrator:
                         and queue_timeout == _VERTEX_QUEUE_TIMEOUT_SECONDS
                         and stopped_at < deadline
                     )
-                    local_wait_error = TimeoutError(
-                        f"{'provider_busy: ' if busy else ''}"
-                        f"Timed out before provider call (queue or scheduling): {provider_name}"
-                    )
-                    error_detail = self._format_exception_chain(local_wait_error)
                     if busy:
+                        local_wait_error = ProviderSlotBusyError(
+                            f"provider_busy: {provider_name} skipped after waiting "
+                            f"{attempt_record['pre_start_wait_ms']:.0f} ms for its local slot; "
+                            "no request was sent"
+                        )
                         error_type = ErrorType.PROVIDER_BUSY
+                    else:
+                        local_wait_error = TimeoutError(
+                            f"Timed out before provider call (queue or scheduling): {provider_name}"
+                        )
+                    error_detail = self._format_exception_chain(local_wait_error)
+                attempt_record["error_category"] = error_type.value
                 if self._execution_plan is not None and error_type in {
                     ErrorType.TIMEOUT,
                     ErrorType.NETWORK,

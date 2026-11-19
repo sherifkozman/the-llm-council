@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.9.4
+
+- Report a busy local Vertex slot as a skip before dispatch. Retain the
+  degraded review result and expose the failure category in the attempt record.
+- Document how callers can distinguish a usable degraded verdict from a failed
+  run or an unmet review gate.
+
 ## 0.9.3
 
 - Limit Vertex AI slot waits to five seconds per attempt. Keep queue wait,

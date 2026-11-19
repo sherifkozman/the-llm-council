@@ -223,7 +223,7 @@ async def test_empty_provider_does_not_erase_successful_peer():
 
 
 @pytest.mark.asyncio
-async def test_busy_vertex_slot_preserves_peer_review(monkeypatch, tmp_path):
+async def test_busy_vertex_slot_preserves_peer_review(monkeypatch, tmp_path, caplog):
     if concurrency.fcntl is None:
         pytest.skip("Cross-process provider slots require fcntl")
     monkeypatch.setenv("LLM_COUNCIL_LOCK_DIR", str(tmp_path / "locks"))
@@ -238,8 +238,21 @@ async def test_busy_vertex_slot_preserves_peer_review(monkeypatch, tmp_path):
 
     assert result.success
     assert result.execution_status == "degraded"
+    assert result.output
     assert result.drafts["openai"]
     assert not providers["vertex"].requests
+    diagnostic = result.provider_errors["vertex"]
+    assert diagnostic.startswith("provider_busy:")
+    assert "no request was sent" in diagnostic
+    assert "TimeoutError" not in diagnostic
+    attempt = next(
+        a for a in result.execution_plan["provider_attempts"] if a["provider"] == "vertex"
+    )
+    assert attempt["error_category"] == "provider_busy"
+    assert attempt["error_type"] == "TimeoutError"
+    assert attempt["adapter_started"] is False
+    assert "Provider vertex did not start in draft" in caplog.text
+    assert "Provider vertex failed in draft" not in caplog.text
     failures = result.degradation_report["failures"]
     assert failures[0]["error_type"] == "provider_busy"
     assert result.degradation_report["planned_retries"] == 0
