@@ -3873,6 +3873,14 @@ class Orchestrator:
                     "\nReturn substantive evidence-backed draft findings for the task, "
                     "not a plan for formatting JSON. Synthesis will apply the final JSON schema."
                 )
+        if self._is_builtin_reviewer():
+            schema_hint += (
+                "\nStart your draft with Key findings: and a brief bullet list. "
+                "Keep that opening block within 200 characters. Use short file names "
+                "and line numbers. Include the main findings and a regression test or next "
+                "action when warranted. If you found no defect, say so. Put supporting "
+                "detail after a blank line."
+            )
         tier_hint = f"\nSummary tier: {self._config.summary_tier.value}"
         return (
             f"Task:\n{task}\n{context_block}{collected_evidence}{evidence_block}"

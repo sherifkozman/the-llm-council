@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.9.5
+
+- Ask built-in reviewers to put key findings and test recommendations first
+  so they can survive draft compaction during critique and synthesis.
+
 ## 0.9.4
 
 - Report a busy local Vertex slot as a skip before dispatch. Retain the

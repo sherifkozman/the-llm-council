@@ -2283,7 +2283,7 @@ wheels = [
 
 [[package]]
 name = "the-llm-council"
-version = "0.9.4"
+version = "0.9.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },

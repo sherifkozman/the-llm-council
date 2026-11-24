@@ -138,6 +138,26 @@ def assert_review_system(request, phase):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime", ["default", "bounded"])
+async def test_builtin_review_asks_for_findings_before_draft_detail(runtime):
+    provider = ScriptedProvider(["Replay is unsafe and needs a regression test."])
+    orch = runner(provider, runtime)
+    await orch._generate_draft("openrouter", provider)
+    prompt = provider.requests[0].messages[1].content
+    assert "Start your draft with Key findings:" in prompt
+    assert "200 characters" in prompt
+    assert "return items[0]" in prompt
+
+
+@pytest.mark.asyncio
+async def test_custom_review_schema_keeps_its_draft_prompt():
+    provider = ScriptedProvider(["Custom review."])
+    orch = runner(provider, custom=load_schema("reviewer"))
+    await orch._generate_draft("openrouter", provider)
+    assert "Start your draft with Key findings:" not in provider.requests[0].messages[1].content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", ["default", "bounded"])
 async def test_reviewer_internal_critique_uses_system_boundary_without_final_schema(runtime):
     provider = ScriptedProvider(
         ["Supported source findings: none. Pipeline limitations: selected excerpts."]
