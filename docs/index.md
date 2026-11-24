@@ -134,7 +134,7 @@ updates can add qualified API-key builds without changing Council. Shared
 ChatGPT login also requires a version explicitly qualified by Council. Records
 do not certify arbitrary future versions or provider behavior.
 
-See the [0.9.5 release notes](releases/0.9.5.md) for current documentation
+See the [0.9.6 release notes](releases/0.9.6.md) for current documentation
 and plugin metadata changes.
 
 Codex runs with an isolated temporary `HOME` and a restricted environment that

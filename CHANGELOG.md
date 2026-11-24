@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.9.6
+
+- Require Pydantic 2.14.4 or newer. This includes the fixes for
+  CVE-2026-133429 and CVE-2026-133424.
+- Require websockets 17.4 or newer in the Google provider extras on Python
+  3.11 and later to address GHSA-6m5v-9gmr-5665. Python 3.10 retains its
+  existing Google SDK and websockets resolution.
+
 ## 0.9.5
 
 - Ask built-in reviewers to put key findings and test recommendations first
