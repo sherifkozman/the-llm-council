@@ -90,7 +90,9 @@ JSON Schema validation with automatic retry ensures structured outputs conform t
 Swap between providers seamlessly:
 - **OpenRouter** - Single API key for 100+ models (recommended)
 - **Direct APIs** - Anthropic, OpenAI, and Gemini API native SDKs
-- **CLI Providers** - `codex`, `gemini-cli`, and `claude` via local CLIs
+- **CLI Providers** - `codex`, `gemini-cli`, and `claude` via local CLIs.
+  [Antigravity CLI](quickstart/direct-apis.md#antigravity-cli) adds opt-in
+  supplementary drafts through Google Cloud ADC.
 - **Custom Providers** - Plugin architecture via Python entry points
 
 ### Prompt Cache Support
@@ -126,7 +128,7 @@ the selected executable, resources, platform and request context. It runs versio
 and catalog checks from a verified private copy and rejects unknown or changed
 builds. Native binaries and standard npm/pnpm installations are supported on
 macOS, Linux and Windows for ARM64 and x86-64. The
-[0.8.9 release notes](releases/0.8.9.md) summarize the current Codex 0.167.0
+[0.8.9 release notes](releases/0.8.9.md) summarize the Codex 0.167.0
 qualification and tested request contexts; the [0.8.8 release notes](releases/0.8.8.md)
 describe Codex 0.166.0 coverage, and the [0.8.7 verification matrix](releases/0.8.7.md)
 documents earlier coverage. Unrecorded combinations still fail closed. Record

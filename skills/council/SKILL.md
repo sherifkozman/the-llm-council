@@ -3,7 +3,7 @@ name: council
 description: Run multi-LLM council for adversarial debate and cross-validation. Use it for implementation, architecture, review, security, research, and planning tasks with the canonical llm-council subagents and modes.
 ---
 
-# LLM Council Skill (v0.9.0)
+# LLM Council Skill (v0.10.0)
 
 Multi-model council: parallel drafts, adversarial critique, validated synthesis.
 
@@ -42,14 +42,14 @@ schema-valid JSON draft remains degraded; valid JSON does not prove semantic tru
 Install the package:
 
 ```bash
-pip install 'the-llm-council>=0.8.5'
+pip install 'the-llm-council>=0.10.0'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.5'
-pip install 'the-llm-council[vertex]>=0.8.5'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.10.0'
+pip install 'the-llm-council[vertex]>=0.10.0'
 ```
 
 These commands require a published release. For an existing pinned uv tool,
@@ -162,9 +162,17 @@ Canonical provider names:
 - `anthropic`
 - `gemini`
 - `gemini-cli`
+- `antigravity-cli` (alias `agy`, supplementary draft only)
 - `vertex-ai`
 - `claude`
 - `codex`
+
+Antigravity requires Council 0.10.0 or later, a separately installed `agy`,
+and Google Cloud ADC. Select it explicitly alongside another provider for
+critique and synthesis. Call `council doctor --deep --provider antigravity-cli --probe-timeout 30 --json`
+after installing or updating `agy`. Antigravity and Vertex drafts from the
+same Gemini model count as one Google vote. See the invocation contract for
+the ADC and usage checks.
 
 User-selected providers and models should be respected. Health checks and deep
 doctor probes are for diagnostics, not for silently overriding explicit
@@ -188,7 +196,9 @@ unknown or changed builds fail closed. Requests proceed only when the fetched
 record is current and matches the selected build and context; unavailable,
 expired or unrecorded combinations fail closed. The 0.8.9 record includes Codex
 0.167.0 on six official npm platform builds; see the
-[0.8.9 qualification notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.9/docs/releases/0.8.9.md) for evidence and limits.
+[0.8.9 qualification notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.9/docs/releases/0.8.9.md) for evidence and limits. The
+[0.9.3 qualification notes](https://github.com/sherifkozman/the-llm-council/blob/v0.9.3/docs/releases/0.9.3.md)
+cover tested Codex 0.170.0 shared-login contexts.
 Do not bypass the check or treat synthetic tests as proof of live-provider
 readiness. Base doctor covers the default model, default reasoning, text output
 and login status only; it does not prove a credential works or every model is ready.

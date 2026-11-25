@@ -708,8 +708,8 @@ servers and tools disabled. Council does not explicitly suppress native rules,
 but full policy parity has not been established. The request uses the
 native current login within the workspace selected at startup, so a different
 login selected in the same workspace can be used. Shared login requires a
-qualified Codex 0.167.0 or 0.167.2 build and a matching public compatibility
-record. API-key authentication uses an isolated temporary home.
+qualified build and request context in the public compatibility record. See
+[Codex 0.170.0 qualification](../releases/0.9.3.md) for a tested example. API-key authentication uses an isolated temporary home.
 
 ### Gemini CLI
 
@@ -721,6 +721,25 @@ council run researcher "AI safety research" --providers gemini-cli
 `gemini-cli` uses whatever auth mode the local Gemini CLI is already configured
 for, such as Gemini API key or Vertex AI. Council preserves that CLI auth
 choice instead of overriding it.
+
+### Antigravity CLI
+
+Install Google's [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
+and make `agy` available on PATH. Council 0.10.0 reads an existing Google Cloud
+ADC file and selects ADC for the child process. If the file is outside the
+standard location, point `GOOGLE_APPLICATION_CREDENTIALS` to it. Follow
+[Google's headless ADC guide](https://antigravity.google/docs/enterprise/#adc-headless)
+for project and region requirements.
+
+```bash
+council doctor --deep --provider antigravity-cli --probe-timeout 30 --json
+council run critic --mode review --providers vertex-ai,antigravity-cli "Review this change"
+```
+
+`antigravity-cli` (alias `agy`) contributes a supplementary draft.
+Select a separate provider for critique and synthesis. Antigravity and Vertex drafts from the
+same Gemini model count as one Google vote. See the
+[release notes](../releases/0.10.0.md) for qualification limits.
 
 CLI providers execute local commands instead of calling provider SDKs directly,
 useful for:

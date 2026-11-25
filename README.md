@@ -175,6 +175,7 @@ Single-model outputs have blind spots. By running multiple models in parallel an
 | Claude Code | Local `claude` CLI login | CLI subprocess provider |
 | Codex CLI | Local `codex` CLI login | CLI subprocess provider |
 | Gemini CLI | Local `gemini` CLI login | CLI subprocess provider |
+| Antigravity CLI | Separately installed `agy` and Google Cloud ADC | Opt-in supplementary drafts |
 
 ## Installation
 
@@ -183,8 +184,9 @@ pip install the-llm-council
 ```
 
 The Gemini, Google and Vertex extras require Google GenAI 1.52.0 or later.
-The base package requires Pydantic 2.10.6, PyYAML 6.0.1 and Typer 0.20.1 or
-later. A dependency resolver may select newer compatible versions.
+The base package requires Pydantic 2.14.4, PyYAML 6.0.1 and Typer 0.20.1 or
+later. The Google extras also require websockets 17.4 or later on Python 3.11+.
+See the [Python 3.10 compatibility note](docs/releases/0.9.6.md).
 
 With specific providers:
 
@@ -305,15 +307,20 @@ council doctor
 council doctor --deep --provider claude --provider gemini-cli --provider codex
 ```
 
+For Antigravity CLI setup and the explicit deep probe, see the
+[CLI provider quickstart](docs/quickstart/direct-apis.md#antigravity-cli).
+Use a separate provider for critique and synthesis.
+
 The Codex CLI adapter runs a verified executable snapshot with a temporary working
 directory. ChatGPT login uses the selected native `CODEX_HOME` directly, so
 Codex owns token refresh; the native global `AGENTS.md` instructions are also
 used. Council ignores native user configuration during generation to prevent
 unintended MCP servers and tools. It does not explicitly suppress native rules;
 full policy parity has not been established. This path is
-qualified only for Codex 0.167.0, 0.167.2 and 0.169.0 on builds covered by the public
-compatibility record. It selects the native login at use time within the
-workspace selected when the request starts; a same-workspace login change may
+qualified only for builds and request contexts covered by the public
+compatibility record. The [0.9.3 release notes](docs/releases/0.9.3.md) describe
+tested Codex 0.170.0 shared-login contexts. Council selects the native login
+within the workspace chosen for the request. A same-workspace login change may
 select a different user. API-key authentication remains isolated. The restricted
 environment does not inherit proxy, CA or loader overrides. Custom API-key
 endpoints require an explicitly qualified custom-route record; a ChatGPT custom
@@ -494,6 +501,7 @@ myprovider = "my_package.providers:MyProvider"
 | Claude Code | CLI subprocess | `src/llm_council/providers/cli/claude_code.py` |
 | Codex CLI | CLI subprocess | `src/llm_council/providers/cli/codex.py` |
 | Gemini CLI | CLI subprocess | `src/llm_council/providers/cli/gemini_cli.py` |
+| Antigravity CLI | CLI subprocess | `src/llm_council/providers/cli/antigravity.py` |
 
 ## Configuration
 
