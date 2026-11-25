@@ -73,7 +73,7 @@ from llm_council.providers.base import (
 from llm_council.providers.compiler import compile_request_for_provider
 from llm_council.providers.concurrency import provider_call_slot
 from llm_council.providers.gemini import _normalize_gemini_model
-from llm_council.providers.registry import get_registry, provider_identity
+from llm_council.providers.registry import ANTIGRAVITY_PROVIDER, get_registry, provider_identity
 from llm_council.schemas import load_schema
 from llm_council.storage.artifacts import ArtifactStore, ArtifactType, get_store
 from llm_council.subagents import (
@@ -939,11 +939,18 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("Provider health resolution failed: %s", exc)
 
-        if not self._providers:
+        only_supplementary = bool(self._providers) and all(
+            self._provider_identity(name) == ANTIGRAVITY_PROVIDER for name in self._providers
+        )
+        if not self._providers or only_supplementary:
             duration_ms = int((time.monotonic() - start_time) * 1000)
             return CouncilResult(
                 success=False,
-                error="No usable providers configured.",
+                error=(
+                    "Antigravity CLI provides supplementary drafts. Select a second provider."
+                    if only_supplementary
+                    else "No usable providers configured."
+                ),
                 duration_ms=duration_ms,
                 phase_timings=phase_timings or None,
                 provider_errors=dict(self._provider_init_errors) or None,
@@ -2077,14 +2084,15 @@ class Orchestrator:
         ]
 
         preferred = self._match_provider_preferences(candidates, provider_preferences.preferred)
-        if preferred:
-            return preferred
-
         fallback = self._match_provider_preferences(candidates, provider_preferences.fallback)
-        if fallback:
-            return fallback
-
-        return candidates
+        selected = preferred or fallback
+        if not selected:
+            return candidates
+        return selected + [
+            name
+            for name in candidates
+            if name not in selected and self._provider_identity(name) == ANTIGRAVITY_PROVIDER
+        ]
 
     def _candidate_provider_names(self) -> list[str]:
         """Return configured provider names after model expansion, before filtering."""
@@ -2184,7 +2192,7 @@ class Orchestrator:
         candidates: list[str] = []
         for name in self._config.provider_configs:
             identity = self._provider_identity(name)
-            if identity == "openrouter":
+            if identity in {"openrouter", ANTIGRAVITY_PROVIDER}:
                 continue
             if name not in candidates:
                 candidates.append(name)
@@ -3291,7 +3299,7 @@ class Orchestrator:
         prompt_tokens = token_count("prompt_tokens", "input_tokens")
         completion_tokens = token_count("completion_tokens", "output_tokens")
         if (
-            self._provider_identity(provider) in {"vertex-ai", "gemini"}
+            self._provider_identity(provider) in {"vertex-ai", "gemini", ANTIGRAVITY_PROVIDER}
             and "reasoning_tokens" in usage
         ):
             completion_tokens += token_count("reasoning_tokens")
@@ -3548,7 +3556,7 @@ class Orchestrator:
         fallback_errors: list[str] = []
 
         for provider_name, draft_text in drafts.items():
-            if not draft_text:
+            if not draft_text or self._provider_identity(provider_name) == ANTIGRAVITY_PROVIDER:
                 continue
 
             validation = self._validate_response(draft_text)
@@ -4057,6 +4065,7 @@ class Orchestrator:
             (name, provider)
             for name, provider in self._providers.items()
             if name not in self._provider_init_errors
+            and self._provider_identity(name) != ANTIGRAVITY_PROVIDER
         ]
         if not healthy:
             return []

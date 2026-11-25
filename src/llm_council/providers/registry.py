@@ -13,8 +13,11 @@ from .base import ProviderAdapter
 _ENTRY_POINT_GROUP = "llm_council.providers"
 _log = logging.getLogger(__name__)
 
+ANTIGRAVITY_PROVIDER = "antigravity-cli"
+
 # Backwards-compatible provider name aliases
 _PROVIDER_ALIASES: dict[str, str] = {
+    "agy": ANTIGRAVITY_PROVIDER,
     "vertex": "vertex-ai",
     "claude-code": "claude",
     "codex-cli": "codex",

@@ -38,7 +38,7 @@ from llm_council.providers.openrouter import (
 from llm_council.providers.openrouter import (
     _supports_cache_control_model as _openrouter_supports_cache_control_model,
 )
-from llm_council.providers.registry import provider_identity
+from llm_council.providers.registry import ANTIGRAVITY_PROVIDER, provider_identity
 from llm_council.providers.vertex import CLAUDE_MODEL_PREFIXES
 
 CompilationAction = Literal[
@@ -424,7 +424,12 @@ def compile_request_for_provider(
             provider_label="Gemini CLI",
         )
 
-    if identity in {"claude", "codex"} and compiled.max_tokens is not None:
+    elif identity == ANTIGRAVITY_PROVIDER:
+        _drop_cli_only_options(
+            compiled, update, decide, allow_structured_output=True, provider_label="Antigravity CLI"
+        )
+
+    if identity in {"claude", "codex", ANTIGRAVITY_PROVIDER} and compiled.max_tokens is not None:
         update(max_tokens=None)
         decide(
             "max_tokens",

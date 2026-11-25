@@ -68,7 +68,7 @@ boundaries, complete result files and execution-status handling. The shipped
 skill and caller examples require Council 0.8.5 or later for automatic evidence
 containment and dependency security floors, in addition to capability-based
 Claude admission and the earlier reporting fixes. See the
-[0.9.6 release notes](docs/releases/0.9.6.md) for the latest documentation
+[0.10.0 release notes](docs/releases/0.10.0.md) for the latest documentation
 and plugin metadata, and [0.8.5 release notes](docs/releases/0.8.5.md) for
 containment details.
 
@@ -759,7 +759,7 @@ After publication and approval to update the installed tool, preserve any local
 package edits and the uv receipt, then replace the exact version constraint:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.9.6'
+uv tool install --reinstall 'the-llm-council[all]==0.10.0'
 ```
 
 This targets the uv-managed tool and its exposed executable, and updates the
