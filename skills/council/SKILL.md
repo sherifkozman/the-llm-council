@@ -39,17 +39,17 @@ schema-valid JSON draft remains degraded; valid JSON does not prove semantic tru
 
 ## Setup
 
-Install the package:
+Install a compatible Council package (0.8.5 is the portable contract floor):
 
 ```bash
-pip install 'the-llm-council>=0.10.0'
+pip install 'the-llm-council>=0.8.5'
 ```
 
 Optional extras:
 
 ```bash
-pip install 'the-llm-council[anthropic,openai,gemini]>=0.10.0'
-pip install 'the-llm-council[vertex]>=0.10.0'
+pip install 'the-llm-council[anthropic,openai,gemini]>=0.8.5'
+pip install 'the-llm-council[vertex]>=0.8.5'
 ```
 
 These commands require a published release. For an existing pinned uv tool,
