@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.10.0
+
+- Add the opt-in Antigravity CLI provider for supplementary Google drafts
+  using existing Google Cloud ADC.
+
 ## 0.9.6
 
 - Require Pydantic 2.14.4 or newer. This includes the fixes for

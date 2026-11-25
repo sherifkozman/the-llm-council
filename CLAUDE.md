@@ -2,7 +2,10 @@
 
 ## Project Overview
 
-Multi-LLM Council Framework (v0.9.0 release candidate) that orchestrates multiple LLM backends for adversarial debate, cross-validation, structured decision-making, and provider-specific prompt-cache handling. Package name: `the-llm-council` on PyPI. See [0.9.0 release notes](docs/releases/0.9.0.md) for this candidate and [0.8.9 release notes](docs/releases/0.8.9.md) for provider compatibility, dependency updates, qualification evidence and limits.
+The LLM Council orchestrates parallel drafts, critique, and validated synthesis.
+The PyPI package is `the-llm-council`. See the
+[0.10.0 release notes](docs/releases/0.10.0.md) for Antigravity CLI setup and
+qualification limits.
 
 - **Python**: >=3.10 (tested 3.10, 3.11, 3.12)
 - **Build**: hatchling
@@ -225,7 +228,7 @@ council --no-color      # Disable colored output
 
 ## Provider Setup
 
-### Registered Providers (7)
+### Registered Providers
 
 | Provider | Entry Point | Env Variable |
 |----------|-------------|--------------|
@@ -237,6 +240,7 @@ council --no-color      # Disable colored output
 | `claude-code` | CLI subprocess | Claude Code CLI (`claude`) |
 | `codex-cli` | CLI subprocess | Codex CLI (`codex`) |
 | `gemini-cli` | CLI subprocess | Gemini CLI (`gemini`) |
+| `antigravity-cli` | CLI subprocess | Opt-in supplementary draft via `agy` and Google Cloud ADC |
 
 ### OpenRouter (Recommended)
 
@@ -372,7 +376,7 @@ unit tests and doctor reachability alone do not establish that coverage.
 ## Troubleshooting
 
 ```bash
-council doctor                              # Check all providers
+council doctor                              # Check default diagnostic providers
 council doctor --provider openrouter        # Check specific provider
 council run drafter "task" --verbose         # Verbose output with metrics
 council run drafter "task" --dry-run         # See what would execute

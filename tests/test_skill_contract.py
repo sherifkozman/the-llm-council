@@ -77,7 +77,9 @@ def test_examples_reject_old_or_unverified_versions_before_run(run_example, vers
     assert not calls.exists()
 
 
-@pytest.mark.parametrize("version", ["LLM Council v0.8.5", "LLM Council v0.9.0"])
+@pytest.mark.parametrize(
+    "version", ["LLM Council v0.8.5", "LLM Council v0.9.0", "LLM Council v0.10.0"]
+)
 def test_examples_accept_supported_version_and_read_result(run_example, version):
     result, calls = run_example(version)
     assert result.returncode == 0, result.stderr

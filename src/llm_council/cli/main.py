@@ -1229,7 +1229,7 @@ def doctor(
     if not output_json:
         _print("[bold blue]Council Doctor[/bold blue] Checking providers...\n")
 
-    from llm_council.providers.registry import get_registry
+    from llm_council.providers.registry import ANTIGRAVITY_PROVIDER, get_registry
 
     registry = get_registry()
     provider_names = registry.list_providers()
@@ -1258,6 +1258,8 @@ def doctor(
             if normalized not in selected:
                 selected.append(normalized)
         provider_names = selected
+    else:
+        provider_names = [name for name in provider_names if name != ANTIGRAVITY_PROVIDER]
 
     if not provider_names:
         if output_json:

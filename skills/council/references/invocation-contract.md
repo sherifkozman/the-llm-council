@@ -2,6 +2,7 @@
 
 Requires Council 0.8.5 or later for automatic evidence containment, dependency security floors, capability-based Claude admission and reporting fixes. This file travels with a copied Council skill;
 it does not require a repository checkout or a client-specific wrapper.
+Antigravity CLI drafts require Council 0.10.0 or later.
 
 ## Before Calling
 
@@ -85,6 +86,25 @@ auth route's policy status; a failed, pending or skipped eligible fetch is not
 proof of absence. Account, policy or native-version changes need fresh evidence.
 Do not change credentials, endpoints or administrative controls to bypass policy.
 
+### Antigravity CLI Drafts
+
+Install Google's [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
+separately. Council uses an existing Google Cloud ADC file, including the file
+selected by `GOOGLE_APPLICATION_CREDENTIALS`, and selects ADC in the child
+process. Verify that this ADC project can use Antigravity before selecting it.
+
+```text
+<council-executable> doctor --deep --provider antigravity-cli --probe-timeout 30 --json
+```
+
+Select `antigravity-cli` (alias `agy`) explicitly with a second provider for
+critique and synthesis. Check `drafts` and `execution_plan.phase_provider_used`.
+Count it as supplementary evidence. Drafts from the same Gemini model via
+Antigravity and Vertex represent one Google vote. The request deadline applies;
+the CLI has no verified per-request output-token cap. Require reconciled
+counters before reporting usage. The 0.10.0 live check covers `agy` 1.5.17
+on macOS arm64. Probe each host before use.
+
 ### Native CLI Versions
 
 Claude uses runtime capability admission; Codex uses record-based admission:
@@ -121,7 +141,7 @@ Native binaries and standard npm/pnpm installations are supported on macOS,
 Linux and Windows for ARM64 and x86-64. The current public record determines
 which exact builds and request contexts are admitted; unrecorded combinations
 fail closed. See the [0.8.9 release notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.9/docs/releases/0.8.9.md) for
-current qualification evidence, the [0.8.8 release notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.8/docs/releases/0.8.8.md)
+Codex 0.167.0 qualification evidence, the [0.8.8 release notes](https://github.com/sherifkozman/the-llm-council/blob/v0.8.8/docs/releases/0.8.8.md)
 for Codex 0.166.0 coverage, and the [0.8.7 verification matrix](https://github.com/sherifkozman/the-llm-council/blob/v0.8.7/docs/releases/0.8.7.md)
 for earlier coverage. The output monitor stops the child after an unexpected
 tool event, but it does not prevent an action that started before the event. A pre-existing limitation was
@@ -168,7 +188,7 @@ separate action from building or installing Council.
 After publication, an approved exact-version uv tool reinstall is:
 
 ```bash
-uv tool install --reinstall 'the-llm-council[all]==0.9.0'
+uv tool install --reinstall 'the-llm-council[all]==0.10.0'
 ```
 
 First preserve local package edits and the uv receipt without copying credentials.

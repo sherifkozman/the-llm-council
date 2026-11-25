@@ -35,6 +35,13 @@ not a full review. Never automatically
 retry a live or valid degraded run, invoke a personal wrapper, or bypass a
 client's credential/approval policy.
 
+For Council 0.10.0 and later, `antigravity-cli` (alias `agy`) is an explicit
+supplementary draft provider. Install `agy` separately, configure Google Cloud
+ADC, and probe it with
+`council doctor --deep --provider antigravity-cli --probe-timeout 30 --json`.
+Select a separate provider for critique and synthesis. Antigravity and Vertex
+drafts from the same Gemini model count as one Google vote.
+
 The built-in reviewer distinguishes prepared-coverage metadata from source evidence;
 the added prompt boundary leaves security/custom schemas unchanged. Exhausted
 schema validation fails with drafts, critique and errors preserved: arbitrary
